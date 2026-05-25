@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HarnessingTS</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside class="left-rail">
+        <div class="brand">
+          <div>
+            <h1>HarnessingTS</h1>
+            <p>Time-Series Tool-Use Harness</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <div class="panel-title">Workspace</div>
+          <dl class="kv">
+            <dt>Status</dt>
+            <dd id="statusText">Loading</dd>
+            <dt>Mode</dt>
+            <dd id="modeText">-</dd>
+            <dt>Model</dt>
+            <dd id="modelText">-</dd>
+            <dt>Runtime uv</dt>
+            <dd id="runtimeUvText">-</dd>
+          </dl>
+        </section>
+
+        <section class="panel node-panel">
+          <div class="panel-title">Node Chain</div>
+          <div id="nodeList" class="node-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">Selected Node</div>
+          <div id="nodeDetail" class="node-detail"></div>
+        </section>
+
+        <section class="panel timeline-panel">
+          <div class="panel-title">Timeline</div>
+          <div id="timeline" class="timeline"></div>
+        </section>
+      </aside>
+
+      <main class="main-pane">
+        <header class="toolbar">
+          <div class="toolbar-main">
+            <div>
+              <div class="eyebrow">Main Session</div>
+              <h2 id="mainTitle">Orchestrator</h2>
+            </div>
+            <label class="transcript-filter">
+              Transcript
+              <select id="transcriptScope"></select>
+            </label>
+          </div>
+          <div class="toolbar-actions">
+            <button id="stateBtn">State</button>
+            <button id="llmBtn">LLM</button>
+            <button id="interruptBtn" class="danger">Pause</button>
+            <button id="clearAllLogsBtn" class="danger debug-only">Clear All Logs</button>
+          </div>
+        </header>
+
+        <section id="chatStream" class="chat-stream"></section>
+
+        <form id="sendForm" class="composer">
+          <textarea id="messageInput" rows="3" placeholder="向 main orchestrator 发送消息，例如：请基于 ECG5000 设计异常样本分类的工具使用流程"></textarea>
+          <button id="sendBtn" type="submit">Send</button>
+          <button id="refreshBtn" type="button" class="icon-btn refresh-composer-btn" title="刷新">↻</button>
+        </form>
+      </main>
+
+      <aside class="right-rail">
+        <section class="panel">
+          <div class="panel-title">Workspace Files</div>
+          <div id="workspacePath" class="workspace-path"></div>
+          <form id="uploadForm" class="upload-form">
+            <label>
+              Reference Files
+              <input id="referenceFiles" type="file" multiple />
+            </label>
+            <button id="uploadBtn" type="submit" class="secondary">Upload to references/</button>
+          </form>
+          <div id="fileTree" class="file-tree"></div>
+        </section>
+      </aside>
+    </div>
+
+    <dialog id="detailDialog">
+      <form method="dialog">
+        <header>
+          <h3 id="dialogTitle">Detail</h3>
+          <button value="close" class="icon-btn">×</button>
+        </header>
+        <pre id="dialogBody"></pre>
+      </form>
+    </dialog>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

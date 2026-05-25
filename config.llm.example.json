@@ -1,0 +1,8 @@
+{
+  "authMode": "manual",
+  "protocol": "anthropic",
+  "model": "qwen3.6-plus",
+  "baseUrl": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic",
+  "apiKey": "YOUR_API_KEY",
+  "contextWindow": "200k"
+}

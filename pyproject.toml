@@ -1,0 +1,37 @@
+[project]
+name = "harnessing-ts"
+version = "0.1.0"
+description = "Python backend for a time-series tool-use harness built on Claude Code SDK."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "claude-code-sdk>=0.0.22",
+  "fastapi>=0.116.0",
+  "python-docx>=1.1.2",
+  "python-multipart>=0.0.20",
+  "pydantic>=2.10.0",
+  "uvicorn[standard]>=0.35.0",
+]
+
+[project.optional-dependencies]
+training = [
+  "agentlightning>=0.1.0",
+  "openai>=1.100.0",
+]
+
+[project.scripts]
+ts-harness = "harnessing_ts.cli:main"
+ts-harness-server = "harnessing_ts.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/harnessing_ts"]
+
+[tool.pytest.ini_options]
+pythonpath = ["backend"]

@@ -1,0 +1,6 @@
+- Read
+- LS
+- Glob
+- Grep
+- Write
+- Edit
