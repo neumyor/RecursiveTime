@@ -170,7 +170,8 @@ def create_app() -> FastAPI:
         return {"ok": True, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
     if web_root.exists():
-        app.mount("/assets", StaticFiles(directory=str(web_root)), name="assets")
+        assets_root = web_root / "assets"
+        app.mount("/assets", StaticFiles(directory=str(assets_root if assets_root.exists() else web_root)), name="assets")
 
         @app.get("/{full_path:path}")
         async def static_files(full_path: str) -> FileResponse:

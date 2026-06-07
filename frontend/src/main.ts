@@ -1,10 +1,13 @@
 import './styles.css';
+import DOMPurify from 'dompurify';
 import {
   Activity,
   AlertTriangle,
+  ArrowUp,
   Archive,
   Bot,
   Boxes,
+  ChevronLeft,
   Check,
   ChevronRight,
   Circle,
@@ -23,6 +26,7 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
+  Square,
   TerminalSquare,
   Trash2,
   Upload,
@@ -30,6 +34,7 @@ import {
   XCircle,
   type IconNode,
 } from 'lucide';
+import { marked } from 'marked';
 
 type JsonMap = Record<string, any>;
 
@@ -66,12 +71,22 @@ const state = {
   loadingMessage: null as JsonMap | null,
   transcriptScope: 'all',
   lastRefreshAt: null as Date | null,
+  leftCollapsed: window.innerWidth <= 820,
+  rightCollapsed: window.innerWidth <= 1180,
 };
+
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+});
 
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('Missing #app root');
 
 app.innerHTML = `
+  <button id="leftRailToggle" class="rail-toggle left-toggle" type="button" title="折叠左栏"><span data-icon="ChevronLeft"></span></button>
+  <button id="rightRailToggle" class="rail-toggle right-toggle" type="button" title="折叠右栏"><span data-icon="ChevronRight"></span></button>
+
   <aside class="left-rail">
     <section class="brand-block">
       <div class="brand-mark" data-icon="Sparkles"></div>
@@ -150,7 +165,6 @@ app.innerHTML = `
       <div class="toolbar-actions">
         <button id="stateBtn" type="button" class="ghost"><span data-icon="Archive"></span><span>State</span></button>
         <button id="llmBtn" type="button" class="ghost"><span data-icon="Settings2"></span><span>LLM</span></button>
-        <button id="refreshTopBtn" type="button" class="ghost icon-label"><span data-icon="RefreshCw"></span><span>Refresh</span></button>
         <button id="interruptBtn" type="button" class="danger ghost"><span data-icon="Pause"></span><span>Pause</span></button>
         <button id="clearAllLogsBtn" type="button" class="danger ghost debug-only"><span data-icon="Trash2"></span><span>Clear Logs</span></button>
       </div>
@@ -159,10 +173,9 @@ app.innerHTML = `
     <section id="chatStream" class="chat-stream"></section>
 
     <form id="sendForm" class="composer">
-      <textarea id="messageInput" rows="3" placeholder="向 main orchestrator 发送消息，例如：请基于 ECG5000 设计异常样本分类的工具使用流程"></textarea>
-      <div class="composer-actions">
-        <button id="refreshBtn" type="button" class="ghost icon-btn" title="刷新"><span data-icon="RefreshCw"></span></button>
-        <button id="sendBtn" type="submit"><span data-icon="Send"></span><span>Send</span></button>
+      <div class="composer-shell">
+        <textarea id="messageInput" rows="1" placeholder="向 orchestrator 发送消息"></textarea>
+        <button id="sendBtn" type="submit" class="send-round" title="发送" disabled><span data-icon="ArrowUp"></span></button>
       </div>
     </form>
   </main>
@@ -207,9 +220,11 @@ app.innerHTML = `
 const iconMap: Record<string, IconNode> = {
   Activity,
   AlertTriangle,
+  ArrowUp,
   Archive,
   Bot,
   Boxes,
+  ChevronLeft,
   Check,
   ChevronRight,
   Circle,
@@ -228,6 +243,7 @@ const iconMap: Record<string, IconNode> = {
   Settings2,
   ShieldCheck,
   Sparkles,
+  Square,
   TerminalSquare,
   Trash2,
   Upload,
@@ -236,8 +252,8 @@ const iconMap: Record<string, IconNode> = {
 };
 
 const els = {
-  refreshBtn: query<HTMLButtonElement>('#refreshBtn'),
-  refreshTopBtn: query<HTMLButtonElement>('#refreshTopBtn'),
+  leftRailToggle: query<HTMLButtonElement>('#leftRailToggle'),
+  rightRailToggle: query<HTMLButtonElement>('#rightRailToggle'),
   statusText: query('#statusText'),
   modeText: query('#modeText'),
   modelText: query('#modelText'),
@@ -273,8 +289,24 @@ const els = {
 
 hydrateIcons();
 
-els.refreshBtn.addEventListener('click', () => refresh());
-els.refreshTopBtn.addEventListener('click', () => refresh());
+els.leftRailToggle.addEventListener('click', () => {
+  state.leftCollapsed = !state.leftCollapsed;
+  renderShellState();
+});
+els.rightRailToggle.addEventListener('click', () => {
+  state.rightCollapsed = !state.rightCollapsed;
+  renderShellState();
+});
+els.messageInput.addEventListener('input', () => {
+  autosizeComposer();
+  updateSendButton();
+});
+els.messageInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    if (!els.sendBtn.disabled) els.sendForm.requestSubmit();
+  }
+});
 els.approveControlBtn.addEventListener('click', async () => {
   await runAction(async () => {
     const result = await postJson('/api/control/approve', {});
@@ -314,6 +346,8 @@ els.sendForm.addEventListener('submit', async (event) => {
   const text = els.messageInput.value.trim();
   if (!text) return;
   els.messageInput.value = '';
+  autosizeComposer();
+  updateSendButton();
   const pendingId = `pending-${Date.now()}`;
   state.pendingParts.push({
     id: pendingId,
@@ -370,24 +404,17 @@ els.rawZipUploadForm.addEventListener('submit', async (event) => {
 });
 
 async function refresh() {
-  els.refreshBtn.classList.add('spinning');
-  els.refreshTopBtn.classList.add('spinning');
-  try {
-    const data = await fetchJson<Bootstrap>('/api/bootstrap');
-    state.bootstrap = data;
-    state.busy = Boolean(data.runtime?.running);
-    state.lastRefreshAt = new Date();
-    if (!data.runtime?.running) {
-      state.loadingMessage = null;
-      state.pendingParts = [];
-    } else if (!state.loadingMessage) {
-      state.loadingMessage = loadingPart('后端运行中，正在自动同步最新消息');
-    }
-    render();
-  } finally {
-    els.refreshBtn.classList.remove('spinning');
-    els.refreshTopBtn.classList.remove('spinning');
+  const data = await fetchJson<Bootstrap>('/api/bootstrap');
+  state.bootstrap = data;
+  state.busy = Boolean(data.runtime?.running);
+  state.lastRefreshAt = new Date();
+  if (!data.runtime?.running) {
+    state.loadingMessage = null;
+    state.pendingParts = [];
+  } else if (!state.loadingMessage) {
+    state.loadingMessage = loadingPart('后端运行中，正在自动同步最新消息');
   }
+  render();
 }
 
 function render() {
@@ -416,6 +443,7 @@ function render() {
   renderFileTree(data.fileTree);
   renderDebugActions(Boolean(data.debugEnabled));
   updateControls(data);
+  renderShellState();
   hydrateIcons();
 }
 
@@ -533,6 +561,7 @@ function renderNodeDetail(specs: JsonMap[], nodes: JsonMap[]) {
 }
 
 function renderChat(data: Bootstrap) {
+  const wasNearBottom = els.chatStream.scrollHeight - els.chatStream.scrollTop - els.chatStream.clientHeight < 160;
   const parts = collectTranscriptParts(data);
   const visibleParts = normalizeChatParts(parts);
   if (!visibleParts.length) {
@@ -545,8 +574,11 @@ function renderChat(data: Bootstrap) {
     `;
     return;
   }
-  els.chatStream.innerHTML = visibleParts.slice(-100).map((part) => messageHtml(part)).join('');
-  els.chatStream.scrollTop = els.chatStream.scrollHeight;
+  els.chatStream.innerHTML = visibleParts.map((part) => messageHtml(part)).join('');
+  bindToolCards();
+  if (wasNearBottom || state.loadingMessage) {
+    els.chatStream.scrollTop = els.chatStream.scrollHeight;
+  }
 }
 
 function messageHtml(part: JsonMap) {
@@ -565,20 +597,26 @@ function messageHtml(part: JsonMap) {
   if (part.type === 'tool_use' || part.type === 'tool_result') {
     const summary = toolSummary(part);
     const detail = part.displayText || part.text || summarizeRaw(part.raw) || '';
+    const toolName = toolNameForPart(part);
+    const done = part.type === 'tool_result';
     return `
       <article class="message ${escapeHtml(roleClass)} tool-collapsed">
-        <div class="message-role"><span data-icon="TerminalSquare"></span>${escapeHtml(source)}${escapeHtml(role)} · ${escapeHtml(part.type || 'text')} · ${formatTime(part.timestamp)}</div>
-        <details>
-          <summary>${escapeHtml(summary)}</summary>
-          <pre class="tool-detail">${escapeHtml(detail)}</pre>
-        </details>
+        <button class="tool-card" type="button" data-tool-toggle>
+          <span class="tool-status ${done ? 'done' : 'running'}"><span data-icon="${done ? 'Check' : 'TerminalSquare'}"></span></span>
+          <span class="tool-copy">
+            <span class="tool-title">${escapeHtml(summary)}</span>
+            <span class="tool-meta">${escapeHtml(source)}${escapeHtml(toolName)} · ${escapeHtml(part.type || 'tool')} · ${formatTime(part.timestamp)}</span>
+          </span>
+          <span class="tool-chevron" data-icon="ChevronRight"></span>
+        </button>
+        <pre class="tool-detail" hidden>${escapeHtml(detail)}</pre>
       </article>
     `;
   }
   return `
     <article class="message ${escapeHtml(roleClass)}">
       <div class="message-role"><span data-icon="${role === 'user' ? 'Send' : role === 'assistant' ? 'Bot' : 'Info'}"></span>${escapeHtml(source)}${escapeHtml(role)} · ${escapeHtml(part.type || 'text')} · ${formatTime(part.timestamp)}</div>
-      <div class="message-text">${escapeHtml(text)}</div>
+      <div class="message-text markdown-body">${renderMarkdown(text)}</div>
     </article>
   `;
 }
@@ -593,6 +631,12 @@ function toolSummary(part: JsonMap) {
   const text = part.displayText || part.text || '';
   const firstLine = text.split('\n').find((line: string) => line.trim()) || '工具结果';
   return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
+}
+
+function toolNameForPart(part: JsonMap) {
+  if (part.name) return part.name;
+  const toolBlock = part.raw?.message?.content?.find?.((block: JsonMap) => block.type === 'tool_use');
+  return toolBlock?.name || part.raw?.tool_name || 'tool';
 }
 
 function collectTranscriptParts(data: Bootstrap): JsonMap[] {
@@ -749,16 +793,17 @@ function updateControls(data: Bootstrap) {
   const activeRunning = Boolean(ws.activeNode && activeSession?.status === 'running');
   const pendingControl = Boolean(ws.pendingControl);
   els.sendBtn.disabled = state.busy || (Boolean(ws.activeNode) && !activePaused);
-  els.sendBtn.innerHTML = `<span data-icon="${activePaused ? 'Play' : 'Send'}"></span><span>${activePaused ? 'Resume' : 'Send'}</span>`;
   els.messageInput.disabled = state.busy || (Boolean(ws.activeNode) && !activePaused);
   els.messageInput.placeholder = activePaused
     ? '补充说明后点击 Resume，当前 node 会继续执行'
-    : '向 main orchestrator 发送消息，例如：请基于 ECG5000 设计异常样本分类的工具使用流程';
+    : '向 orchestrator 发送消息';
   els.interruptBtn.disabled = !state.busy && !activeRunning;
   els.uploadBtn.disabled = state.busy;
   els.rawZipUploadBtn.disabled = state.busy;
   els.approveControlBtn.disabled = state.busy || !pendingControl;
   els.rejectControlBtn.disabled = state.busy || !pendingControl;
+  updateSendButton(activePaused);
+  autosizeComposer();
 }
 
 function getActiveNodeSession(data: Bootstrap) {
@@ -843,6 +888,51 @@ function statusIcon(status: string) {
 
 function emptyState(text: string, icon = 'Info') {
   return `<div class="empty"><span data-icon="${icon}"></span><span>${escapeHtml(text)}</span></div>`;
+}
+
+function renderMarkdown(text: string) {
+  const html = marked.parse(text || '', { async: false }) as string;
+  return DOMPurify.sanitize(html);
+}
+
+function bindToolCards() {
+  for (const button of els.chatStream.querySelectorAll<HTMLButtonElement>('[data-tool-toggle]')) {
+    button.addEventListener('click', () => {
+      const detail = button.nextElementSibling as HTMLElement | null;
+      if (!detail) return;
+      const expanded = detail.hidden === true;
+      detail.hidden = !expanded;
+      button.classList.toggle('expanded', expanded);
+    });
+  }
+}
+
+function renderShellState() {
+  document.body.classList.toggle('left-collapsed', state.leftCollapsed);
+  document.body.classList.toggle('right-collapsed', state.rightCollapsed);
+  els.leftRailToggle.title = state.leftCollapsed ? '展开左栏' : '折叠左栏';
+  els.rightRailToggle.title = state.rightCollapsed ? '展开右栏' : '折叠右栏';
+  els.leftRailToggle.innerHTML = `<span data-icon="${state.leftCollapsed ? 'ChevronRight' : 'ChevronLeft'}"></span>`;
+  els.rightRailToggle.innerHTML = `<span data-icon="${state.rightCollapsed ? 'ChevronLeft' : 'ChevronRight'}"></span>`;
+  hydrateIcons(els.leftRailToggle);
+  hydrateIcons(els.rightRailToggle);
+}
+
+function autosizeComposer() {
+  els.messageInput.style.height = 'auto';
+  const maxHeight = Math.round(window.innerHeight * 0.3);
+  els.messageInput.style.height = `${Math.min(els.messageInput.scrollHeight, maxHeight)}px`;
+}
+
+function updateSendButton(activePaused = false) {
+  const hasText = Boolean(els.messageInput.value.trim());
+  const canSend = hasText && !els.messageInput.disabled && !state.busy;
+  els.sendBtn.disabled = !canSend;
+  const icon = state.busy ? 'Square' : activePaused ? 'Play' : 'ArrowUp';
+  els.sendBtn.innerHTML = `<span data-icon="${icon}"></span>`;
+  els.sendBtn.title = activePaused ? '继续当前 node' : '发送';
+  els.sendBtn.classList.toggle('ready', canSend);
+  hydrateIcons(els.sendBtn);
 }
 
 function loadingPart(text: string) {
