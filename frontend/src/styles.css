@@ -379,11 +379,15 @@ details[open] > summary.panel-heading::after {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
 }
 
 .workspace-actions button {
   width: 100%;
+  min-height: 32px;
+  padding: 0 10px;
 }
 
 .kv {

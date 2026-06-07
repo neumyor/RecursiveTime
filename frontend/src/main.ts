@@ -111,6 +111,10 @@ app.innerHTML = `
         <dt>Runtime</dt>
         <dd id="runtimeUvText">-</dd>
       </dl>
+      <div class="workspace-actions">
+        <button id="stateBtn" type="button" class="ghost"><span data-icon="Archive"></span><span>State</span></button>
+        <button id="llmBtn" type="button" class="ghost"><span data-icon="Settings2"></span><span>LLM</span></button>
+      </div>
     </section>
 
     <section id="pendingControlPanel" class="panel control-panel" hidden>
@@ -183,10 +187,6 @@ app.innerHTML = `
       <div class="panel-heading">
         <span data-icon="FolderTree"></span>
         <span>Workspace Files</span>
-      </div>
-      <div class="workspace-actions">
-        <button id="stateBtn" type="button" class="ghost"><span data-icon="Archive"></span><span>State</span></button>
-        <button id="llmBtn" type="button" class="ghost"><span data-icon="Settings2"></span><span>LLM</span></button>
       </div>
       <div id="workspacePath" class="workspace-path"></div>
       <form id="uploadForm" class="upload-form">
