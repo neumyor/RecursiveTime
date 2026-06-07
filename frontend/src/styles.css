@@ -171,24 +171,38 @@ button.success-btn {
 
 .rail-toggle {
   position: fixed;
-  top: 16px;
+  top: 50%;
   z-index: 50;
-  width: 34px;
-  height: 34px;
-  min-height: 34px;
+  width: 22px;
+  height: 86px;
+  min-height: 86px;
   padding: 0;
-  border-color: var(--line-strong);
-  color: var(--accent-dark);
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: var(--shadow-soft);
+  border-color: rgba(201, 211, 220, 0.72);
+  color: rgba(7, 92, 99, 0.82);
+  background: rgba(255, 255, 255, 0.58);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 10px 28px rgba(16, 24, 40, 0.12);
+  transform: translateY(-50%);
+}
+
+.rail-toggle:hover:not(:disabled) {
+  transform: translateY(-50%);
+  background: rgba(223, 244, 241, 0.82);
+}
+
+.rail-toggle svg {
+  width: 15px;
+  height: 15px;
 }
 
 .left-toggle {
-  left: 302px;
+  left: 309px;
+  border-radius: 0 999px 999px 0;
 }
 
 .right-toggle {
-  right: 362px;
+  right: 369px;
+  border-radius: 999px 0 0 999px;
 }
 
 body.left-collapsed .left-rail {
@@ -208,11 +222,11 @@ body.right-collapsed .main-pane {
 }
 
 body.left-collapsed .left-toggle {
-  left: 12px;
+  left: 0;
 }
 
 body.right-collapsed .right-toggle {
-  right: 12px;
+  right: 0;
 }
 
 .left-rail,
@@ -335,6 +349,41 @@ label,
   color: var(--ink);
   font-weight: 800;
   text-transform: uppercase;
+}
+
+summary.panel-heading {
+  cursor: pointer;
+  list-style: none;
+}
+
+summary.panel-heading::-webkit-details-marker {
+  display: none;
+}
+
+summary.panel-heading::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 140ms ease;
+}
+
+details[open] > summary.panel-heading::after {
+  transform: rotate(45deg);
+}
+
+.workspace-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.workspace-actions button {
+  width: 100%;
 }
 
 .kv {
@@ -1029,7 +1078,7 @@ dialog pre {
   }
 
   .left-toggle {
-    left: 268px;
+    left: 275px;
   }
 
   .right-rail {
@@ -1070,11 +1119,11 @@ dialog pre {
   }
 
   body:not(.left-collapsed) .left-toggle {
-    left: min(calc(86vw - 18px), 302px);
+    left: min(calc(86vw - 11px), 309px);
   }
 
   body:not(.right-collapsed) .right-toggle {
-    right: min(calc(86vw - 18px), 302px);
+    right: min(calc(86vw - 11px), 309px);
   }
 
   .main-pane {

@@ -141,13 +141,13 @@ app.innerHTML = `
       <div id="nodeDetail" class="node-detail"></div>
     </section>
 
-    <section class="panel timeline-panel">
-      <div class="panel-heading">
+    <details class="panel timeline-panel">
+      <summary class="panel-heading">
         <span data-icon="Clock3"></span>
         <span>Timeline</span>
-      </div>
+      </summary>
       <div id="timeline" class="timeline"></div>
-    </section>
+    </details>
   </aside>
 
   <main class="main-pane">
@@ -163,8 +163,6 @@ app.innerHTML = `
         </label>
       </div>
       <div class="toolbar-actions">
-        <button id="stateBtn" type="button" class="ghost"><span data-icon="Archive"></span><span>State</span></button>
-        <button id="llmBtn" type="button" class="ghost"><span data-icon="Settings2"></span><span>LLM</span></button>
         <button id="interruptBtn" type="button" class="danger ghost"><span data-icon="Pause"></span><span>Pause</span></button>
         <button id="clearAllLogsBtn" type="button" class="danger ghost debug-only"><span data-icon="Trash2"></span><span>Clear Logs</span></button>
       </div>
@@ -185,6 +183,10 @@ app.innerHTML = `
       <div class="panel-heading">
         <span data-icon="FolderTree"></span>
         <span>Workspace Files</span>
+      </div>
+      <div class="workspace-actions">
+        <button id="stateBtn" type="button" class="ghost"><span data-icon="Archive"></span><span>State</span></button>
+        <button id="llmBtn" type="button" class="ghost"><span data-icon="Settings2"></span><span>LLM</span></button>
       </div>
       <div id="workspacePath" class="workspace-path"></div>
       <form id="uploadForm" class="upload-form">
