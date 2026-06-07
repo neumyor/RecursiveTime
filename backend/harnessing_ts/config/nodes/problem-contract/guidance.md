@@ -12,12 +12,14 @@
   - TXT/MD：可直接读取，但需要将关键领域知识整理到结构化摘要中。
   - 对每个 reference 记录读取方式、抽取产物路径、覆盖范围和抽取失败/缺失风险。
 - 从 references/** 中提取任务相关领域知识：术语定义、类别/状态含义、可观察特征、不可观察特征、判断边界、评价口径、风险和不确定性。输出到 `artifacts/reference-knowledge.md` 工件。
-- 获取或定位数据。若用户要求通过库下载数据，使用 Bash 和 `uv run --with ...` 在 workspace 的 data/ 下完成下载、缓存和转换。
-- 根据任务需求和下载后的具体数据格式，将数据转换为后续工具可读取的统一格式，优先写入 data/processed/**。
-- `data/processed/**`、`artifacts/reference-knowledge.md`、`artifacts/data-exploration-report.md`、`artifacts/problem-framing.md` 和 `plots/**` 是推荐的证据/审计路径，不是跨节点硬契约。后续节点应通过 `user/problem-contract.md` 和 `user/data-spec.md` 找到这些证据。
+- 获取或定位数据。
+  - 原始数据可能已经存在或需要下载。原始数据必须存储在 data/raw 中。
+  - 若用户要求通过库下载原始数据，使用 Bash 和 `uv run --with ...` 在 workspace 的 data/raw 下完成下载、缓存和转换。
+  - 根据任务需求和下载后的具体数据格式，将数据转换为后续工具可高效读取的统一格式，写入 data/processed/**。
+- `data/processed/**`、`artifacts/reference-knowledge.md`、`artifacts/data-exploration-report.md`、`artifacts/problem-framing.md` 和 `plots/**` 是推荐路径，不是跨节点硬契约。后续节点应通过 `user/problem-contract.md` 和 `user/data-spec.md` 找到这些证据。
 - 必须产出一份数据规范 `user/data-spec.md`，作为后续所有数据处理的锚点。后续流程中的工具构建、训练、推理、评估和 case review 都必须遵守这份数据规范。
-- 数据规范必须精确定义：数据文件路径、记录粒度、样本 ID、时间轴/索引、特征列、目标列、标签映射、split 定义、缺失值规则、单位/归一化状态、允许读取的字段、禁止作为输入的泄漏字段、输出预测格式和评估所需字段。
-- 对数据做 exploration：样本规模、类别/标签结构、缺失值、异常值、时间序列长度、代表性样本、边界样本、可观察形态线索、数据泄漏风险。
+- 数据规范必须精确定义：数据文件路径、记录粒度、样本 ID、时间轴/索引、特征列、目标列、标签映射、split 定义、缺失值规则、单位/归一化状态、允许读取的字段、禁止作为输入的泄漏字段、输出格式和评估所需字段等必要信息。
+- 对数据做 exploration：样本规模、类别/标签结构、缺失值、异常值、时间序列长度、代表性样本、边界样本、可观察的形态线索、数据泄漏风险。
 - 基于用户目标、参考资料和 exploration 结果，重新明确“当前真正需要解决的问题”。
 - 输出 `user/problem-contract.md`，作为后续迭代的单一权威任务合约；同时输出 `user/data-spec.md`，作为后续数据读取和处理的单一权威数据合约。
 

@@ -13,25 +13,11 @@ from pydantic import BaseModel
 
 from harnessing_ts.orchestrator import HarnessOrchestrator
 from harnessing_ts.paths import default_workspace_path, frontend_root
-from harnessing_ts.schema import NODE_TYPES
 from harnessing_ts.settings.llm import build_sdk_invocation_config, mask_llm_config, mask_sdk_invocation_config, read_effective_llm_config
 
 
 class SendRequest(BaseModel):
     text: str
-
-
-class EnterNodeRequest(BaseModel):
-    nodeType: str
-    rationale: str | None = None
-    inputSummary: str | None = None
-
-
-class FinishNodeRequest(BaseModel):
-    success: bool = True
-    summary: str | None = None
-    goalMet: bool | None = None
-    outputPaths: list[str] | None = None
 
 
 class ClearLogsRequest(BaseModel):
@@ -42,12 +28,20 @@ class InterruptRequest(BaseModel):
     reason: str | None = None
 
 
+class ControlDecisionRequest(BaseModel):
+    reason: str | None = None
+
+
 def create_app() -> FastAPI:
     workspace_path = default_workspace_path()
     dry_run = os.getenv("TS_HARNESS_DRY_RUN") == "true"
     debug_enabled = os.getenv("TS_HARNESS_DEBUG") == "true"
-    web_root = frontend_root()
-    orchestrator = HarnessOrchestrator(workspace_path, dry_run=dry_run, locale="zh", mode="manual")
+    control_mode = os.getenv("TS_HARNESS_CONTROL_MODE", "auto").strip().lower()
+    if control_mode not in {"auto", "manual"}:
+        control_mode = "auto"
+    frontend = frontend_root()
+    web_root = frontend / "dist" if (frontend / "dist").exists() else frontend
+    orchestrator = HarnessOrchestrator(workspace_path, dry_run=dry_run, locale="zh", mode=control_mode)
     orchestrator.initialize()
     app = FastAPI(title="HarnessingTS")
     app.state.orchestrator = orchestrator
@@ -124,6 +118,15 @@ def create_app() -> FastAPI:
             uploaded.append({"path": path, "size": len(content)})
         return {"uploaded": uploaded, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
+    @app.post("/api/data/raw/upload-zip")
+    async def upload_raw_data_zip(file: UploadFile = File(...)) -> dict[str, Any]:
+        content = await file.read()
+        try:
+            result = orchestrator.upload_raw_data_zip(file.filename or "raw-data.zip", content)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        return {"uploaded": result, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
+
     @app.post("/api/send")
     async def send(request: SendRequest) -> dict[str, Any]:
         text = request.text.strip()
@@ -136,22 +139,6 @@ def create_app() -> FastAPI:
         setattr(orchestrator, "_server_run_task", app.state.run_task)
         return {"accepted": True, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
-    @app.post("/api/enter-node")
-    async def enter_node(request: EnterNodeRequest) -> dict[str, Any]:
-        if request.nodeType not in NODE_TYPES:
-            raise HTTPException(status_code=400, detail="valid nodeType required")
-        try:
-            node = await orchestrator.enter_node({
-                "nodeType": request.nodeType,
-                "rationale": (request.rationale or f"Web UI entered {request.nodeType}").strip(),
-                "inputSummary": request.inputSummary.strip() if request.inputSummary else None,
-            })
-        except RuntimeError as exc:
-            if "Interrupted by user" in str(exc):
-                return {"node": None, "interrupted": True, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
-            raise
-        return {"node": node, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
-
     @app.post("/api/interrupt")
     async def interrupt(request: InterruptRequest) -> dict[str, Any]:
         try:
@@ -161,14 +148,18 @@ def create_app() -> FastAPI:
             result = {"target": "unknown", "error": str(exc), "state": orchestrator.get_state()}
         return {"result": result, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
-    @app.post("/api/finish-node")
-    async def finish_node(request: FinishNodeRequest) -> dict[str, Any]:
-        result = await orchestrator.finish_node({
-            "success": request.success,
-            "summary": (request.summary or "Finished from web UI.").strip(),
-            "goalMet": request.goalMet,
-            "outputPaths": [item for item in request.outputPaths or [] if item],
-        })
+    @app.post("/api/control/approve")
+    async def approve_control() -> dict[str, Any]:
+        current = app.state.run_task
+        if current is not None and not current.done():
+            raise HTTPException(status_code=409, detail="a harness run is already active")
+        app.state.run_task = asyncio.create_task(_run_control_approval(orchestrator))
+        setattr(orchestrator, "_server_run_task", app.state.run_task)
+        return {"accepted": True, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
+
+    @app.post("/api/control/reject")
+    async def reject_control(request: ControlDecisionRequest) -> dict[str, Any]:
+        result = orchestrator.reject_pending_control(request.reason)
         return {"result": result, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
     @app.post("/api/debug/clear-logs")
@@ -244,6 +235,17 @@ async def _run_main_turn(orchestrator: HarnessOrchestrator, text: str) -> None:
         setattr(orchestrator, "_server_run_task", None)
 
 
+async def _run_control_approval(orchestrator: HarnessOrchestrator) -> None:
+    setattr(orchestrator, "_server_run_task", asyncio.current_task())
+    try:
+        await orchestrator.approve_pending_control()
+    except Exception as exc:
+        orchestrator.store.append_timeline({"type": "error", "timestamp": now_iso_for_server(), "message": str(exc)})
+        orchestrator.store.append_main_part(system_error_part_for_server(str(exc)))
+    finally:
+        setattr(orchestrator, "_server_run_task", None)
+
+
 def _task_running(task: Any) -> bool:
     return task is not None and not task.done()
 
@@ -281,6 +283,7 @@ def main() -> None:
     port = int(os.getenv("PORT", "4327"))
     print(f"HarnessingTS web UI: http://{host}:{port}")
     print(f"Workspace: {default_workspace_path()}")
+    print(f"Control mode: {os.getenv('TS_HARNESS_CONTROL_MODE', 'auto')}")
     if os.getenv("TS_HARNESS_DRY_RUN") == "true":
         print("Dry-run mode enabled")
     if os.getenv("TS_HARNESS_DEBUG") == "true":

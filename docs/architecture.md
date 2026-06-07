@@ -10,7 +10,7 @@ The system is not a research agent. It does not center on comparing methods, fin
 - Keep local files and JSONL logs as the source of truth.
 - Treat SDK sessions as short-lived execution carriers.
 - Express methodology in Markdown prompts and node specs under `backend/harnessing_ts/config/`.
-- Use MCP tools only for structured state transitions and audit events when the provider supports them.
+- Use MCP tools for all structured node state transitions and audit events.
 - Make the solution a tool-use process, not a model-selection report.
 - Treat training as an implementation detail for tools that require it.
 
@@ -32,7 +32,7 @@ The main session acts as orchestrator. Each node is an independent Claude Code S
 
 2. `iterative-solving`
 
-   Each round tries exactly one new method, or one explicit combination of previously persisted tools. The method must first be standardized under `tools` with an interface and usage docs, then executed and reviewed through data-first case analysis. Bad-case attribution must start from raw input values or tool features, compare against good cases/prototypes, and only then connect to domain knowledge.
+   Each round tries exactly one new method, or one explicit combination of previously persisted tools. The method must first be standardized under `tools` with an interface and usage docs, then executed and reviewed through data-first case analysis. The node must write the case review before the iteration summary. Bad-case attribution must start from raw input values or tool features, compare against good cases/prototypes, and only then connect to domain knowledge.
 
 3. `final-summary`
 
@@ -40,10 +40,12 @@ The main session acts as orchestrator. Each node is an independent Claude Code S
 
 ## Iteration Routing
 
-`iterative-solving` writes `user/iteration-state.md`.
+Node transitions are controlled through MCP, not by parsing markdown artifacts.
 
-- `recommend_exit: false` or `recommend_exit=false` makes the backend enter another `iterative-solving` round.
-- `recommend_exit: true` or no explicit continue marker lets the backend advance to `final-summary`.
+- `iterative-solving` still writes `user/iteration-state.md` with `recommend_exit` for auditability.
+- To continue, `iterative-solving` must call `mcp__ts_harness__finish_node` with `loopDecision: "continue"` and `nextNode: "iterative-solving"`.
+- To exit, `iterative-solving` must call `mcp__ts_harness__finish_node` with `loopDecision: "exit"` and `nextNode: "final-summary"`.
+- The backend validates those structured MCP parameters and never uses `user/iteration-state.md` as the control source.
 
 ## Filesystem Truth Source
 
@@ -62,6 +64,7 @@ data/processed/
 tools/
 runs/iterations/
 reports/iterations/
+reports/iterations/<iteration-id>-case-review.md
 reports/final-summary.md
 ```
 
@@ -75,7 +78,6 @@ The MCP server exposes only governance and audit tools:
 - `finish_node`
 - `record_artifact`
 - `record_run`
-- `request_user_decision`
 
 Methodology stays in Markdown prompts and node specs. MCP should not decide which ECG feature, classifier, or LLM judgment strategy is appropriate; it only records and mutates system state.
 
@@ -84,5 +86,5 @@ Methodology stays in Markdown prompts and node specs. MCP should not decide whic
 For ECG5000 abnormal sample classification, the harness should guide the agent toward this kind of flow:
 
 1. Build `user/problem-contract.md` and `user/data-spec.md` by combining the user request, ECG reference material, data acquisition through `sktime`, processed data schema, exploration, success criteria, evidence rules, and leakage risks.
-2. Run `iterative-solving` one or more times. Each round builds or revises exactly one tool method, or one explicit combination of existing tools, records results under `runs/iterations/<iteration-id>/`, and writes `reports/iterations/<iteration-id>-summary.md`. Case review must include numeric evidence for bad cases, comparison to good cases/prototypes, domain-linked explanations, and explicit "unexplained" labels when evidence is insufficient.
-3. When `user/iteration-state.md` recommends exit, run `final-summary` to summarize the full trajectory and final tool-use solution.
+2. Run `iterative-solving` one or more times. Each round builds or revises exactly one tool method, or one explicit combination of existing tools, records results under `runs/iterations/<iteration-id>/`, writes `reports/iterations/<iteration-id>-case-review.md` first, then writes `reports/iterations/<iteration-id>-summary.md`. Case review centers on bad cases: analyze every bad case when there are fewer than 10, otherwise sample 5-20 cases with an explicit strategy. Each reviewed sample needs a visualization path, raw input evidence, current-method evidence, good-case/prototype comparison, and explanation level. Case review then summarizes statistical patterns across all bad cases or the largest computable bad-case set. Summary should focus on method changes, tool paths, aggregate metrics, target gaps, high-level case-review findings, and next-round decisions rather than duplicating per-case details.
+3. When the `finish_node` MCP call requests `loopDecision: "exit"` and `nextNode: "final-summary"`, run `final-summary` to summarize the full trajectory and final tool-use solution.

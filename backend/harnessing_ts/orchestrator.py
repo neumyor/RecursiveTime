@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
-from harnessing_ts.agent.control import extract_control, is_valid_node_type
 from harnessing_ts.agent.sdk_runner import SdkRunner, SdkRunnerConfig
 from harnessing_ts.agent.translate import system_text_part
 from harnessing_ts.mcp.server import create_harness_mcp_server
@@ -15,11 +14,14 @@ from harnessing_ts.prompts.compose import (
     build_node_attachment,
     build_node_system_prompt,
 )
-from harnessing_ts.schema import NODE_SPECS, NodeSession, NodeType, Part, RunRecord, WorkspaceState, get_next_node
+from harnessing_ts.schema import NODE_SPECS, ControlRequest, NodeSession, NodeType, Part, RunRecord, WorkspaceState, get_next_node
 from harnessing_ts.settings.llm import build_sdk_invocation_config, read_effective_llm_config
 from harnessing_ts.state.message_log import MessageLog
 from harnessing_ts.state.workspace_store import WorkspaceStore, now_iso
 from harnessing_ts.tools.compose_tools import build_main_allowed_tools, build_node_allowed_tools, build_node_native_tools
+
+
+NODE_SPECS_BY_TYPE = {spec.type: spec for spec in NODE_SPECS}
 
 
 class HarnessOrchestrator:
@@ -57,8 +59,28 @@ class HarnessOrchestrator:
         self._ensure_main_runner()
         assert self.main_runner
         parts = await self.main_runner.send_with_user_echo(text)
-        await self._handle_main_control(parts)
         return parts
+
+    async def request_enter_node(self, args: dict[str, Any]) -> dict[str, Any]:
+        self._ensure_initialized()
+        assert self.state
+        if self._control_mode() == "manual":
+            return self._park_control_request("enter_node", args)
+        node = await self.enter_node(args)
+        return {"status": "allowed", "nodeSessionId": node["id"], "nodeType": node["nodeType"]}
+
+    async def request_finish_node(self, args: dict[str, Any]) -> dict[str, Any]:
+        self._ensure_initialized()
+        assert self.state
+        node = self.active_node_session or self._restore_active_node_session()
+        if self._control_mode() == "manual":
+            result = self._park_control_request("finish_node", args, node)
+            if node:
+                node["status"] = "waiting_approval"
+                node["summary"] = "Waiting for human approval to finish this node."
+                self.store.write_node_session(node)
+            return result
+        return await self.finish_node(args)
 
     async def enter_node(self, args: dict[str, Any]) -> NodeSession:
         self._ensure_initialized()
@@ -90,8 +112,7 @@ class HarnessOrchestrator:
         if args.get("inputSummary"):
             prompt += f"\n\n用户/主会话补充上下文：\n{args['inputSummary']}"
         node_parts = await self.active_node_runner.send_with_user_echo(prompt)
-        await self._handle_node_control(node_parts)
-        await self._maybe_auto_enter_next_node(node)
+        await self._handle_node_runner_return(node)
         return node
 
     async def finish_node(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -106,6 +127,10 @@ class HarnessOrchestrator:
         node["completedAt"] = now_iso()
         node["summary"] = args.get("summary", "")
         node["success"] = args.get("success", True)
+        node["goalMet"] = args.get("goalMet")
+        node["nextNode"] = self._normalize_next_node(args.get("nextNode"))
+        node["loopDecision"] = self._normalize_loop_decision(args.get("loopDecision"))
+        self._validate_finish_control(node["nodeType"], node["success"], node.get("nextNode"), node.get("loopDecision"))
         node["outputPaths"] = list(args.get("outputPaths") or [])
         self.store.write_node_session(node)
 
@@ -127,15 +152,15 @@ class HarnessOrchestrator:
             "payload": {
                 "success": node["success"],
                 "goalMet": args.get("goalMet"),
+                "nextNode": node.get("nextNode"),
+                "loopDecision": node.get("loopDecision"),
                 "outputPaths": node["outputPaths"],
             },
         })
-        next_node = get_next_node(node["nodeType"])
-        if self.active_node_runner:
-            await self.active_node_runner.close()
         self.active_node_runner = None
         self.active_node_session = None
-        return {"nodeSessionId": node["id"], "nextNode": next_node if node["success"] else None}
+        next_node = self._next_node_after_completion(node) if node["success"] else None
+        return {"nodeSessionId": node["id"], "nextNode": next_node}
 
     def record_artifact(self, args: dict[str, Any]) -> dict[str, bool]:
         self._ensure_initialized()
@@ -151,28 +176,33 @@ class HarnessOrchestrator:
         self.store.record_run(record)
         return {"ok": True}
 
-    def request_user_decision(self, args: dict[str, Any]) -> dict[str, bool]:
-        self._ensure_initialized()
-        self.store.append_timeline({
-            "type": "decision_request_ignored",
-            "timestamp": now_iso(),
-            "message": args.get("question", "Decision request ignored because human gates are disabled."),
-            "payload": {"context": args.get("context")},
-        })
-        return {"recorded": True}
-
     async def interrupt_current(self, reason: str | None = None) -> dict[str, Any]:
         self._ensure_initialized()
         assert self.state
         message = reason or "Interrupted by user."
         target = "none"
-        if self.state.get("activeNodeSessionId"):
+        node_runner_active = bool(self.active_node_runner and self.active_node_runner.is_running)
+        main_runner_active = bool(self.main_runner and self.main_runner.is_running)
+        has_active_node = bool(self.state.get("activeNodeSessionId"))
+
+        if node_runner_active or (has_active_node and not main_runner_active):
             target = "node"
-            if self.active_node_runner:
+            if node_runner_active and self.active_node_runner:
                 try:
                     await self.active_node_runner.interrupt()
                 except Exception:
                     pass
+            if main_runner_active and self.main_runner:
+                try:
+                    await self.main_runner.interrupt()
+                except Exception:
+                    pass
+                self.store.append_timeline({
+                    "type": "main_interrupted",
+                    "timestamp": now_iso(),
+                    "message": "Main runner interrupted while pausing active node.",
+                    "payload": {"reason": message},
+                })
             node = self.active_node_session or self._restore_active_node_session()
             if node:
                 node["status"] = "paused"
@@ -189,7 +219,7 @@ class HarnessOrchestrator:
             self.store.write_state(self.state)
             self.active_node_runner = None
             self.active_node_session = node
-        elif self.main_runner:
+        elif main_runner_active and self.main_runner:
             target = "main"
             try:
                 await self.main_runner.interrupt()
@@ -229,9 +259,62 @@ class HarnessOrchestrator:
             "请结合已有 workspace 文件、节点日志和这条补充说明继续推进当前 node。不要重新开始整个 pipeline，除非用户明确要求。",
         ])
         parts = await self.active_node_runner.send_with_user_echo(prompt)
-        await self._handle_node_control(parts)
-        await self._maybe_auto_enter_next_node(node)
+        await self._handle_node_runner_return(node)
         return parts
+
+    async def approve_pending_control(self) -> dict[str, Any]:
+        self._ensure_initialized()
+        assert self.state
+        request = self.store.clear_pending_control()
+        self.state = self.store.read_state()
+        if not request:
+            return {"approved": False, "message": "No pending control request.", "state": self.get_state()}
+        self.store.append_timeline({
+            "type": "control_approved",
+            "timestamp": now_iso(),
+            "nodeSessionId": request.get("nodeSessionId"),
+            "nodeType": request.get("nodeType"),
+            "message": request.get("message") or request["kind"],
+            "payload": request,
+        })
+        if request["kind"] == "enter_node":
+            result = await self.enter_node(request["args"])
+            return {"approved": True, "result": result, "state": self.get_state()}
+        if request["kind"] == "finish_node":
+            result = await self.finish_node(request["args"])
+            if result.get("nextNode"):
+                self._park_control_request("enter_node", {
+                    "nodeType": result["nextNode"],
+                    "rationale": f"Previous node finished and pipeline is ready for {result['nextNode']}.",
+                    "inputSummary": "Approve this control request to continue the node chain.",
+                })
+            return {"approved": True, "result": result, "state": self.get_state()}
+        raise RuntimeError(f"Unknown control request kind: {request['kind']}")
+
+    def reject_pending_control(self, reason: str | None = None) -> dict[str, Any]:
+        self._ensure_initialized()
+        assert self.state
+        request = self.store.clear_pending_control()
+        self.state = self.store.read_state()
+        if not request:
+            return {"rejected": False, "message": "No pending control request.", "state": self.get_state()}
+        message = reason or "Rejected by human."
+        self.store.append_timeline({
+            "type": "control_rejected",
+            "timestamp": now_iso(),
+            "nodeSessionId": request.get("nodeSessionId"),
+            "nodeType": request.get("nodeType"),
+            "message": message,
+            "payload": request,
+        })
+        if request["kind"] == "finish_node" and request.get("nodeSessionId"):
+            node = self.store.read_node_session(request["nodeSessionId"])
+            if node and node.get("status") == "waiting_approval":
+                node["status"] = "paused"
+                node["summary"] = f"Finish request rejected: {message}"
+                self.store.write_node_session(node)
+                self.store.append_node_part(node["id"], system_text_part(f"Harness control rejected finish_node: {message}"))
+        return {"rejected": True, "state": self.get_state()}
 
     def get_state(self) -> WorkspaceState:
         self._ensure_initialized()
@@ -281,6 +364,10 @@ class HarnessOrchestrator:
         self._ensure_initialized()
         return self.store.write_reference_file(filename, content)
 
+    def upload_raw_data_zip(self, filename: str, content: bytes) -> dict[str, Any]:
+        self._ensure_initialized()
+        return self.store.extract_raw_data_zip(filename, content)
+
     def clear_debug_logs(self, scope: str = "main") -> None:
         self._ensure_initialized()
         self.store.clear_debug_logs("all" if scope == "all" else "main")
@@ -310,120 +397,76 @@ class HarnessOrchestrator:
         if self.active_node_runner:
             await self.active_node_runner.close()
 
-    async def _handle_main_control(self, parts: list[Part]) -> None:
-        control = extract_control(parts)
-        if not control:
-            return
-        action = control.get("action")
-        if action == "enter_node":
-            node_type = control.get("nodeType")
-            if not is_valid_node_type(node_type):
-                self.store.append_timeline({
-                    "type": "error",
-                    "timestamp": now_iso(),
-                    "message": "Invalid harnessControl enter_node nodeType",
-                    "payload": control,
-                })
-                return
-            if self.state and self.state.get("activeNode"):
-                return
-            part = system_text_part(f"Harness control: starting node {node_type}.")
-            self.store.append_main_part(part)
-            try:
-                await self.enter_node({
-                    "nodeType": node_type,
-                    "rationale": str(control.get("rationale") or f"Agent requested {node_type}"),
-                    "inputSummary": str(control.get("inputSummary") or "") or None,
-                })
-            except RuntimeError:
-                return
-            return
-        if action == "request_user_decision":
-            self.store.append_timeline({
-                "type": "decision_request_ignored",
-                "timestamp": now_iso(),
-                "message": "Human confirmation gates are disabled; continuing pipeline without waiting.",
-                "payload": control,
-            })
+    def _control_mode(self) -> str:
+        self._ensure_initialized()
+        assert self.state
+        return "auto" if self.state.get("controlMode") == "auto" else "manual"
 
-    async def _handle_node_control(self, parts: list[Part]) -> None:
-        control = extract_control(parts)
-        if not control:
-            fallback = self._infer_finish_from_artifacts()
-            if fallback:
-                self.store.append_timeline({
-                    "type": "node_control_inferred",
-                    "timestamp": now_iso(),
-                    "nodeSessionId": self.active_node_session.get("id") if self.active_node_session else None,
-                    "nodeType": self.active_node_session.get("nodeType") if self.active_node_session else None,
-                    "message": "Node finish inferred from required artifacts because harnessControl JSON was missing or malformed.",
-                    "payload": fallback,
-                })
-                await self.finish_node(fallback)
-                return
-            self.store.append_timeline({
-                "type": "node_protocol_error",
-                "timestamp": now_iso(),
-                "nodeSessionId": self.active_node_session.get("id") if self.active_node_session else None,
-                "nodeType": self.active_node_session.get("nodeType") if self.active_node_session else None,
-                "message": "Node response did not include finish_node harnessControl; pipeline stopped without human gate.",
-            })
-            await self.finish_node({
-                "success": False,
-                "summary": "Node response did not include finish_node harnessControl.",
-                "goalMet": False,
-                "outputPaths": [],
-            })
+    def _park_control_request(
+        self,
+        kind: str,
+        args: dict[str, Any],
+        node: NodeSession | None = None,
+    ) -> dict[str, Any]:
+        node_type = str(args.get("nodeType") or (node["nodeType"] if node else ""))
+        request: ControlRequest = {
+            "id": str(uuid4()),
+            "kind": kind,
+            "status": "pending",
+            "createdAt": now_iso(),
+            "nodeType": node_type,
+            "args": args,
+            "message": self._control_request_message(kind, node_type, args),
+        }
+        if node:
+            request["nodeSessionId"] = node["id"]
+        self.store.set_pending_control(request)
+        self.state = self.store.read_state()
+        return {
+            "status": "pending_human_decision",
+            "controlRequestId": request["id"],
+            "kind": kind,
+            "nodeType": node_type,
+            "message": request["message"],
+        }
+
+    def _control_request_message(self, kind: str, node_type: str, args: dict[str, Any]) -> str:
+        if kind == "enter_node":
+            return f"Agent requested entering node {node_type}: {args.get('rationale', '')}"
+        if kind == "finish_node":
+            return f"Agent requested finishing node {node_type}: {args.get('summary', '')}"
+        return kind
+
+    async def _handle_node_runner_return(self, node: NodeSession) -> None:
+        self.state = self.store.read_state()
+        latest = self.store.read_node_session(node["id"]) or node
+        if latest.get("status") == "waiting_approval":
             return
-        if control.get("action") != "finish_node":
+        if latest.get("status") == "completed":
+            if self._control_mode() == "auto":
+                await self._maybe_auto_enter_next_node(latest)
             return
-        await self.finish_node({
-            "success": bool(control.get("success", True)),
-            "summary": str(control.get("summary") or "Node finished via harnessControl."),
-            "goalMet": control.get("goalMet"),
-            "outputPaths": [str(item) for item in control.get("outputPaths", []) if item],
+        if latest.get("status") in {"paused", "failed", "exited"}:
+            return
+        self.store.append_timeline({
+            "type": "node_protocol_error",
+            "timestamp": now_iso(),
+            "nodeSessionId": latest.get("id"),
+            "nodeType": latest.get("nodeType"),
+            "message": "Node runner returned without calling finish_node MCP.",
         })
-
-    def _infer_finish_from_artifacts(self) -> dict[str, Any] | None:
-        node = self.active_node_session
-        if not node:
-            return None
-        node_type = node["nodeType"]
-        if node_type == "problem-contract":
-            required = ["user/problem-contract.md", "user/data-spec.md"]
-            if all((self.workspace_path / path).exists() for path in required):
-                return {
-                    "success": True,
-                    "summary": "Finished problem-contract; inferred from user/problem-contract.md and user/data-spec.md.",
-                    "goalMet": False,
-                    "outputPaths": required,
-                }
-            return None
-        if node_type == "iterative-solving":
-            state_path = self.workspace_path / "user" / "iteration-state.md"
-            reports_dir = self.workspace_path / "reports" / "iterations"
-            if state_path.exists() and reports_dir.exists() and any(reports_dir.glob("*-summary.md")):
-                return {
-                    "success": True,
-                    "summary": "Finished iterative-solving; inferred from iteration-state and iteration summary artifacts.",
-                    "goalMet": False,
-                    "outputPaths": ["user/iteration-state.md", "reports/iterations/**"],
-                }
-            return None
-        if node_type == "final-summary":
-            required = ["reports/final-summary.md", "user/final-solution.md"]
-            if all((self.workspace_path / path).exists() for path in required):
-                return {
-                    "success": True,
-                    "summary": "Finished final-summary; inferred from final summary artifacts.",
-                    "goalMet": True,
-                    "outputPaths": required,
-                }
-        return None
+        await self.finish_node({
+            "success": False,
+            "summary": "Node runner returned without calling finish_node MCP.",
+            "goalMet": False,
+            "outputPaths": [],
+        })
 
     async def _maybe_auto_enter_next_node(self, finished_node: NodeSession) -> None:
         self._ensure_initialized()
         assert self.state
+        if self._control_mode() != "auto":
+            return
         latest = self.store.read_node_session(finished_node["id"]) or finished_node
         if self.state.get("activeNode") or latest.get("status") != "completed" or latest.get("success") is not True:
             return
@@ -445,37 +488,55 @@ class HarnessOrchestrator:
         })
 
     def _next_node_after_completion(self, latest: NodeSession) -> NodeType | None:
-        if latest["nodeType"] == "iterative-solving" and self._iteration_recommends_continue():
-            return "iterative-solving"
+        if latest["nodeType"] == "iterative-solving":
+            if latest.get("loopDecision") == "continue":
+                return "iterative-solving"
+            if latest.get("loopDecision") == "exit":
+                return "final-summary"
+            if latest.get("nextNode"):
+                return latest.get("nextNode")
+            if latest.get("goalMet") is True:
+                return get_next_node(latest["nodeType"])
+            return None
+        if latest.get("nextNode"):
+            return latest.get("nextNode")
         return get_next_node(latest["nodeType"])
 
-    def _iteration_recommends_continue(self) -> bool:
-        state_file = self.workspace_path / "user" / "iteration-state.md"
-        try:
-            text = state_file.read_text(encoding="utf-8").lower()
-        except FileNotFoundError:
-            return False
-        false_markers = (
-            "recommend_exit: false",
-            "recommend_exit=false",
-            "recommend exit: false",
-            "recommend exit=false",
-            "建议退出: false",
-            "建议退出：false",
-        )
-        true_markers = (
-            "recommend_exit: true",
-            "recommend_exit=true",
-            "recommend exit: true",
-            "recommend exit=true",
-            "建议退出: true",
-            "建议退出：true",
-        )
-        if any(marker in text for marker in false_markers):
-            return True
-        if any(marker in text for marker in true_markers):
-            return False
-        return False
+    def _normalize_next_node(self, value: Any) -> NodeType | None:
+        if value is None:
+            return None
+        node = str(value).strip()
+        if not node or node == "none":
+            return None
+        if node not in NODE_SPECS_BY_TYPE:
+            raise RuntimeError(f"Invalid nextNode from MCP finish_node: {node}")
+        return node
+
+    def _normalize_loop_decision(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        decision = str(value).strip().lower()
+        if not decision or decision == "none":
+            return None
+        if decision not in {"continue", "exit"}:
+            raise RuntimeError(f"Invalid loopDecision from MCP finish_node: {decision}")
+        return decision
+
+    def _validate_finish_control(
+        self,
+        node_type: NodeType,
+        success: bool,
+        next_node: NodeType | None,
+        loop_decision: str | None,
+    ) -> None:
+        if node_type != "iterative-solving":
+            return
+        if success and not next_node and not loop_decision:
+            raise RuntimeError("iterative-solving finish_node requires loopDecision or nextNode.")
+        if loop_decision == "continue" and next_node not in {None, "iterative-solving"}:
+            raise RuntimeError("iterative-solving loopDecision=continue requires nextNode=iterative-solving.")
+        if loop_decision == "exit" and next_node not in {None, "final-summary"}:
+            raise RuntimeError("iterative-solving loopDecision=exit requires nextNode=final-summary.")
 
     def _ensure_initialized(self) -> None:
         if not self.state:
@@ -492,10 +553,12 @@ class HarnessOrchestrator:
         ctx = PromptContext(str(self.workspace_path), self.locale)
         llm_config = read_effective_llm_config(self.workspace_path)
         sdk_config = build_sdk_invocation_config(llm_config)
-        mcp_server = None if self._should_disable_mcp(llm_config) else create_harness_mcp_server(
+        mcp_server = create_harness_mcp_server(
             session_role="main",
-            enter_node=self.enter_node,
+            enter_node=self.request_enter_node,
         )
+        if mcp_server is None:
+            raise RuntimeError("Claude Code SDK MCP server is required for node control but could not be created.")
         self.main_runner = SdkRunner(SdkRunnerConfig(
             cwd=self.workspace_path,
             system_prompt=build_main_system_prompt(ctx),
@@ -512,12 +575,14 @@ class HarnessOrchestrator:
         ctx = PromptContext(str(self.workspace_path), self.locale)
         llm_config = read_effective_llm_config(self.workspace_path)
         sdk_config = build_sdk_invocation_config(llm_config)
-        mcp_server = None if self._should_disable_mcp(llm_config) else create_harness_mcp_server(
+        mcp_server = create_harness_mcp_server(
             session_role="node",
-            finish_node=self.finish_node,
+            finish_node=self.request_finish_node,
             record_artifact=self.record_artifact,
             record_run=self.record_run,
         )
+        if mcp_server is None:
+            raise RuntimeError("Claude Code SDK MCP server is required for node control but could not be created.")
 
         def on_session_id(sdk_session_id: str) -> None:
             node["sdkSessionId"] = sdk_session_id
@@ -535,10 +600,3 @@ class HarnessOrchestrator:
             log=MessageLog(self.store.node_log_path(node["id"])),
             on_session_id=on_session_id,
         ))
-
-    def _should_disable_mcp(self, llm_config: Any) -> bool:
-        if os.getenv("TS_HARNESS_ENABLE_MCP") == "true":
-            return False
-        if os.getenv("TS_HARNESS_DISABLE_MCP") == "true":
-            return True
-        return llm_config.authMode == "manual" and bool(llm_config.baseUrl)

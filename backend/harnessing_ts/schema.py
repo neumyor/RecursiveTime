@@ -6,6 +6,8 @@ from typing import Any, Literal, TypedDict
 from harnessing_ts.config.markdown import node_documents
 
 NodeType = str
+ControlMode = Literal["manual", "auto"]
+CONTROL_MODES: tuple[str, ...] = ("manual", "auto")
 
 
 @dataclass(frozen=True)
@@ -41,7 +43,9 @@ class WorkspaceState(TypedDict):
     workspacePath: str
     createdAt: str
     updatedAt: str
-    mode: Literal["manual", "auto"]
+    mode: ControlMode
+    controlMode: ControlMode
+    pendingControl: "ControlRequest | None"
     activeNode: NodeType | None
     activeNodeSessionId: str | None
     completedNodes: list[NodeType]
@@ -52,7 +56,7 @@ class WorkspaceState(TypedDict):
 class NodeSession(TypedDict, total=False):
     id: str
     nodeType: NodeType
-    status: Literal["created", "running", "paused", "completed", "failed", "exited"]
+    status: Literal["created", "running", "paused", "waiting_approval", "completed", "failed", "exited"]
     startedAt: str
     completedAt: str
     sdkSessionId: str
@@ -60,7 +64,21 @@ class NodeSession(TypedDict, total=False):
     inputSummary: str
     summary: str
     success: bool
+    goalMet: bool | None
+    nextNode: NodeType | None
+    loopDecision: Literal["continue", "exit", "none"] | None
     outputPaths: list[str]
+
+
+class ControlRequest(TypedDict, total=False):
+    id: str
+    kind: Literal["enter_node", "finish_node"]
+    status: Literal["pending"]
+    createdAt: str
+    nodeType: NodeType
+    nodeSessionId: str
+    args: dict[str, Any]
+    message: str
 
 
 class TimelineEvent(TypedDict, total=False):

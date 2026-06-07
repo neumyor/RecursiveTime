@@ -22,7 +22,12 @@ problem-contract
 
 ## Node Responsibilities And Native Tools
 
-The main session is an orchestrator. It should stay read-only and use `Read`, `LS`, `Glob`, and `Grep` to inspect workspace state before requesting a node transition through `harnessControl`. Node sessions receive native tool sets based on their responsibility. MCP governance tools may be attached on official Claude runtimes, but third-party `baseUrl` providers use the text `harnessControl` protocol instead.
+The main session is an orchestrator. It should stay read-only and use `Read`, `LS`, `Glob`, and `Grep` to inspect workspace state before requesting a node transition through the MCP governance tool `mcp__ts_harness__enter_node`. Node sessions receive native tool sets based on their responsibility and finish through `mcp__ts_harness__finish_node`.
+
+Node control has exactly two modes:
+
+- `TS_HARNESS_CONTROL_MODE=auto`: governance MCP calls are allowed immediately, and the backend advances the configured pipeline automatically.
+- `TS_HARNESS_CONTROL_MODE=manual`: governance MCP calls are parked as `pendingControl` in workspace state. The frontend must approve or reject each node entry or node completion.
 
 Prompt and node configuration text is stored as Markdown, not hard-coded in Python:
 
@@ -40,14 +45,22 @@ Python code reads these files read-only and only handles parsing, validation, an
 | Node | Responsibility | Produces | Native tools |
 |---|---|---|---|
 | `problem-contract` | Use the user request and references to acquire/process data, explore it, clarify the real task, and write the workflow contract. | `user/problem-contract.md`, `user/data-spec.md` | `Read`, `LS`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Write`, `Edit`, `Bash` |
-| `iterative-solving` | Each round tries exactly one new method, or one explicit combination of previously persisted tools. The method must first be standardized under `tools/`, then executed and reviewed through data-first case analysis with numeric bad-case attribution. | `tools/**`, `runs/iterations/<iteration-id>/**`, `reports/iterations/<iteration-id>-summary.md`, `user/iteration-state.md` | `Read`, `LS`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Write`, `Edit`, `Bash` |
+| `iterative-solving` | Each round tries exactly one new method, or one explicit combination of previously persisted tools. The method must first be standardized under `tools/`, then executed and reviewed through data-first case analysis with numeric bad-case attribution. The node writes case review before iteration summary. | `tools/**`, `runs/iterations/<iteration-id>/**`, `reports/iterations/<iteration-id>-case-review.md`, `reports/iterations/<iteration-id>-summary.md`, `user/iteration-state.md` | `Read`, `LS`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Write`, `Edit`, `Bash` |
 | `final-summary` | If iteration is complete, summarize the full optimization trajectory, final tool-use solution, final results, limitations, and evidence. | `reports/final-summary.md`, `user/final-solution.md` | `Read`, `LS`, `Glob`, `Grep`, `Write`, `Edit` |
+
+Case review and summary have separate roles:
+
+- Case review centers on bad cases. If there are fewer than 10 bad cases, every bad case must be analyzed. If there are many, the node must define a task-appropriate sampling strategy and deeply analyze 5-20 bad cases.
+- Every reviewed sample must include a visualization path, raw input evidence, current-method evidence, comparison to a good case/prototype/reference case, and an explicit explanation level.
+- Case review ends with statistical analysis over all bad cases or the largest computable bad-case set.
+- Iteration summary should not duplicate per-case analysis. It should describe the tool/method change, execution command, aggregate metrics, target gap, 3-5 high-level case-review findings, and next-node decision.
 
 Iteration routing:
 
-- `iterative-solving` writes `user/iteration-state.md`.
-- If it contains `recommend_exit: false` or `recommend_exit=false`, the backend enters `iterative-solving` again for another round.
-- If it contains `recommend_exit: true` or omits a continue marker, the backend advances to `final-summary`.
+- Node transitions are controlled through MCP, not by parsing markdown artifacts.
+- `iterative-solving` must call `mcp__ts_harness__finish_node` with `loopDecision: "continue"` and `nextNode: "iterative-solving"` to run another iteration.
+- `iterative-solving` must call `mcp__ts_harness__finish_node` with `loopDecision: "exit"` and `nextNode: "final-summary"` to stop iteration and summarize.
+- `user/iteration-state.md` still records `recommend_exit` for auditability, but the backend does not parse it for control.
 
 Global native-tool constraints:
 
@@ -80,6 +93,29 @@ Then open:
 ```text
 http://127.0.0.1:4327
 ```
+
+Frontend development is managed by Bun and Vite. Start the backend first, then run the hot-reload frontend in another terminal:
+
+```bash
+cd frontend
+bun install
+bun run dev
+```
+
+Open the Vite dev UI at:
+
+```text
+http://127.0.0.1:5173
+```
+
+Build the production frontend bundle with:
+
+```bash
+cd frontend
+bun run build
+```
+
+When `frontend/dist/` exists, `ts-harness-server` serves the built frontend automatically.
 
 For UI testing without calling the model:
 
@@ -137,35 +173,17 @@ The browser UI uses this split:
 
 - Left rail: process audit panel. It shows workspace status, node activation state, the node chain, selected-node artifacts, node sessions, node logs, and the timeline.
 - Center: main orchestrator chat. The transcript selector above the chat can show all sessions, only the main session, or one specific node session.
-- Center toolbar: `Interrupt` stops the currently running main turn or active node. If a node is interrupted, the harness exits that node session and unlocks the main chat so you can add new instructions.
+- Center toolbar: `Interrupt` pauses the currently running main turn or active node. If a node is paused, you can add guidance and resume it from the composer.
 - Right rail: current workspace file tree. This is where node artifacts, data files, generated tools, run outputs, logs, and state files appear.
 - Right rail upload: use `Reference Files` to upload PDFs, markdown, text, CSV, or other reference files into `references/`. The upload is recorded in `logs/timeline.jsonl`.
+- Right rail upload: use `Raw Data Zip` to upload a `.zip` archive and extract it into `data/raw/` as original data. The backend rejects unsafe archive paths such as `../...` and records the upload in `logs/timeline.jsonl`.
 
 The frontend stays static after each action. Use the refresh button to pull the latest JSONL-backed logs from the backend. Tool calls and tool results are summarized by default; expand each row to inspect the full payload.
 
-There are no human-confirmation gates in the default pipeline. Once a node finishes successfully, the harness automatically advances to the next node. Use `Interrupt` when you need to stop the current run and add new guidance.
+Default control mode is `auto`. Once a node finishes successfully, the harness automatically advances to the next node. Set `TS_HARNESS_CONTROL_MODE=manual` when you want every node entry and node completion to require explicit approval in the left-side Pending Control panel.
 - DOCX references are automatically extracted to `<filename>.docx.txt`. Agents can also run `uv run python tools/read_docx.py references/<file>.docx artifacts/<file>.txt`.
 
-Some Anthropic-compatible providers can close the Claude Code control channel when Python in-process MCP tools are attached. For provider smoke tests that only need model I/O, disable harness MCP tools:
-
-```bash
-TS_HARNESS_DISABLE_MCP=true uv run ts-harness send "请只回复：调用成功。"
-```
-
-For manual `baseUrl` providers, HarnessingTS defaults to a text control protocol instead of in-process MCP. The main agent can autonomously request node transitions by appending:
-
-```json
-{"harnessControl":{"action":"enter_node","nodeType":"problem-contract","rationale":"...","inputSummary":"..."}}
-```
-
-Node agents return control with:
-
-```json
-{"harnessControl":{"action":"finish_node","success":true,"summary":"...","goalMet":false,"outputPaths":["user/problem-contract.md","user/data-spec.md"]}}
-```
-
-The frontend hides these control blocks and the backend records the actual transition in `logs/timeline.jsonl`.
-After a successful `finish_node`, the backend immediately enters the configured next node. If a node omits `finish_node`, the harness marks that node failed and stops the pipeline instead of waiting for a human gate.
+The backend records all accepted or parked control transitions in `logs/timeline.jsonl`. If a node omits `finish_node`, the harness marks the node failed and stops the pipeline.
 
 ## LLM Configuration
 

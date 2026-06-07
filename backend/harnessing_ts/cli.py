@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,8 @@ async def _main() -> None:
     finish.add_argument("--summary", default="Finished by CLI.")
     finish.add_argument("--success", default="true")
     finish.add_argument("--goal-met")
+    finish.add_argument("--next-node", choices=[*NODE_TYPES, "none"])
+    finish.add_argument("--loop-decision", choices=["continue", "exit", "none"])
     finish.add_argument("--output-path")
 
     training = sub.add_parser("training-template")
@@ -46,7 +49,10 @@ async def _main() -> None:
 
     args = parser.parse_args()
     workspace = Path(args.workspace).expanduser().resolve() if args.workspace else default_workspace_path()
-    orchestrator = HarnessOrchestrator(workspace, dry_run=args.dry_run, locale="zh", mode="manual")
+    control_mode = os.getenv("TS_HARNESS_CONTROL_MODE", "auto").strip().lower()
+    if control_mode not in {"auto", "manual"}:
+        control_mode = "auto"
+    orchestrator = HarnessOrchestrator(workspace, dry_run=args.dry_run, locale="zh", mode=control_mode)
     command = args.command or "init"
 
     if command == "init":
@@ -64,7 +70,7 @@ async def _main() -> None:
         await orchestrator.close()
         return
     if command == "start-node":
-        print_json(await orchestrator.enter_node({
+        print_json(await orchestrator.request_enter_node({
             "nodeType": args.node_type,
             "rationale": args.rationale or f"CLI start-node {args.node_type}",
             "inputSummary": args.input_summary,
@@ -72,10 +78,12 @@ async def _main() -> None:
         await orchestrator.close()
         return
     if command == "finish-node":
-        print_json(await orchestrator.finish_node({
+        print_json(await orchestrator.request_finish_node({
             "success": str(args.success).lower() != "false",
             "summary": args.summary,
             "goalMet": _optional_bool(args.goal_met),
+            "nextNode": args.next_node,
+            "loopDecision": args.loop_decision,
             "outputPaths": [args.output_path] if args.output_path else None,
         }))
         return

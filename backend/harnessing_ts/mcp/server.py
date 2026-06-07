@@ -18,7 +18,6 @@ def create_harness_mcp_server(
     finish_node: Callable[[dict[str, Any]], Any] | None = None,
     record_artifact: Callable[[dict[str, Any]], Any] | None = None,
     record_run: Callable[[dict[str, Any]], Any] | None = None,
-    request_user_decision: Callable[[dict[str, Any]], Any] | None = None,
 ) -> Any:
     try:
         from claude_code_sdk import create_sdk_mcp_server, tool
@@ -30,7 +29,7 @@ def create_harness_mcp_server(
     if session_role == "main" and enter_node:
         @tool(
             name="enter_node",
-            description="Enter a time-series tool-use harness node. The node will run in an independent Claude Code SDK session.",
+            description="Request entry into a time-series tool-use harness node. The harness either auto-allows it or parks it for human approval according to TS_HARNESS_CONTROL_MODE.",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -46,31 +45,26 @@ def create_harness_mcp_server(
 
         tools.append(_enter_node)
 
-    if session_role == "main" and request_user_decision:
-        @tool(
-            name="request_user_decision",
-            description="Record that a human decision is required before continuing.",
-            input_schema={
-                "type": "object",
-                "properties": {"question": {"type": "string"}, "context": {"type": "string"}},
-                "required": ["question"],
-            },
-        )
-        async def _request_user_decision(args: dict[str, Any]) -> dict[str, Any]:
-            return text_result(await _maybe_await(request_user_decision(args)))
-
-        tools.append(_request_user_decision)
-
     if session_role == "node" and finish_node:
         @tool(
             name="finish_node",
-            description="Finish the active node and hand structured completion summary back to the harness orchestrator.",
+            description="Request completion of the active node. The harness either auto-allows it or parks it for human approval according to TS_HARNESS_CONTROL_MODE.",
             input_schema={
                 "type": "object",
                 "properties": {
                     "success": {"type": "boolean"},
                     "summary": {"type": "string"},
                     "goalMet": {"type": "boolean"},
+                    "nextNode": {
+                        "type": "string",
+                        "enum": [*list(NODE_TYPES), "none"],
+                        "description": "Structured node routing decision. For iterative-solving, use iterative-solving to continue or final-summary to exit.",
+                    },
+                    "loopDecision": {
+                        "type": "string",
+                        "enum": ["continue", "exit", "none"],
+                        "description": "Structured loop decision for iterative-solving. Use continue for another iteration, exit for final-summary.",
+                    },
                     "outputPaths": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["success", "summary"],

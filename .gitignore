@@ -10,18 +10,18 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
-state/
-logs/
-user/
-data/raw/
-data/processed/
-references/
-artifacts/
-plots/
-tools/
-runs/
-reports/
-tools/generated/
+/state/
+/logs/
+/user/
+/data/raw/
+/data/processed/
+/references/
+/artifacts/
+/plots/
+/tools/
+/runs/
+/reports/
+/tools/generated/
 src/harnessing_ts.egg-info/
 
 .env*

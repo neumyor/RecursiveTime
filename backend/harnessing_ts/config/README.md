@@ -45,7 +45,7 @@ This is model-facing text.
 
 ### `prompts/main/control-protocol.md`
 
-Main-session `harnessControl` protocol for requesting `enter_node`.
+Main-session MCP governance protocol for requesting `enter_node`.
 This is model-facing text.
 
 ### `prompts/main/attachment.md`
@@ -61,7 +61,7 @@ This is model-facing text.
 
 ### `prompts/node/finish-protocol.md`
 
-Node-session `harnessControl` protocol for reporting `finish_node`.
+Node-session MCP governance protocol for reporting `finish_node`.
 This is model-facing text.
 
 ### `prompts/node/attachment.md`

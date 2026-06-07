@@ -9,4 +9,4 @@
 - 明确哪些结论来自真实工件和运行记录，不要编造不存在的实验。
 - 输出 `reports/final-summary.md` 和 `user/final-solution.md`。最终指标、关键结果和失败模式写入 `reports/final-summary.md` 的固定章节，不再单独要求 `reports/final-result.md`。
 
-如果 `user/iteration-state.md` 显示仍不建议退出，则不要伪造最终结果；应在 final summary 中明确当前不应结束，并列出需要继续迭代的原因。
+如果 `user/iteration-state.md` 与 MCP 流转决策不一致，不要伪造一致性；应在 final summary 中明确记录该审计不一致，并以 MCP 已进入 final-summary 这一结构化控制事实为准完成总结。
