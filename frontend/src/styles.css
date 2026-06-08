@@ -815,6 +815,17 @@ details[open] > summary.panel-heading::after {
   gap: 8px;
 }
 
+.knowledge-depth {
+  grid-column: 1 / -1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 9px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .knowledge-stat {
   width: 100%;
   display: grid;

@@ -201,12 +201,15 @@ class WorkspaceStore:
         raw = read_json(self.runtime_settings_path) or {}
         return {
             "iterativeCandidateCount": _bounded_int(raw.get("iterativeCandidateCount"), default=3, minimum=1, maximum=8),
+            "knowledgeGraphExtractionDepth": _bounded_int(raw.get("knowledgeGraphExtractionDepth"), default=2, minimum=1, maximum=4),
         }
 
     def write_runtime_settings(self, settings: dict[str, Any]) -> RuntimeSettings:
         current = self.read_runtime_settings()
         if "iterativeCandidateCount" in settings:
             current["iterativeCandidateCount"] = _bounded_int(settings.get("iterativeCandidateCount"), default=current["iterativeCandidateCount"], minimum=1, maximum=8)
+        if "knowledgeGraphExtractionDepth" in settings:
+            current["knowledgeGraphExtractionDepth"] = _bounded_int(settings.get("knowledgeGraphExtractionDepth"), default=current["knowledgeGraphExtractionDepth"], minimum=1, maximum=4)
         write_json(self.runtime_settings_path, current)
         state = self.read_state()
         if state:
@@ -215,7 +218,7 @@ class WorkspaceStore:
         self.append_timeline({
             "type": "runtime_settings_updated",
             "timestamp": now_iso(),
-            "message": f"iterativeCandidateCount={current['iterativeCandidateCount']}",
+            "message": f"iterativeCandidateCount={current['iterativeCandidateCount']}, knowledgeGraphExtractionDepth={current['knowledgeGraphExtractionDepth']}",
             "payload": current,
         })
         return current

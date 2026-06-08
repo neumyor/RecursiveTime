@@ -185,6 +185,10 @@ app.innerHTML = `
           <button id="backToChatBtn" type="button" class="ghost"><span data-icon="ChevronLeft"></span><span>Main</span></button>
         </div>
         <label>
+          <span>Extraction Depth</span>
+          <input id="graphExtractionDepthInput" type="number" min="1" max="4" step="1" />
+        </label>
+        <label>
           <span>Auth</span>
           <select id="graphAuthMode">
             <option value="manual">manual</option>
@@ -380,6 +384,7 @@ const els = {
   graphModelInput: query<HTMLInputElement>('#graphModelInput'),
   graphApiKeyInput: query<HTMLInputElement>('#graphApiKeyInput'),
   graphBaseUrlInput: query<HTMLInputElement>('#graphBaseUrlInput'),
+  graphExtractionDepthInput: query<HTMLInputElement>('#graphExtractionDepthInput'),
   saveGraphLlmBtn: query<HTMLButtonElement>('#saveGraphLlmBtn'),
   buildGraphBtn: query<HTMLButtonElement>('#buildGraphBtn'),
   knowledgeSummary: query('#knowledgeSummary'),
@@ -484,10 +489,21 @@ els.candidateCountInput.addEventListener('change', async () => {
   window.clearTimeout(state.candidateSaveTimer);
   await saveCandidateCount();
 });
+els.graphExtractionDepthInput.addEventListener('change', async () => {
+  await saveGraphExtractionDepth();
+});
 async function saveCandidateCount() {
   const value = Number.parseInt(els.candidateCountInput.value, 10);
   if (!Number.isFinite(value)) return;
   const result = await postJson('/api/runtime-settings', { iterativeCandidateCount: value });
+  state.bootstrap = result.bootstrap;
+  state.busy = Boolean(result.bootstrap?.runtime?.running);
+  render();
+}
+async function saveGraphExtractionDepth() {
+  const value = Number.parseInt(els.graphExtractionDepthInput.value, 10);
+  if (!Number.isFinite(value)) return;
+  const result = await postJson('/api/runtime-settings', { knowledgeGraphExtractionDepth: value });
   state.bootstrap = result.bootstrap;
   state.busy = Boolean(result.bootstrap?.runtime?.running);
   render();
@@ -769,6 +785,8 @@ function renderChat(data: Bootstrap) {
 function renderRuntimeSettings(settings: JsonMap | null | undefined) {
   const value = settings?.iterativeCandidateCount ?? 3;
   if (els.candidateCountInput.value !== String(value)) els.candidateCountInput.value = String(value);
+  const graphDepth = settings?.knowledgeGraphExtractionDepth ?? 2;
+  if (els.graphExtractionDepthInput.value !== String(graphDepth)) els.graphExtractionDepthInput.value = String(graphDepth);
 }
 
 function renderViewState() {
@@ -797,12 +815,14 @@ function renderKnowledgeGraphBuilder(data: Bootstrap) {
   if (els.graphModelInput.value !== (config.model || '')) els.graphModelInput.value = config.model || '';
   if (els.graphBaseUrlInput.value !== (config.baseUrl || '')) els.graphBaseUrlInput.value = config.baseUrl || '';
   els.buildGraphBtn.disabled = running;
+  els.graphExtractionDepthInput.disabled = running;
   els.saveGraphLlmBtn.disabled = false;
 }
 
 function renderKnowledgeWorkbench(data: Bootstrap) {
   const summary = data.knowledgeBaseSummary || data.knowledgeGraph?.summary || {};
   els.knowledgeSummary.innerHTML = `
+    <div class="knowledge-depth">Depth ${escapeHtml(summary.extractionDepth ?? data.runtimeSettings?.knowledgeGraphExtractionDepth ?? 2)}</div>
     ${knowledgeStatHtml('knowledge', summary.knowledgeCount ?? 0, 'Knowledge')}
     ${knowledgeStatHtml('evidence', summary.evidenceCount ?? 0, 'Evidence')}
     ${knowledgeStatHtml('classes', summary.classCount ?? 0, 'Classes')}

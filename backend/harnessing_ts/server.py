@@ -36,6 +36,7 @@ class ControlDecisionRequest(BaseModel):
 
 class RuntimeSettingsRequest(BaseModel):
     iterativeCandidateCount: int | None = None
+    knowledgeGraphExtractionDepth: int | None = None
 
 
 class KnowledgeGraphBuildRequest(BaseModel):

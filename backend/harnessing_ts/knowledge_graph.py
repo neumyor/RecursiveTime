@@ -36,11 +36,27 @@ KG_ALLOWED_TOOLS = ["Read", "LS", "Glob", "Grep", *[f"mcp__ts_harness__{name}" f
 REFERENCE_FIELDS = ["reference_id", "path", "sha256", "title", "brief", "status", "updated_at"]
 EVIDENCE_FIELDS = ["evidence_id", "reference_file", "page", "section", "quoted_fragments", "notes"]
 KNOWLEDGE_FIELDS = ["knowledge_id", "topic", "description", "summary", "evidence_ids", "class_ids", "relation_ids", "status", "notes"]
-CLASS_FIELDS = ["class_id", "label", "normalized_label", "description", "source_knowledge_ids", "evidence_ids", "aliases"]
-RELATION_FIELDS = ["relation_id", "source_class_id", "relation_type", "target_class_id", "description", "source_knowledge_ids", "evidence_ids"]
+CLASS_FIELDS = ["class_id", "label", "normalized_label", "concept_level", "concept_type", "description", "source_knowledge_ids", "evidence_ids", "aliases"]
+RELATION_FIELDS = ["relation_id", "source_class_id", "relation_type", "target_class_id", "relation_depth", "description", "source_knowledge_ids", "evidence_ids"]
+CONCEPT_TYPES = {
+    "entity",
+    "abnormality_pattern",
+    "signal_feature",
+    "waveform",
+    "interval",
+    "threshold",
+    "condition",
+    "confounder",
+    "task",
+    "dataset",
+    "method",
+    "evidence_source",
+    "mechanism",
+    "next_check",
+}
 
 
-BUILDER_SYSTEM_PROMPT = """你是 HarnessingTS 的 Agent 1：Literature Knowledge Builder。
+BUILDER_SYSTEM_PROMPT_BASE = """你是 HarnessingTS 的 Agent 1：Literature Knowledge Builder。
 
 你是离线知识库构建 agent，独立于主会话和 node chain。你的目标是把 references/PDF/文档中的领域知识，转成“可检索、可追溯、可推理”的自然语言知识网络。
 
@@ -61,6 +77,35 @@ BUILDER_SYSTEM_PROMPT = """你是 HarnessingTS 的 Agent 1：Literature Knowledg
 不要回答在线问题；只负责构建和更新知识库。
 不要编造没有 evidence 支持的 knowledge/class/relation。证据不足时，在 notes 中写明 uncertainty，不要写成确定关系。
 """
+
+
+def builder_system_prompt(extraction_depth: int) -> str:
+    depth = _bounded_int(extraction_depth, default=2, minimum=1, maximum=4)
+    return "\n\n".join([
+        BUILDER_SYSTEM_PROMPT_BASE,
+        _graph_extraction_rules(depth),
+    ])
+
+
+def _graph_extraction_rules(depth: int) -> str:
+    rules = [
+        f"当前 graph extraction depth = {depth}。你不需要向用户解释层级选项；只按当前 depth 自动展开。",
+        "Graph Expansion 规则：",
+        "- 每条 Knowledge 必须先抽取 level 1 锚点 class，再根据当前 depth 继续向下展开。",
+        "- 调用 upsert_class 时必须提供 concept_level 和 concept_type；concept_level 不能超过当前 depth。",
+        "- 调用 upsert_relation 时优先连接相邻层级或直接证据支持的概念，relation_depth 不能超过当前 depth。",
+        "- 对同义概念先 search_classes，复用已有 class 并补充 description/evidence。",
+        "- class/relation 描述必须来自当前 Knowledge 及其 Evidence，不要补充无证据常识。",
+    ]
+    if depth >= 1:
+        rules.append("- level 1: 抽取高层锚点实体，例如数据集、任务、异常/诊断模式、核心方法、文献来源。")
+    if depth >= 2:
+        rules.append("- level 2: 在高层锚点下抽取直接诊断/决策特征，例如信号特征、波形、间期、节律特征、类别判据；ECG 场景中 P wave、QRS complex/duration、PR interval、RR interval、T wave、premature occurrence 等若被 evidence 提到，应作为候选 class。")
+    if depth >= 3:
+        rules.append("- level 3: 继续抽取阈值、导联/通道、时间条件、上下文窗口、混淆项、鉴别条件，例如 QRS > 120 ms、coupling interval、noise artifact、baseline drift、aberrant conduction。")
+    if depth >= 4:
+        rules.append("- level 4: 继续抽取机制解释、下游检查、建模风险、评估策略和不确定性处理，例如 refractory period、over-smoothing P/T wave、patient-independent validation、reject option。")
+    return "\n".join(rules)
 
 
 REASONER_SYSTEM_PROMPT = """你是 HarnessingTS 的 Agent 2：Knowledge Reasoning Agent。
@@ -112,6 +157,7 @@ async def build_knowledge_graph(
 ) -> list[Part]:
     ensure_knowledge_base_layout(store.root)
     _ensure_domain_brief(store.root)
+    extraction_depth = _graph_extraction_depth(store.root)
     sdk_config = build_sdk_invocation_config(llm_config)
     if llm_config.authMode == "manual" and not llm_config.apiKey:
         raise RuntimeError("Knowledge builder LLM config requires apiKey when authMode=manual.")
@@ -123,7 +169,7 @@ async def build_knowledge_graph(
     )
     runner = SdkRunner(SdkRunnerConfig(
         cwd=workspace_path,
-        system_prompt=BUILDER_SYSTEM_PROMPT,
+        system_prompt=builder_system_prompt(extraction_depth),
         attachment_text=None,
         allowed_tools=KG_ALLOWED_TOOLS,
         model=sdk_config.model,
@@ -417,7 +463,7 @@ def search_classes(root: Path, query: str, top_k: int = 5) -> list[dict[str, Any
     scored: list[tuple[int, dict[str, str]]] = []
     for row in read_class_rows(root):
         aliases = " ".join(_split_ids(row.get("aliases", "")))
-        haystack = " ".join([row.get("class_id", ""), row.get("label", ""), row.get("normalized_label", ""), aliases, row.get("description", "")]).lower()
+        haystack = " ".join([row.get("class_id", ""), row.get("label", ""), row.get("normalized_label", ""), row.get("concept_type", ""), aliases, row.get("description", "")]).lower()
         score = sum(haystack.count(term) for term in terms)
         if row.get("normalized_label") == normalized_query:
             score += 100
@@ -432,10 +478,15 @@ def upsert_class(root: Path, args: dict[str, Any]) -> dict[str, Any]:
     ensure_knowledge_base_layout(root)
     classes = read_class_rows(root)
     knowledge = read_knowledge_rows(root)
+    max_depth = _graph_extraction_depth(root)
     label = str(args.get("label", "") or "").strip()
     normalized = _normalize_label(label)
     if not normalized:
         raise RuntimeError("upsert_class requires label.")
+    concept_level = _bounded_int(args.get("concept_level"), default=1, minimum=1, maximum=4)
+    if concept_level > max_depth:
+        raise RuntimeError(f"concept_level {concept_level} exceeds configured extraction depth {max_depth}.")
+    concept_type = _normalize_concept_type(str(args.get("concept_type", "") or "entity"))
     knowledge_ids = _normalize_id_list(args.get("source_knowledge_ids", []))
     evidence_ids = _merged_ids(_normalize_id_list(args.get("evidence_ids", [])), _evidence_ids_for_knowledge(knowledge, knowledge_ids))
     _require_existing_ids(knowledge_ids, {row.get("knowledge_id", "") for row in knowledge}, "source_knowledge_ids")
@@ -447,6 +498,8 @@ def upsert_class(root: Path, args: dict[str, Any]) -> dict[str, Any]:
             "class_id": _next_id(classes, "class_id", "C"),
             "label": normalized,
             "normalized_label": normalized,
+            "concept_level": str(concept_level),
+            "concept_type": concept_type,
             "description": "",
             "source_knowledge_ids": _json_list([]),
             "evidence_ids": _json_list([]),
@@ -455,13 +508,15 @@ def upsert_class(root: Path, args: dict[str, Any]) -> dict[str, Any]:
         classes.append(row)
         created = True
     row["label"] = row.get("label") or normalized
+    row["concept_level"] = str(min(_bounded_int(row.get("concept_level"), default=concept_level, minimum=1, maximum=4), concept_level))
+    row["concept_type"] = row.get("concept_type") or concept_type
     row["description"] = _merge_text(row.get("description", ""), str(args.get("description_addition", "") or ""))
     row["source_knowledge_ids"] = _json_list(_merged_ids(_split_ids(row.get("source_knowledge_ids", "")), knowledge_ids))
     row["evidence_ids"] = _json_list(_merged_ids(_split_ids(row.get("evidence_ids", "")), evidence_ids))
     row["aliases"] = _json_list(_merged_ids(_split_ids(row.get("aliases", "")), _normalize_id_list(args.get("aliases", []))))
     _write_csv_rows(root / "knowledge_base" / "tables" / "classes.csv", CLASS_FIELDS, classes)
     _update_knowledge_links(root, knowledge_ids, class_ids=[row["class_id"]])
-    return {"class_id": row["class_id"], "label": row["label"], "created": created}
+    return {"class_id": row["class_id"], "label": row["label"], "concept_level": row["concept_level"], "concept_type": row["concept_type"], "created": created}
 
 
 def search_relations(root: Path, source_class_id: str = "", target_class_id: str = "", relation_type: str = "") -> list[dict[str, Any]]:
@@ -485,10 +540,14 @@ def upsert_relation(root: Path, args: dict[str, Any]) -> dict[str, Any]:
     relations = read_relation_rows(root)
     knowledge = read_knowledge_rows(root)
     classes = read_class_rows(root)
+    max_depth = _graph_extraction_depth(root)
     class_ids = {row.get("class_id", "") for row in classes}
     source = str(args.get("source_class_id", "") or "").strip()
     target = str(args.get("target_class_id", "") or "").strip()
     relation_type = _normalize_relation_type(str(args.get("relation_type", "") or "related_to"))
+    relation_depth = _bounded_int(args.get("relation_depth"), default=max(_class_level(classes, source), _class_level(classes, target)), minimum=1, maximum=4)
+    if relation_depth > max_depth:
+        raise RuntimeError(f"relation_depth {relation_depth} exceeds configured extraction depth {max_depth}.")
     if source not in class_ids or target not in class_ids:
         raise RuntimeError(f"upsert_relation requires existing source/target classes: {source}, {target}")
     knowledge_ids = _normalize_id_list(args.get("source_knowledge_ids", []))
@@ -506,12 +565,14 @@ def upsert_relation(root: Path, args: dict[str, Any]) -> dict[str, Any]:
             "source_class_id": source,
             "relation_type": relation_type,
             "target_class_id": target,
+            "relation_depth": str(relation_depth),
             "description": "",
             "source_knowledge_ids": _json_list([]),
             "evidence_ids": _json_list([]),
         }
         relations.append(row)
         created = True
+    row["relation_depth"] = str(min(_bounded_int(row.get("relation_depth"), default=relation_depth, minimum=1, maximum=4), relation_depth))
     row["description"] = _merge_text(row.get("description", ""), str(args.get("description_addition", "") or ""))
     row["source_knowledge_ids"] = _json_list(_merged_ids(_split_ids(row.get("source_knowledge_ids", "")), knowledge_ids))
     row["evidence_ids"] = _json_list(_merged_ids(_split_ids(row.get("evidence_ids", "")), evidence_ids))
@@ -557,6 +618,17 @@ def validate_knowledge_base_report(root: Path) -> dict[str, Any]:
         })
         if not _split_ids(inherited):
             warnings.append(f"{row.get('class_id', 'class')} has no evidence.")
+        level = _bounded_int(row.get("concept_level"), default=1, minimum=1, maximum=4)
+        if level > _graph_extraction_depth(root):
+            errors.append(f"{row.get('class_id', 'class')}.concept_level exceeds configured extraction depth: {level}")
+        concept_type = row.get("concept_type", "") or "entity"
+        if concept_type not in CONCEPT_TYPES:
+            errors.append(f"{row.get('class_id', 'class')}.concept_type unsupported: {concept_type}")
+    for row in relations:
+        depth = _bounded_int(row.get("relation_depth"), default=1, minimum=1, maximum=4)
+        if depth > _graph_extraction_depth(root):
+            errors.append(f"{row.get('relation_id', 'relation')}.relation_depth exceeds configured extraction depth: {depth}")
+    _collect_depth_coverage_warnings(root, knowledge, classes, warnings)
     return {"ok": not errors, "errors": errors, "warnings": warnings}
 
 
@@ -574,7 +646,8 @@ def finalize_knowledge_base(root: Path) -> dict[str, Any]:
     relations = read_relation_rows(root)
     manifest = {
         "updatedAt": now_iso(),
-        "schemaVersion": 4,
+        "schemaVersion": 5,
+        "extractionDepth": _graph_extraction_depth(root),
         "referenceCount": len(references),
         "evidenceCount": len(evidence),
         "knowledgeCount": len(knowledge),
@@ -606,6 +679,7 @@ def read_knowledge_base_summary(root: Path) -> dict[str, Any]:
     return {
         "manifest": manifest,
         "domainBrief": _read_text(kb / "domain-brief.md"),
+        "extractionDepth": _graph_extraction_depth(root),
         "referenceCount": len(references),
         "evidenceCount": len(evidence),
         "knowledgeCount": len(knowledge),
@@ -661,6 +735,8 @@ def read_knowledge_base_cards(root: Path, kind: str, limit: int = 200) -> dict[s
                 "subtitle": row.get("normalized_label", ""),
                 "body": row.get("description", ""),
                 "meta": {
+                    "level": row.get("concept_level", "") or "1",
+                    "type": row.get("concept_type", "") or "entity",
                     "knowledge": _split_ids(row.get("source_knowledge_ids", "")),
                     "evidence": _split_ids(row.get("evidence_ids", "")),
                     "aliases": _split_ids(row.get("aliases", "")),
@@ -678,6 +754,7 @@ def read_knowledge_base_cards(root: Path, kind: str, limit: int = 200) -> dict[s
                 "subtitle": row.get("relation_type", ""),
                 "body": row.get("description", ""),
                 "meta": {
+                    "depth": row.get("relation_depth", "") or "1",
                     "knowledge": _split_ids(row.get("source_knowledge_ids", "")),
                     "evidence": _split_ids(row.get("evidence_ids", "")),
                 },
@@ -709,6 +786,8 @@ def read_graph_view(root: Path) -> dict[str, Any]:
             "id": class_id,
             "label": row.get("label") or class_id,
             "type": "class",
+            "conceptLevel": row.get("concept_level", "") or "1",
+            "conceptType": row.get("concept_type", "") or "entity",
             "summary": row.get("description") or "",
             "evidence": evidence_items(root, evidence_ids),
             "evidenceIds": evidence_ids,
@@ -730,6 +809,7 @@ def read_graph_view(root: Path) -> dict[str, Any]:
             "sourceLabel": class_labels.get(source) or source,
             "targetLabel": class_labels.get(target) or target,
             "relation": row.get("relation_type") or "related",
+            "relationDepth": row.get("relation_depth", "") or "1",
             "summary": row.get("description") or "",
             "evidence": evidence_items(root, row.get("evidence_ids", "")),
             "knowledgeIds": _split_ids(row.get("source_knowledge_ids", "")),
@@ -1072,6 +1152,82 @@ def _normalize_relation_type(value: str) -> str:
     return aliases.get(rel, rel or "related_to")
 
 
+def _normalize_concept_type(value: str) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9]+", "_", value.strip().lower()).strip("_")
+    aliases = {
+        "pattern": "abnormality_pattern",
+        "abnormality": "abnormality_pattern",
+        "feature": "signal_feature",
+        "signal": "signal_feature",
+        "paper": "evidence_source",
+        "reference": "evidence_source",
+        "check": "next_check",
+    }
+    normalized = aliases.get(normalized, normalized or "entity")
+    if normalized not in CONCEPT_TYPES:
+        raise RuntimeError(f"Unsupported concept_type: {value}.")
+    return normalized
+
+
+def _class_level(classes: list[dict[str, str]], class_id: str) -> int:
+    row = next((item for item in classes if item.get("class_id") == class_id), None)
+    return _bounded_int(row.get("concept_level") if row else "", default=1, minimum=1, maximum=4)
+
+
+def _graph_extraction_depth(root: Path) -> int:
+    raw = _read_json(root / "state" / "runtime-settings.json") or {}
+    return _bounded_int(raw.get("knowledgeGraphExtractionDepth"), default=2, minimum=1, maximum=4)
+
+
+def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+DEPTH_COVERAGE_TERMS = [
+    ("P wave", ["p wave", "p-wave", "p 波", "p波"]),
+    ("Sinus P wave", ["sinus p wave", "窦性 p 波", "窦性p波"]),
+    ("QRS complex", ["qrs complex", "qrs-complex", "qrs 波群", "qrs波群"]),
+    ("QRS duration", ["qrs duration", "qrs 宽度", "qrs宽度", "qrs 增宽", "qrs增宽"]),
+    ("PR interval", ["pr interval", "pr 间期", "pr间期"]),
+    ("RR interval", ["rr interval", "rr 间期", "rr间期", "规律 rr", "规律rr"]),
+    ("T wave", ["t wave", "t-wave", "t 波", "t波"]),
+    ("Coupling interval", ["coupling interval", "耦合间期"]),
+    ("Compensatory pause", ["compensatory pause", "代偿间歇"]),
+    ("Premature occurrence", ["premature occurrence", "提前出现", "早搏"]),
+    ("Noise artifact", ["noise artifact", "噪声", "伪差"]),
+    ("Baseline drift", ["baseline drift", "基线漂移"]),
+    ("Aberrant conduction", ["aberrant conduction", "差异性传导", "差传"]),
+]
+
+
+def _collect_depth_coverage_warnings(
+    root: Path,
+    knowledge: list[dict[str, str]],
+    classes: list[dict[str, str]],
+    warnings: list[str],
+) -> None:
+    depth = _graph_extraction_depth(root)
+    if depth < 2:
+        return
+    class_text = "\n".join(
+        " ".join([row.get("label", ""), row.get("normalized_label", ""), row.get("description", ""), row.get("aliases", "")]).lower()
+        for row in classes
+    )
+    for row in knowledge:
+        text = " ".join([row.get("topic", ""), row.get("summary", ""), row.get("description", "")]).lower()
+        missing = [
+            canonical for canonical, variants in DEPTH_COVERAGE_TERMS
+            if any(variant.lower() in text for variant in variants)
+            and not any(variant.lower() in class_text for variant in variants)
+        ]
+        if missing:
+            warnings.append(f"{row.get('knowledge_id', 'knowledge')} may miss depth-{depth} feature classes: {', '.join(missing[:8])}.")
+
+
 def _evidence_ids_for_knowledge(knowledge_rows: list[dict[str, str]], knowledge_ids: list[str]) -> list[str]:
     by_id = {row.get("knowledge_id", ""): row for row in knowledge_rows}
     out: list[str] = []
@@ -1133,6 +1289,8 @@ def _class_result(row: dict[str, str], score: int = 0) -> dict[str, Any]:
         "class_id": row.get("class_id", ""),
         "label": row.get("label", ""),
         "normalized_label": row.get("normalized_label", ""),
+        "concept_level": row.get("concept_level", "") or "1",
+        "concept_type": row.get("concept_type", "") or "entity",
         "description": row.get("description", ""),
         "aliases": _split_ids(row.get("aliases", "")),
         "score": score,
@@ -1147,6 +1305,7 @@ def _relation_result(row: dict[str, str], class_labels: dict[str, str]) -> dict[
         "relation_type": row.get("relation_type", ""),
         "target_class_id": row.get("target_class_id", ""),
         "target_label": class_labels.get(row.get("target_class_id", ""), row.get("target_class_id", "")),
+        "relation_depth": row.get("relation_depth", "") or "1",
         "description": row.get("description", ""),
         "source_knowledge_ids": _split_ids(row.get("source_knowledge_ids", "")),
         "evidence_ids": _split_ids(row.get("evidence_ids", "")),

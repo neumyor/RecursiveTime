@@ -56,6 +56,7 @@ class WorkspaceState(TypedDict):
 
 class RuntimeSettings(TypedDict):
     iterativeCandidateCount: int
+    knowledgeGraphExtractionDepth: int
 
 
 class NodeSession(TypedDict, total=False):

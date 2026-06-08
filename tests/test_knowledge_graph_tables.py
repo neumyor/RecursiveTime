@@ -89,7 +89,7 @@ def test_csv_knowledge_base_validates_and_builds_graph_view(tmp_path):
 
     assert manifest["ok"] is True
     manifest = finalize_knowledge_base(tmp_path)
-    assert manifest["schemaVersion"] == 4
+    assert manifest["schemaVersion"] == 5
     assert manifest["knowledgeCount"] == 1
     assert manifest["classCount"] == 2
     assert manifest["relationCount"] == 1
@@ -103,6 +103,37 @@ def test_csv_knowledge_base_validates_and_builds_graph_view(tmp_path):
     assert graph["edges"][0]["targetLabel"] == "BUNDLE-BRANCH-BLOCK"
     assert graph["edges"][0]["evidence"][0]["evidenceId"] == "E-00001"
     assert results[0]["note_id"] == "K-00001"
+
+
+def test_upsert_class_respects_configured_extraction_depth(tmp_path):
+    kb = tmp_path / "knowledge_base"
+    kb.mkdir(parents=True)
+    (kb / "domain-brief.md").write_text("# Domain Brief\n", encoding="utf-8")
+    (tmp_path / "references").mkdir()
+    (tmp_path / "references" / "paper.pdf").write_bytes(b"%PDF-1.4\n")
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "runtime-settings.json").write_text('{"knowledgeGraphExtractionDepth":1}\n', encoding="utf-8")
+
+    scan_references(tmp_path)
+    evidence = add_evidence(tmp_path, {
+        "reference_file": "paper.pdf",
+        "page": "1",
+        "quoted_fragments": ["Normal beat has regular RR intervals."],
+    })
+    knowledge = add_knowledge(tmp_path, {
+        "topic": "Normal beat",
+        "description": "Normal beat has regular RR intervals.",
+        "evidence_ids": [evidence["evidence_id"]],
+    })
+
+    with pytest.raises(RuntimeError, match="exceeds configured extraction depth"):
+        upsert_class(tmp_path, {
+            "label": "Regular RR interval",
+            "concept_level": 2,
+            "concept_type": "interval",
+            "description_addition": "A regular RR interval is a direct signal feature for normal rhythm.",
+            "source_knowledge_ids": [knowledge["knowledge_id"]],
+        })
 
 
 def test_deterministic_tools_add_and_upsert_knowledge_base(tmp_path):
