@@ -91,11 +91,6 @@ const state = {
   knowledgeQuestion: '',
   knowledgeAnswer: null as JsonMap | null,
   knowledgeQueryBusy: false,
-  // Incremental render tracking — avoid full re-renders during polling
-  renderedPartIds: new Set<string>(),
-  renderedTimelineCount: 0,
-  renderedBuilderPartCount: 0,
-  lastTranscriptScope: 'all',
 };
 
 marked.setOptions({
@@ -608,10 +603,6 @@ async function refresh() {
   state.bootstrap = data;
   state.busy = Boolean(data.runtime?.running);
   state.lastRefreshAt = new Date();
-  // Reset incremental tracking on full refresh
-  state.renderedPartIds.clear();
-  state.renderedTimelineCount = 0;
-  state.renderedBuilderPartCount = 0;
   if (!data.runtime?.running) {
     state.loadingMessage = null;
     state.pendingParts = [];
@@ -649,18 +640,18 @@ function liveRender(data: Bootstrap) {
     state.selectedNodeType = activeNode || data.nodeSpecs[0].type;
   }
 
-  // Incremental-only: only update things that change during a run
+  // Live-updating panels — full render with scroll preservation
   renderPendingControl(ws.pendingControl);
   renderTranscriptScope(data.nodes);
-  renderChat(data, true);
-  renderTimeline(data.timeline, true);
+  renderChat(data);
+  renderTimeline(data.timeline);
   renderRuntimeSettings(data.runtimeSettings || ws.runtimeSettings);
   updateControls(data);
 
-  // Knowledge graph view extras
+  // Knowledge graph view extras (builder status + trace)
   if (state.view === 'knowledgeGraph') {
     renderKnowledgeGraphBuilder(data);
-    renderBuilderTrace(data.knowledgeGraphParts || [], true);
+    renderBuilderTrace(data.knowledgeGraphParts || []);
   }
 
   renderShellState();
@@ -822,20 +813,12 @@ function renderNodeDetail(specs: JsonMap[], nodes: JsonMap[]) {
   }
 }
 
-function renderChat(data: Bootstrap, incremental = false) {
+function renderChat(data: Bootstrap) {
+  const wasNearBottom = els.chatStream.scrollHeight - els.chatStream.scrollTop - els.chatStream.clientHeight < 160;
+  const savedScroll = els.chatStream.scrollTop;
   const parts = collectTranscriptParts(data);
   const visibleParts = normalizeChatParts(parts);
-
-  // Scope changed → force full re-render
-  if (incremental && state.lastTranscriptScope !== state.transcriptScope) {
-    incremental = false;
-    state.renderedPartIds.clear();
-  }
-  state.lastTranscriptScope = state.transcriptScope;
-
-  // Fresh start with no parts → show welcome
   if (!visibleParts.length) {
-    state.renderedPartIds.clear();
     els.chatStream.innerHTML = `
       <div class="welcome-state">
         <div class="welcome-orbit"><span data-icon="Sparkles"></span></div>
@@ -845,28 +828,13 @@ function renderChat(data: Bootstrap, incremental = false) {
     `;
     return;
   }
-
-  // Incremental: only append new parts, preserve scroll
-  if (incremental && state.renderedPartIds.size > 0) {
-    const newParts = visibleParts.filter((p) => !state.renderedPartIds.has(p.id));
-    if (!newParts.length) return;
-    const wasNearBottom = els.chatStream.scrollHeight - els.chatStream.scrollTop - els.chatStream.clientHeight < 160;
-    const html = newParts.map((part) => messageHtml(part)).join('');
-    els.chatStream.insertAdjacentHTML('beforeend', html);
-    for (const p of newParts) state.renderedPartIds.add(p.id);
-    bindToolCards();
-    if (wasNearBottom) els.chatStream.scrollTop = els.chatStream.scrollHeight;
-    return;
-  }
-
-  // Full render
-  state.renderedPartIds.clear();
-  for (const p of visibleParts) state.renderedPartIds.add(p.id);
-  const wasNearBottom = els.chatStream.scrollHeight - els.chatStream.scrollTop - els.chatStream.clientHeight < 160;
   els.chatStream.innerHTML = visibleParts.map((part) => messageHtml(part)).join('');
   bindToolCards();
+  // Preserve scroll: if user was near bottom (or loading), auto-scroll; otherwise restore
   if (wasNearBottom || state.loadingMessage) {
     els.chatStream.scrollTop = els.chatStream.scrollHeight;
+  } else if (savedScroll < els.chatStream.scrollHeight) {
+    els.chatStream.scrollTop = Math.min(savedScroll, els.chatStream.scrollHeight - els.chatStream.clientHeight);
   }
 }
 
@@ -1023,35 +991,20 @@ function knowledgeBaseCardHtml(card: JsonMap) {
   `;
 }
 
-function renderBuilderTrace(parts: JsonMap[], incremental = false) {
+function renderBuilderTrace(parts: JsonMap[]) {
+  const wasNearBottom = els.builderTrace.scrollHeight - els.builderTrace.scrollTop - els.builderTrace.clientHeight < 120;
+  const savedScroll = els.builderTrace.scrollTop;
   const visible = normalizeChatParts((parts || []).map((part) => ({ ...part, sourceLabel: 'builder' }))).slice(-80);
   if (!visible.length) {
-    state.renderedBuilderPartCount = 0;
     els.builderTrace.innerHTML = emptyState('No builder agent trace yet. Click Build in the left settings bar.', 'TerminalSquare');
     return;
   }
-
-  // Incremental: only append new messages
-  if (incremental && state.renderedBuilderPartCount > 0) {
-    const newCount = visible.length - state.renderedBuilderPartCount;
-    if (newCount <= 0) return;
-    const newVisible = visible.slice(state.renderedBuilderPartCount);
-    const wasNearBottom = els.builderTrace.scrollHeight - els.builderTrace.scrollTop - els.builderTrace.clientHeight < 120;
-    const html = newVisible.map((part) => messageHtml(part)).join('');
-    els.builderTrace.insertAdjacentHTML('beforeend', html);
-    bindToolCards(els.builderTrace);
-    state.renderedBuilderPartCount = visible.length;
-    if (wasNearBottom) els.builderTrace.scrollTop = els.builderTrace.scrollHeight;
-    return;
-  }
-
-  // Full render
-  state.renderedBuilderPartCount = visible.length;
-  const wasNearBottom = els.builderTrace.scrollHeight - els.builderTrace.scrollTop - els.builderTrace.clientHeight < 120;
   els.builderTrace.innerHTML = visible.map((part) => messageHtml(part)).join('');
   bindToolCards(els.builderTrace);
   if (wasNearBottom) {
     els.builderTrace.scrollTop = els.builderTrace.scrollHeight;
+  } else if (savedScroll < els.builderTrace.scrollHeight) {
+    els.builderTrace.scrollTop = Math.min(savedScroll, els.builderTrace.scrollHeight - els.builderTrace.clientHeight);
   }
 }
 
@@ -1331,37 +1284,13 @@ function displayTextForPart(part: JsonMap) {
   return part.text || '';
 }
 
-function renderTimeline(events: JsonMap[], incremental = false) {
+function renderTimeline(events: JsonMap[]) {
+  const savedScroll = els.timeline.scrollTop;
   if (!events.length) {
-    state.renderedTimelineCount = 0;
     els.timeline.innerHTML = emptyState('暂无流程记录。', 'Clock3');
     return;
   }
-  const display = events.slice(-80).reverse();
-
-  // Incremental: only append new events
-  if (incremental && state.renderedTimelineCount > 0) {
-    const newCount = display.length - state.renderedTimelineCount;
-    if (newCount <= 0) return;
-    const newEvents = display.slice(0, newCount);
-    const html = newEvents.map((event) => `
-      <button class="timeline-item" type="button">
-        <span class="timeline-dot"></span>
-        <span class="timeline-copy">
-          <span class="timeline-type">${escapeHtml(event.type)} ${event.nodeType ? `· ${escapeHtml(event.nodeType)}` : ''}</span>
-          <span class="meta">${formatTime(event.timestamp)}</span>
-          <span>${escapeHtml(event.message || '')}</span>
-        </span>
-      </button>
-    `).join('');
-    els.timeline.insertAdjacentHTML('afterbegin', html);
-    state.renderedTimelineCount = display.length;
-    return;
-  }
-
-  // Full render
-  state.renderedTimelineCount = display.length;
-  els.timeline.innerHTML = display.map((event) => `
+  els.timeline.innerHTML = events.slice(-80).reverse().map((event) => `
     <button class="timeline-item" type="button">
       <span class="timeline-dot"></span>
       <span class="timeline-copy">
@@ -1371,6 +1300,7 @@ function renderTimeline(events: JsonMap[], incremental = false) {
       </span>
     </button>
   `).join('');
+  els.timeline.scrollTop = Math.min(savedScroll, els.timeline.scrollHeight - els.timeline.clientHeight);
 }
 
 function renderFileTree(fileTree: Bootstrap['fileTree']) {
