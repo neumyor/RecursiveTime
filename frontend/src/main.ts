@@ -1409,7 +1409,7 @@ async function runStreamingAction(fn: () => Promise<void>) {
     try {
       const data = await fetchJson<Bootstrap>('/api/bootstrap');
       state.bootstrap = data;
-      state.busy = Boolean(data.runtime?.running);
+      state.busy = false;
       if (!data.runtime?.running) {
         state.loadingMessage = null;
         state.pendingParts = [];
