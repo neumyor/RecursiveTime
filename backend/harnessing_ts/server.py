@@ -57,6 +57,7 @@ class KnowledgeQueryRequest(BaseModel):
     question: str
     context: dict[str, Any] | None = None
     observations: list[str] | None = None
+    includeEvidence: bool = False
 
 
 def create_app() -> FastAPI:
@@ -152,13 +153,25 @@ def create_app() -> FastAPI:
     async def query_knowledge(request: KnowledgeQueryRequest) -> dict[str, Any]:
         if not request.question.strip():
             raise HTTPException(status_code=400, detail="question required")
-        return await orchestrator.query_knowledge(request.question, request.domain, request.context, request.observations)
+        return await orchestrator.query_knowledge(
+            request.question,
+            request.domain,
+            request.context,
+            request.observations,
+            include_evidence=request.includeEvidence,
+        )
 
     @app.post("/v1/knowledge/query")
     async def v1_query_knowledge(request: KnowledgeQueryRequest) -> dict[str, Any]:
         if not request.question.strip():
             raise HTTPException(status_code=400, detail="question required")
-        return await orchestrator.query_knowledge(request.question, request.domain, request.context, request.observations)
+        return await orchestrator.query_knowledge(
+            request.question,
+            request.domain,
+            request.context,
+            request.observations,
+            include_evidence=request.includeEvidence,
+        )
 
     @app.get("/api/knowledge/search/notes")
     async def search_knowledge_notes(q: str, top_k: int = 5) -> list[dict[str, Any]]:

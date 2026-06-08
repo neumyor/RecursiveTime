@@ -17,7 +17,7 @@
   - 原始数据可能已经存在或需要下载。原始数据必须存储在 data/raw 中。
   - 若用户要求通过库下载原始数据，使用 Bash 和 `uv run --with ...` 在 workspace 的 data/raw 下完成下载、缓存和转换。
   - 根据任务需求和下载后的具体数据格式，将数据转换为后续工具可高效读取的统一格式，写入 data/processed/**。
-- `data/processed/**`、`artifacts/reference-knowledge.md`、`knowledge_base/domain-brief.md`、`artifacts/data-exploration-report.md`、`artifacts/problem-framing.md` 和 `plots/**` 是推荐路径；独立 knowledge builder 会将 reference 知识写入 `knowledge_base/**`，前端和主会话可通过自然语言知识接口查询。
+- `data/processed/**`、`artifacts/reference-knowledge.md`、`knowledge_base/domain-brief.md`、`artifacts/data-exploration-report.md`、`artifacts/problem-framing.md` 和 `plots/**` 是推荐路径；独立 knowledge builder 会将 reference 知识写入内部 `knowledge_base/**` 存储，前端和主会话通过自然语言知识接口查询，不应把 CSV 表作为普通领域知识入口。
 - 必须产出一份数据规范 `user/data-spec.md`，作为后续所有数据处理的锚点。后续流程中的工具构建、训练、推理、评估和 case review 都必须遵守这份数据规范。
 - 数据规范必须精确定义：数据文件路径、记录粒度、样本 ID、时间轴/索引、特征列、目标列、标签映射、split 定义、缺失值规则、单位/归一化状态、允许读取的字段、禁止作为输入的泄漏字段、输出格式和评估所需字段等必要信息。
 - 对数据做 exploration：样本规模、类别/标签结构、缺失值、异常值、时间序列长度、代表性样本、边界样本、可观察的形态线索、数据泄漏风险。
@@ -27,7 +27,7 @@
 `user/problem-contract.md` 是最重要的节点产物。每个章节必须给出详细、可执行、可检查的规范化定义，不能泛泛而谈。至少包含：
 - Goal：明确任务目标、目标对象、输入是什么、输出是什么、哪些目标不属于本任务。
 - Data specification：引用 `user/data-spec.md`，摘要说明样本粒度、字段、标签、split、允许/禁止使用字段和数据读取约束。
-- Domain knowledge anchor：引用 reference 抽取、知识摘要和 `knowledge_base/domain-brief.md`，说明哪些领域知识会影响判断，哪些知识在当前数据中不可观察；如 `knowledge_base/tables/**` 已存在，也要引用其中相关 knowledge、evidence、class 和 relation。
+- Domain knowledge anchor：引用 reference 抽取、知识摘要和 `knowledge_base/domain-brief.md`，说明哪些领域知识会影响判断，哪些知识在当前数据中不可观察；如知识图谱已存在，应通过 `mcp__ts_harness__query_knowledge` 查询相关领域知识。不要直接读取 `knowledge_base/tables/*.csv` 作为普通领域知识来源，除非用户明确要求调试知识库文件、CSV schema 或图谱构建错误。
 - Task framing：明确任务类型、预测/判断单元、类别或输出空间、约束条件和关键假设。
 - Evaluation metrics：定义主指标、辅助指标、分组/类别级指标、case review 口径、何时认为结果有效，以及指标计算需要读取哪些字段。
 - Iteration stop criteria：定义停止条件，例如达到某个指标、连续若干轮无改进、失败模式已收敛、case review 风险可接受、预算/轮次上限等。

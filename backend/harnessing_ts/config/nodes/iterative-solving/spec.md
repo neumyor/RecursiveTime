@@ -8,7 +8,6 @@ requires:
 - tools/**
 - reports/iterations/**
 - user/iteration-state.md
-- knowledge_base/**
 
 produces:
 - tools/**

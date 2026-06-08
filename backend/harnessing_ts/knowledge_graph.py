@@ -116,15 +116,17 @@ REASONER_SYSTEM_PROMPT = """你是 HarnessingTS 的 Agent 2：Knowledge Reasonin
 - 你不读取新 PDF，不修改知识库。
 - 你不能创造没有证据的新规则。
 - 你给出的结论是候选领域知识解释，不是临床诊断或最终工程判定。
-- 必须明确 supporting_knowledge、supporting_evidence、related_graph_edges、recommended_next_checks 和 uncertainty。
+- 默认回答要简洁，面向主会话 agent 可直接使用。
+- 默认只暴露结论、候选概念、supporting_knowledge、recommended_next_checks 和 uncertainty。
+- 只有用户或工具参数明确要求 evidence details 时，才暴露 supporting_evidence、related_graph_edges 或检索细节。
 
 输出 JSON：
 {
   "answer": "自然语言回答",
   "candidate_targets": ["候选概念或异常模式"],
   "supporting_knowledge": ["K-xxxxx"],
-  "supporting_evidence": [{"evidence_id":"E-xxxxx","source":"...","page":"...","quote":"..."}],
-  "related_graph_edges": ["source -> relation -> target"],
+  "supporting_evidence": [],
+  "related_graph_edges": [],
   "recommended_next_checks": ["..."],
   "uncertainty": "..."
 }
@@ -201,6 +203,7 @@ async def answer_knowledge_query(
     domain: str | None = None,
     context: dict[str, Any] | None = None,
     observations: list[str] | None = None,
+    include_evidence: bool = False,
 ) -> dict[str, Any]:
     ensure_knowledge_base_layout(store.root)
     retrieval = retrieve_knowledge_context(store.root, question, top_k=6)
@@ -214,6 +217,7 @@ async def answer_knowledge_query(
         f"Question: {question}",
         f"Context: {json.dumps(context or {}, ensure_ascii=False)}",
         f"Observations: {json.dumps(observations or [], ensure_ascii=False)}",
+        f"Include evidence details: {json.dumps(include_evidence)}",
         "",
         "Retrieved Knowledge:",
         _format_retrieved_items(retrieval["knowledge_notes"]),
@@ -224,6 +228,7 @@ async def answer_knowledge_query(
         "Retrieved Relations:",
         json.dumps(retrieval["graph_edges"], ensure_ascii=False, indent=2),
         "",
+        "默认输出简洁、面向主会话可直接使用的答案。只有 Include evidence details 为 true 时，才输出 supporting_evidence、related_graph_edges 或 retrieval 细节；否则这些字段应省略或为空数组。",
         "只输出合法 JSON，不要输出 Markdown fence。",
     ])
     runner = SdkRunner(SdkRunnerConfig(
@@ -242,7 +247,10 @@ async def answer_knowledge_query(
         await runner.close()
     answer_text = _last_assistant_text(parts)
     parsed = _parse_json_answer(answer_text)
-    parsed.setdefault("retrieval", retrieval)
+    if include_evidence:
+        parsed.setdefault("retrieval", retrieval)
+    else:
+        parsed = _compact_knowledge_query_answer(parsed)
     return parsed
 
 
@@ -1635,6 +1643,19 @@ def _parse_json_answer(text: str) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {"answer": stripped}
     except json.JSONDecodeError:
         return {"answer": text, "candidate_targets": [], "supporting_knowledge": [], "supporting_evidence": [], "related_graph_edges": [], "recommended_next_checks": [], "uncertainty": "The reasoning agent did not return valid JSON."}
+
+
+def _compact_knowledge_query_answer(answer: dict[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {
+        "answer": str(answer.get("answer") or ""),
+        "candidate_targets": answer.get("candidate_targets") if isinstance(answer.get("candidate_targets"), list) else [],
+        "supporting_knowledge": answer.get("supporting_knowledge") if isinstance(answer.get("supporting_knowledge"), list) else [],
+        "recommended_next_checks": answer.get("recommended_next_checks") if isinstance(answer.get("recommended_next_checks"), list) else [],
+        "uncertainty": str(answer.get("uncertainty") or ""),
+        "supporting_evidence": [],
+        "related_graph_edges": [],
+    }
+    return compact
 
 
 def _terms(query: str) -> list[str]:

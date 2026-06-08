@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from harnessing_ts.knowledge_graph import (
+    _compact_knowledge_query_answer,
     add_evidence,
     add_knowledge,
     extract_reference_text,
@@ -217,6 +218,29 @@ def test_evidence_cards_resolve_reference_ids_to_pdf_preview(tmp_path):
 
     assert cards["cards"][0]["sourcePath"] == "references/paper.pdf"
     assert cards["cards"][0]["previewUrl"] == "/api/references/preview?path=references/paper.pdf#page=2"
+
+
+def test_compact_knowledge_query_answer_hides_internal_evidence_details():
+    compact = _compact_knowledge_query_answer({
+        "answer": "Wide QRS suggests checking conduction abnormalities.",
+        "candidate_targets": ["Bundle branch block"],
+        "supporting_knowledge": ["K-00001"],
+        "supporting_evidence": [{"evidence_id": "E-00001", "quote": "raw quote"}],
+        "related_graph_edges": ["QRS -> supports -> BBB"],
+        "recommended_next_checks": ["Check QRS duration"],
+        "uncertainty": "Candidate pattern only.",
+        "retrieval": {"evidence_notes": [{"evidence_id": "E-00001"}]},
+    })
+
+    assert compact == {
+        "answer": "Wide QRS suggests checking conduction abnormalities.",
+        "candidate_targets": ["Bundle branch block"],
+        "supporting_knowledge": ["K-00001"],
+        "recommended_next_checks": ["Check QRS duration"],
+        "uncertainty": "Candidate pattern only.",
+        "supporting_evidence": [],
+        "related_graph_edges": [],
+    }
 
 
 def test_extract_reference_text_uses_pdftotext_for_pdf(tmp_path):

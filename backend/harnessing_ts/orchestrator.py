@@ -192,6 +192,7 @@ class HarnessOrchestrator:
             domain=args.get("domain"),
             context=args.get("context") if isinstance(args.get("context"), dict) else None,
             observations=args.get("observations") if isinstance(args.get("observations"), list) else None,
+            include_evidence=bool(args.get("includeEvidence", False)),
         )
 
     async def interrupt_current(self, reason: str | None = None) -> dict[str, Any]:
@@ -415,6 +416,7 @@ class HarnessOrchestrator:
         domain: str | None = None,
         context: dict[str, Any] | None = None,
         observations: list[str] | None = None,
+        include_evidence: bool = False,
     ) -> dict[str, Any]:
         self._ensure_initialized()
         result = await answer_knowledge_query(
@@ -425,6 +427,7 @@ class HarnessOrchestrator:
             domain=domain,
             context=context,
             observations=observations,
+            include_evidence=include_evidence,
         )
         self.store.append_timeline({
             "type": "knowledge_query_answered",
@@ -433,7 +436,7 @@ class HarnessOrchestrator:
             "payload": {
                 "domain": domain,
                 "supportingKnowledge": result.get("supporting_knowledge", []),
-                "supportingEvidence": result.get("supporting_evidence", []),
+                "supportingEvidence": result.get("supporting_evidence", []) if include_evidence else [],
             },
         })
         return result

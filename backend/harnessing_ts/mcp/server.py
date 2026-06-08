@@ -54,7 +54,7 @@ def create_harness_mcp_server(
     if (session_role == "main" or session_role == "node") and query_knowledge:
         @tool(
             name="query_knowledge",
-            description="Ask the independent knowledge reasoning agent a natural-language domain question. Use this to retrieve evidence-backed domain knowledge from the reference knowledge base.",
+            description="Ask the independent knowledge reasoning agent a natural-language domain question. Use this instead of reading knowledge_base/tables files directly. Returns a concise answer by default; set includeEvidence=true only when citations or raw evidence details are needed.",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -62,6 +62,7 @@ def create_harness_mcp_server(
                     "domain": {"type": "string"},
                     "context": {"type": "object"},
                     "observations": {"type": "array", "items": {"type": "string"}},
+                    "includeEvidence": {"type": "boolean"},
                 },
                 "required": ["question"],
             },

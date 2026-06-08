@@ -12,11 +12,12 @@
 必须完成：
 - 读取 `user/problem-contract.md`，严格围绕 contract 的目标、输入输出、评价方式和停止条件工作。
 - 读取 `user/data-spec.md`，所有工具构建、训练、推理、评估、case review 和输出预测文件都必须遵守其中定义的数据路径等要求。
-- 读取 `knowledge_base/**`（如果存在），尤其是 `knowledge_base/tables/knowledge.csv`、`knowledge_base/tables/evidence.csv`、`knowledge_base/tables/classes.csv` 和 `knowledge_base/tables/relations.csv`，把与任务目标、reference knowledge、可观察特征、风险和评价口径相关的 knowledge、evidence、class 和 relation 作为候选生成和 case review 的背景证据；如果不存在，必须说明缺失风险，不要编造图谱内容。
-- **必须调用 `mcp__ts_harness__query_knowledge`** 进行语义检索，用自然语言问题查询知识图谱中的领域知识（如 ECG 异常类型定义、信号特征、常见方法、评价指标、bad case 归因线索等）。该工具提供比 CSV 直接阅读更精准的语义检索和证据溯源。在候选生成、case review 归因、和 iteration summary 阶段都应查询知识图谱获取领域背景。
+- **必须调用 `mcp__ts_harness__query_knowledge`** 获取 reference knowledge graph 中的领域知识（如 ECG 异常类型定义、信号特征、常见方法、评价指标、bad case 归因线索等）。候选生成、case review 归因和 iteration summary 阶段都应按自然语言问题查询知识图谱。
+- 普通知识检索不要直接读取 `knowledge_base/tables/*.csv`、`knowledge_base/indexes/**` 或 `knowledge_base/cache/**`。这些文件是 knowledge graph builder/reasoner 的内部存储；只有用户明确要求调试知识库文件、CSV schema 或图谱构建错误时才可以直接读取。
+- 调用 `mcp__ts_harness__query_knowledge` 时默认不要请求原文证据详情。只有用户明确要求 citations/evidence，或本轮 case review 必须审计原始 reference 证据时，才设置 `includeEvidence=true`。
 - 读取已有 `tools/**`、`reports/iterations/**` 和 `user/iteration-state.md`。首轮迭代时这些路径可以不存在；若不存在，应从 contract 和 data-spec 开始建立第一轮工具。
 - 调用 `mcp__ts_harness__get_runtime_settings`，读取 `iterativeCandidateCount`，并在本轮候选审查报告中记录实际使用的 k。
-- 根据 contract、上一轮 `user/iteration-state.md`、`knowledge_base/**` 和已有工具，提出 k 个候选对象：
+- 根据 contract、上一轮 `user/iteration-state.md`、知识图谱查询结果和已有工具，提出 k 个候选对象：
   - 一种新工具方法，例如一个形态特征规则、一个相似度检索器、一个传统 ML 分类器、一个深度学习推理工具、一个 LLM 判断器、一个验证/审查工具。
   - 或一种已有工具组合，例如“先用形态特征筛查，再用上一轮相似度工具复核”。组合本身也必须是一个明确方案。
   - 或一种可能的优化策略，例如在原有方法上修改部分可变参数或新增特殊模块。优化策略本身也必须是一个明确方案。优化策略包括参数、阈值、窗口、特征开关或模块增量。
