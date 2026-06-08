@@ -1167,7 +1167,8 @@ details[open] > summary.panel-heading::after {
 
 .tool-collapsed {
   padding: 0;
-  overflow: hidden;
+  overflow: visible;
+  min-height: 54px;
   border-color: var(--line-strong);
   background: var(--surface-raised);
 }
