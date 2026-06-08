@@ -6,6 +6,16 @@ from uuid import uuid4
 
 from harnessing_ts.agent.sdk_runner import SdkRunner, SdkRunnerConfig
 from harnessing_ts.agent.translate import system_text_part
+from harnessing_ts.knowledge_graph import (
+    answer_knowledge_query,
+    build_knowledge_graph,
+    get_neighbors,
+    get_supporting_evidence,
+    search_evidence_notes,
+    search_graph,
+    search_knowledge_notes,
+    suggest_next_checks,
+)
 from harnessing_ts.mcp.server import create_harness_mcp_server
 from harnessing_ts.prompts.compose import (
     PromptContext,
@@ -15,7 +25,7 @@ from harnessing_ts.prompts.compose import (
     build_node_system_prompt,
 )
 from harnessing_ts.schema import NODE_SPECS, ControlRequest, NodeSession, NodeType, Part, RunRecord, WorkspaceState, get_next_node
-from harnessing_ts.settings.llm import build_sdk_invocation_config, read_effective_llm_config
+from harnessing_ts.settings.llm import LlmConfig, build_sdk_invocation_config, mask_llm_config, read_effective_llm_config
 from harnessing_ts.state.message_log import MessageLog
 from harnessing_ts.state.workspace_store import WorkspaceStore, now_iso
 from harnessing_ts.tools.compose_tools import build_main_allowed_tools, build_node_allowed_tools, build_node_native_tools
@@ -175,6 +185,14 @@ class HarnessOrchestrator:
             record.setdefault("nodeType", self.active_node_session["nodeType"])
         self.store.record_run(record)
         return {"ok": True}
+
+    async def request_query_knowledge(self, args: dict[str, Any]) -> dict[str, Any]:
+        return await self.query_knowledge(
+            question=str(args.get("question", "")),
+            domain=args.get("domain"),
+            context=args.get("context") if isinstance(args.get("context"), dict) else None,
+            observations=args.get("observations") if isinstance(args.get("observations"), list) else None,
+        )
 
     async def interrupt_current(self, reason: str | None = None) -> dict[str, Any]:
         self._ensure_initialized()
@@ -356,6 +374,151 @@ class HarnessOrchestrator:
         self._ensure_initialized()
         return self.store.read_runtime_status()
 
+    def get_runtime_settings(self) -> dict[str, Any]:
+        self._ensure_initialized()
+        return self.store.read_runtime_settings()
+
+    def update_runtime_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
+        self._ensure_initialized()
+        updated = self.store.write_runtime_settings(settings)
+        self.state = self.store.read_state()
+        return updated
+
+    def get_knowledge_graph(self) -> dict[str, Any]:
+        self._ensure_initialized()
+        return self.store.read_knowledge_graph()
+
+    def get_knowledge_base_summary(self) -> dict[str, Any]:
+        self._ensure_initialized()
+        return self.store.read_knowledge_base_summary()
+
+    def get_knowledge_graph_build_status(self) -> dict[str, Any]:
+        self._ensure_initialized()
+        return self.store.read_knowledge_graph_build_status()
+
+    def get_knowledge_graph_parts(self) -> list[Part]:
+        self._ensure_initialized()
+        return self.store.read_knowledge_graph_parts()
+
+    def get_knowledge_graph_llm_config(self) -> dict[str, Any]:
+        self._ensure_initialized()
+        cfg = self._knowledge_graph_llm_config()
+        return {"config": mask_llm_config(cfg), "sdk": {}}
+
+    async def query_knowledge(
+        self,
+        question: str,
+        domain: str | None = None,
+        context: dict[str, Any] | None = None,
+        observations: list[str] | None = None,
+    ) -> dict[str, Any]:
+        self._ensure_initialized()
+        result = await answer_knowledge_query(
+            workspace_path=self.workspace_path,
+            store=self.store,
+            llm_config=self._knowledge_graph_llm_config(),
+            question=question,
+            domain=domain,
+            context=context,
+            observations=observations,
+        )
+        self.store.append_timeline({
+            "type": "knowledge_query_answered",
+            "timestamp": now_iso(),
+            "message": question[:240],
+            "payload": {
+                "domain": domain,
+                "supportingKnowledge": result.get("supporting_knowledge", []),
+                "supportingEvidence": result.get("supporting_evidence", []),
+            },
+        })
+        return result
+
+    def search_knowledge_notes(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+        self._ensure_initialized()
+        return search_knowledge_notes(self.workspace_path, query, top_k)
+
+    def search_evidence_notes(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+        self._ensure_initialized()
+        return search_evidence_notes(self.workspace_path, query, top_k)
+
+    def search_knowledge_graph(self, query: str, relation_type: str | None = None, top_k: int = 10) -> list[dict[str, Any]]:
+        self._ensure_initialized()
+        return search_graph(self.workspace_path, query, relation_type, top_k)
+
+    def get_knowledge_neighbors(self, concept: str, depth: int = 1) -> dict[str, Any]:
+        self._ensure_initialized()
+        return get_neighbors(self.workspace_path, concept, depth)
+
+    def get_knowledge_supporting_evidence(self, note_or_edge_id: str, top_k: int = 8) -> list[dict[str, Any]]:
+        self._ensure_initialized()
+        return get_supporting_evidence(self.workspace_path, note_or_edge_id, top_k)
+
+    def suggest_knowledge_next_checks(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+        self._ensure_initialized()
+        return suggest_next_checks(self.workspace_path, query, top_k)
+
+    def update_knowledge_graph_llm_config(self, values: dict[str, Any]) -> dict[str, Any]:
+        self._ensure_initialized()
+        self.store.write_knowledge_graph_llm_config(values)
+        cfg = self._knowledge_graph_llm_config()
+        return {"config": mask_llm_config(cfg), "sdk": {}}
+
+    async def build_knowledge_graph(self, trigger: str = "manual", uploaded_paths: list[str] | None = None) -> dict[str, Any]:
+        self._ensure_initialized()
+        status = self.store.write_knowledge_graph_build_status({
+            "running": True,
+            "status": "running",
+            "startedAt": now_iso(),
+            "finishedAt": None,
+            "trigger": trigger,
+            "message": "Knowledge graph build is running.",
+            "uploadedPaths": uploaded_paths or [],
+        })
+        self.store.append_timeline({
+            "type": "knowledge_graph_build_started",
+            "timestamp": status["startedAt"],
+            "message": trigger,
+            "payload": {"uploadedPaths": uploaded_paths or []},
+        })
+        try:
+            await build_knowledge_graph(
+                workspace_path=self.workspace_path,
+                store=self.store,
+                llm_config=self._knowledge_graph_llm_config(),
+                trigger=trigger,
+                uploaded_paths=uploaded_paths,
+            )
+        except Exception as exc:
+            finished = now_iso()
+            self.store.write_knowledge_graph_build_status({
+                "running": False,
+                "status": "failed",
+                "finishedAt": finished,
+                "message": str(exc),
+            })
+            self.store.append_timeline({
+                "type": "knowledge_graph_build_failed",
+                "timestamp": finished,
+                "message": str(exc),
+                "payload": {"trigger": trigger},
+            })
+            raise
+        finished = now_iso()
+        self.store.write_knowledge_graph_build_status({
+            "running": False,
+            "status": "completed",
+            "finishedAt": finished,
+            "message": "Knowledge graph updated.",
+        })
+        self.store.append_timeline({
+            "type": "knowledge_graph_build_completed",
+            "timestamp": finished,
+            "message": "knowledge_base",
+            "payload": {"trigger": trigger},
+        })
+        return {"ok": True, "knowledgeGraph": self.get_knowledge_graph(), "status": self.get_knowledge_graph_build_status()}
+
     def read_workspace_file(self, path: str) -> dict[str, Any]:
         self._ensure_initialized()
         return self.store.read_text_file(path)
@@ -375,7 +538,6 @@ class HarnessOrchestrator:
             self.state = self.store.read_state()
             self.active_node_session = None
             self.active_node_runner = None
-            self.store.append_timeline({"type": "state_updated", "timestamp": now_iso(), "message": "Debug logs cleared", "payload": {"scope": scope}})
 
     def get_node_specs(self) -> list[dict[str, Any]]:
         return [
@@ -542,6 +704,33 @@ class HarnessOrchestrator:
         if not self.state:
             self.initialize()
 
+    def _knowledge_graph_llm_config(self) -> LlmConfig:
+        main = read_effective_llm_config(self.workspace_path)
+        if not self.store.knowledge_graph_llm_path.exists():
+            return main
+        graph = self.store.read_knowledge_graph_llm_config()
+        return LlmConfig(
+            authMode=graph.get("authMode") if graph.get("authMode") in {"manual", "sdk-default"} else main.authMode,
+            model=graph.get("model") or main.model,
+            apiKey=graph.get("apiKey") or main.apiKey,
+            baseUrl=graph.get("baseUrl") or main.baseUrl,
+            protocol=graph.get("protocol") or main.protocol,
+            contextWindow=graph.get("contextWindow") or main.contextWindow,
+        )
+
+    def _llm_config_from_dict(self, raw: dict[str, Any]) -> LlmConfig:
+        protocol = raw.get("protocol") if raw.get("protocol") in {"anthropic", "openai-compat"} else None
+        context = raw.get("contextWindow") if raw.get("contextWindow") in {"200k", "1m"} else None
+        auth = raw.get("authMode") if raw.get("authMode") in {"manual", "sdk-default"} else "manual"
+        return LlmConfig(
+            authMode=auth,
+            model=raw.get("model") if isinstance(raw.get("model"), str) else "",
+            apiKey=raw.get("apiKey") if isinstance(raw.get("apiKey"), str) else None,
+            baseUrl=raw.get("baseUrl") if isinstance(raw.get("baseUrl"), str) else None,
+            protocol=protocol,
+            contextWindow=context,
+        )
+
     def _restore_active_node_session(self) -> NodeSession | None:
         if not self.state or not self.state.get("activeNodeSessionId"):
             return None
@@ -556,6 +745,7 @@ class HarnessOrchestrator:
         mcp_server = create_harness_mcp_server(
             session_role="main",
             enter_node=self.request_enter_node,
+            query_knowledge=self.request_query_knowledge,
         )
         if mcp_server is None:
             raise RuntimeError("Claude Code SDK MCP server is required for node control but could not be created.")
@@ -580,6 +770,7 @@ class HarnessOrchestrator:
             finish_node=self.request_finish_node,
             record_artifact=self.record_artifact,
             record_run=self.record_run,
+            get_runtime_settings=self.get_runtime_settings,
         )
         if mcp_server is None:
             raise RuntimeError("Claude Code SDK MCP server is required for node control but could not be created.")

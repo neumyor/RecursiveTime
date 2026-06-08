@@ -3,10 +3,11 @@ from __future__ import annotations
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
+import shutil
 from typing import Any
 from uuid import uuid4
 
-from harnessing_ts.schema import CONTROL_MODES, NODE_TYPES, ControlRequest, NodeSession, NodeType, Part, RunRecord, TimelineEvent, WorkspaceState
+from harnessing_ts.schema import CONTROL_MODES, NODE_TYPES, ControlRequest, NodeSession, NodeType, Part, RunRecord, RuntimeSettings, TimelineEvent, WorkspaceState
 from harnessing_ts.state.jsonl import append_jsonl, clear_file, read_json, read_jsonl, write_json
 from harnessing_ts.workspace_runtime import ensure_workspace_uv_environment
 
@@ -21,7 +22,13 @@ class WorkspaceStore:
         self.state_path = root / "state" / "workspace.json"
         self.timeline_path = root / "logs" / "timeline.jsonl"
         self.main_log_path = root / "logs" / "main.jsonl"
+        self.knowledge_graph_log_path = root / "logs" / "knowledge-graph-builder.jsonl"
+        self.knowledge_reasoning_log_path = root / "logs" / "knowledge-reasoning.jsonl"
         self.runtime_path = root / "state" / "runtime.json"
+        self.runtime_settings_path = root / "state" / "runtime-settings.json"
+        self.knowledge_graph_llm_path = root / "state" / "knowledge-graph-llm.json"
+        self.knowledge_graph_status_path = root / "state" / "knowledge-graph-build.json"
+        self.knowledge_graph_path = root / "artifacts" / "knowledge-graph.json"
         self.node_log_dir = root / "logs" / "nodes"
         self.node_meta_dir = root / "state" / "nodes"
 
@@ -57,6 +64,10 @@ class WorkspaceStore:
             if "finalSummaryConfirmed" not in existing:
                 existing["finalSummaryConfirmed"] = bool(existing.pop("finalSolutionConfirmed", False))
                 self.write_state(existing)
+            settings = self.read_runtime_settings()
+            if existing.get("runtimeSettings") != settings:
+                existing["runtimeSettings"] = settings
+                self.write_state(existing)
             if "pendingHumanGate" in existing:
                 existing.pop("pendingHumanGate", None)
                 self.write_state(existing)
@@ -84,6 +95,7 @@ class WorkspaceStore:
             "completedNodes": [],
             "contractConfirmed": False,
             "finalSummaryConfirmed": False,
+            "runtimeSettings": self.read_runtime_settings(),
         }
         self.write_state(state)
         self.append_timeline({"type": "workspace_initialized", "timestamp": ts, "payload": {"mode": state["mode"]}})
@@ -121,6 +133,9 @@ class WorkspaceStore:
             "data/raw",
             "data/processed",
             "references",
+            "knowledge_base",
+            "knowledge_base/tables",
+            "knowledge_base/indexes",
             "artifacts",
             "plots",
             "tools",
@@ -141,6 +156,82 @@ class WorkspaceStore:
 
     def read_runtime_status(self) -> dict[str, Any] | None:
         return read_json(self.runtime_path)
+
+    def read_knowledge_graph_build_status(self) -> dict[str, Any]:
+        return read_json(self.knowledge_graph_status_path) or {
+            "running": False,
+            "status": "idle",
+            "startedAt": None,
+            "finishedAt": None,
+            "trigger": None,
+            "message": "Knowledge graph builder has not run yet.",
+        }
+
+    def write_knowledge_graph_build_status(self, status: dict[str, Any]) -> dict[str, Any]:
+        current = self.read_knowledge_graph_build_status()
+        current.update(status)
+        write_json(self.knowledge_graph_status_path, current)
+        return current
+
+    def read_knowledge_graph_llm_config(self) -> dict[str, Any]:
+        raw = read_json(self.knowledge_graph_llm_path) or {}
+        return _sanitize_llm_config(raw, default_auth_mode="manual")
+
+    def write_knowledge_graph_llm_config(self, values: dict[str, Any]) -> dict[str, Any]:
+        current = self.read_knowledge_graph_llm_config()
+        merged = dict(current)
+        for key in ("authMode", "protocol", "model", "apiKey", "baseUrl", "contextWindow"):
+            if key not in values:
+                continue
+            value = values[key]
+            if key == "apiKey" and (value is None or value == "" or _looks_masked_secret(str(value))):
+                continue
+            merged[key] = value
+        sanitized = _sanitize_llm_config(merged, default_auth_mode="manual")
+        write_json(self.knowledge_graph_llm_path, sanitized)
+        self.append_timeline({
+            "type": "knowledge_graph_llm_updated",
+            "timestamp": now_iso(),
+            "message": f"model={sanitized.get('model') or 'sdk-default'}",
+            "payload": _mask_llm_config_dict(sanitized),
+        })
+        return sanitized
+
+    def read_runtime_settings(self) -> RuntimeSettings:
+        raw = read_json(self.runtime_settings_path) or {}
+        return {
+            "iterativeCandidateCount": _bounded_int(raw.get("iterativeCandidateCount"), default=3, minimum=1, maximum=8),
+        }
+
+    def write_runtime_settings(self, settings: dict[str, Any]) -> RuntimeSettings:
+        current = self.read_runtime_settings()
+        if "iterativeCandidateCount" in settings:
+            current["iterativeCandidateCount"] = _bounded_int(settings.get("iterativeCandidateCount"), default=current["iterativeCandidateCount"], minimum=1, maximum=8)
+        write_json(self.runtime_settings_path, current)
+        state = self.read_state()
+        if state:
+            state["runtimeSettings"] = current
+            self.write_state(state)
+        self.append_timeline({
+            "type": "runtime_settings_updated",
+            "timestamp": now_iso(),
+            "message": f"iterativeCandidateCount={current['iterativeCandidateCount']}",
+            "payload": current,
+        })
+        return current
+
+    def read_knowledge_graph(self) -> dict[str, Any]:
+        from harnessing_ts.knowledge_graph import read_graph_view
+
+        return read_graph_view(self.root)
+
+    def read_knowledge_base_summary(self) -> dict[str, Any]:
+        from harnessing_ts.knowledge_graph import read_knowledge_base_summary
+
+        return read_knowledge_base_summary(self.root)
+
+    def read_knowledge_graph_parts(self) -> list[Part]:
+        return read_jsonl(self.knowledge_graph_log_path)
 
     def write_state(self, state: WorkspaceState) -> None:
         state["updatedAt"] = now_iso()
@@ -440,32 +531,78 @@ if __name__ == "__main__":
         clear_file(self.main_log_path)
         if scope != "all":
             return
-        clear_file(self.timeline_path)
-        state = self.read_state()
-        if state:
-            state["activeNode"] = None
-            state["activeNodeSessionId"] = None
-            state["completedNodes"] = []
-            state["contractConfirmed"] = False
-            state["finalSummaryConfirmed"] = False
-            state.pop("taskContractConfirmed", None)
-            state.pop("finalSolutionConfirmed", None)
-            state.pop("pendingHumanGate", None)
-            self.write_state(state)
-        try:
-            node_logs = list(self.node_log_dir.iterdir())
-        except FileNotFoundError:
-            node_logs = []
-        for path in node_logs:
-            if path.suffix == ".jsonl":
-                path.unlink(missing_ok=True)
-        try:
-            node_metas = list(self.node_meta_dir.iterdir())
-        except FileNotFoundError:
-            node_metas = []
-        for path in node_metas:
-            if path.suffix == ".json":
-                path.unlink(missing_ok=True)
+        self.reset_workspace()
+
+    def reset_workspace(self) -> WorkspaceState:
+        existing = self.read_state() or {}
+        control_mode = "auto" if existing.get("controlMode") == "auto" else "manual"
+        runtime_settings = self.read_runtime_settings()
+
+        for rel in (
+            "user",
+            "data/raw",
+            "data/processed",
+            "references",
+            "knowledge_base",
+            "artifacts",
+            "plots",
+            "tools",
+            "runs",
+            "reports",
+            "logs",
+            "training",
+            "state/nodes",
+        ):
+            _remove_path(self.root / rel)
+
+        for path in (self.state_path, self.knowledge_graph_status_path, self.knowledge_graph_path):
+            path.unlink(missing_ok=True)
+
+        self.ensure_layout()
+        ts = now_iso()
+        state: WorkspaceState = {
+            "workspaceId": str(uuid4()),
+            "workspacePath": str(self.root),
+            "createdAt": ts,
+            "updatedAt": ts,
+            "mode": control_mode,
+            "controlMode": control_mode,
+            "pendingControl": None,
+            "activeNode": None,
+            "activeNodeSessionId": None,
+            "completedNodes": [],
+            "contractConfirmed": False,
+            "finalSummaryConfirmed": False,
+            "runtimeSettings": runtime_settings,
+        }
+        self.write_state(state)
+        self.append_timeline({
+            "type": "workspace_reset",
+            "timestamp": ts,
+            "message": "Workspace reset",
+            "payload": {
+                "cleared": [
+                    "references",
+                    "knowledge_base",
+                    "logs",
+                    "state/nodes",
+                    "artifacts",
+                    "data",
+                    "reports",
+                    "runs",
+                    "tools",
+                    "training",
+                ],
+            },
+        })
+        return state
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+    elif path.is_dir():
+        shutil.rmtree(path)
 
 
 def _safe_filename(filename: str) -> str:
@@ -491,3 +628,37 @@ def _extract_docx_text(path: Path) -> str:
             if any(cells):
                 chunks.append(" | ".join(cells))
     return "\n\n".join(chunks).strip() + "\n"
+
+
+def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def _sanitize_llm_config(raw: dict[str, Any], *, default_auth_mode: str) -> dict[str, Any]:
+    auth = raw.get("authMode") if raw.get("authMode") in {"manual", "sdk-default"} else default_auth_mode
+    protocol = raw.get("protocol") if raw.get("protocol") in {"anthropic", "openai-compat"} else None
+    context = raw.get("contextWindow") if raw.get("contextWindow") in {"200k", "1m"} else None
+    return {
+        "authMode": auth,
+        "model": raw.get("model") if isinstance(raw.get("model"), str) else "",
+        "apiKey": raw.get("apiKey") if isinstance(raw.get("apiKey"), str) else None,
+        "baseUrl": raw.get("baseUrl") if isinstance(raw.get("baseUrl"), str) else None,
+        "protocol": protocol,
+        "contextWindow": context,
+    }
+
+
+def _mask_llm_config_dict(config: dict[str, Any]) -> dict[str, Any]:
+    out = dict(config)
+    secret = out.get("apiKey")
+    if isinstance(secret, str) and secret:
+        out["apiKey"] = "****" if len(secret) <= 8 else f"****{secret[-4:]}"
+    return out
+
+
+def _looks_masked_secret(value: str) -> bool:
+    return value.startswith("****")

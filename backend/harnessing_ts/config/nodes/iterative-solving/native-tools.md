@@ -2,6 +2,7 @@
 - LS
 - Glob
 - Grep
+- Task
 - WebFetch
 - WebSearch
 - Write

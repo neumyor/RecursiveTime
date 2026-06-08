@@ -19,12 +19,14 @@ import {
   HardDriveUpload,
   Info,
   Loader2,
+  Network,
   Pause,
   Play,
   RefreshCw,
   Send,
   Settings2,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Square,
   TerminalSquare,
@@ -55,12 +57,19 @@ type Bootstrap = {
   nodeSpecs: JsonMap[];
   fileTree: { root?: string; tree?: FileTreeNode; truncated?: boolean } | null;
   llmConfig?: JsonMap;
+  runtimeSettings?: JsonMap;
+  knowledgeGraph?: JsonMap;
+  knowledgeBaseSummary?: JsonMap;
+  knowledgeGraphParts?: JsonMap[];
   dryRun?: boolean;
   debugEnabled?: boolean;
   runtime?: {
     running?: boolean;
+    knowledgeGraphRunning?: boolean;
     workspaceUv?: JsonMap | null;
   };
+  knowledgeGraphBuild?: JsonMap;
+  knowledgeGraphLlmConfig?: JsonMap;
 };
 
 const state = {
@@ -73,6 +82,12 @@ const state = {
   lastRefreshAt: null as Date | null,
   leftCollapsed: window.innerWidth <= 820,
   rightCollapsed: window.innerWidth <= 1180,
+  view: (window.location.pathname === '/knowledge-graph' ? 'knowledgeGraph' : 'chat') as 'chat' | 'knowledgeGraph',
+  selectedGraphNodeId: null as string | null,
+  candidateSaveTimer: 0,
+  knowledgeQuestion: '',
+  knowledgeAnswer: null as JsonMap | null,
+  knowledgeQueryBusy: false,
 };
 
 marked.setOptions({
@@ -96,6 +111,7 @@ app.innerHTML = `
       </div>
     </section>
 
+    <div class="main-left-content">
     <section class="panel status-panel">
       <div class="panel-heading">
         <span data-icon="Gauge"></span>
@@ -152,6 +168,57 @@ app.innerHTML = `
       </summary>
       <div id="timeline" class="timeline"></div>
     </details>
+    </div>
+
+    <div class="graph-left-content">
+      <section class="panel">
+        <div class="panel-heading">
+          <span data-icon="Settings2"></span>
+          <span>Builder Settings</span>
+        </div>
+        <div id="graphBuildStatus" class="graph-build-status"></div>
+        <div class="graph-left-actions">
+          <button id="buildGraphBtn" type="button"><span data-icon="RefreshCw"></span><span>Build</span></button>
+          <button id="backToChatBtn" type="button" class="ghost"><span data-icon="ChevronLeft"></span><span>Main</span></button>
+        </div>
+        <label>
+          <span>Auth</span>
+          <select id="graphAuthMode">
+            <option value="manual">manual</option>
+            <option value="sdk-default">sdk-default</option>
+          </select>
+        </label>
+        <label>
+          <span>Protocol</span>
+          <select id="graphProtocol">
+            <option value="">auto</option>
+            <option value="anthropic">anthropic</option>
+            <option value="openai-compat">openai-compat</option>
+          </select>
+        </label>
+        <label>
+          <span>Model</span>
+          <input id="graphModelInput" type="text" placeholder="inherits main model" />
+        </label>
+        <label>
+          <span>Base URL</span>
+          <input id="graphBaseUrlInput" type="text" placeholder="inherits main endpoint" />
+        </label>
+        <label>
+          <span>API Key</span>
+          <input id="graphApiKeyInput" type="password" placeholder="leave blank to keep current" />
+        </label>
+        <button id="saveGraphLlmBtn" type="button" class="secondary full-width"><span data-icon="Check"></span><span>Save builder LLM</span></button>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <span data-icon="Gauge"></span>
+          <span>Knowledge Base</span>
+        </div>
+        <div class="knowledge-summary" id="knowledgeSummary"></div>
+      </section>
+    </div>
   </aside>
 
   <main class="main-pane">
@@ -168,11 +235,30 @@ app.innerHTML = `
       </div>
       <div class="toolbar-actions">
         <button id="interruptBtn" type="button" class="danger ghost"><span data-icon="Pause"></span><span>Pause</span></button>
-        <button id="clearAllLogsBtn" type="button" class="danger ghost debug-only"><span data-icon="Trash2"></span><span>Clear Logs</span></button>
+        <button id="clearAllLogsBtn" type="button" class="danger ghost debug-only"><span data-icon="Trash2"></span><span>Reset Workspace</span></button>
       </div>
     </header>
 
     <section id="chatStream" class="chat-stream"></section>
+    <section id="knowledgeGraphView" class="knowledge-graph-view" hidden>
+      <div class="graph-header">
+        <div class="graph-title-block">
+          <div class="eyebrow"><span data-icon="Network"></span><span>Knowledge Graph</span></div>
+          <h2 id="graphTitle">Reference Knowledge</h2>
+        </div>
+      </div>
+      <section class="builder-trace-panel">
+        <div class="panel-heading">
+          <span data-icon="TerminalSquare"></span>
+          <span>Builder Agent Trace</span>
+        </div>
+        <div id="builderTrace" class="builder-trace"></div>
+      </section>
+      <div class="graph-layout">
+        <div id="graphCanvas" class="graph-canvas"></div>
+        <section id="graphInspector" class="graph-inspector"></section>
+      </div>
+    </section>
 
     <form id="sendForm" class="composer">
       <div class="composer-shell">
@@ -183,6 +269,17 @@ app.innerHTML = `
   </main>
 
   <aside class="right-rail">
+    <section class="panel">
+      <div class="panel-heading">
+        <span data-icon="SlidersHorizontal"></span>
+        <span>Runtime Controls</span>
+      </div>
+      <label>
+        <span>Iterative candidates (k)</span>
+        <input id="candidateCountInput" type="number" min="1" max="8" step="1" />
+      </label>
+      <button id="knowledgeGraphBtn" type="button" class="secondary full-width"><span data-icon="Network"></span><span>Knowledge Graph</span></button>
+    </section>
     <section class="panel files-panel">
       <div class="panel-heading">
         <span data-icon="FolderTree"></span>
@@ -238,12 +335,14 @@ const iconMap: Record<string, IconNode> = {
   HardDriveUpload,
   Info,
   Loader2,
+  Network,
   Pause,
   Play,
   RefreshCw,
   Send,
   Settings2,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Square,
   TerminalSquare,
@@ -267,6 +366,21 @@ const els = {
   nodeList: query('#nodeList'),
   nodeDetail: query('#nodeDetail'),
   chatStream: query<HTMLElement>('#chatStream'),
+  knowledgeGraphView: query<HTMLElement>('#knowledgeGraphView'),
+  graphTitle: query('#graphTitle'),
+  graphCanvas: query('#graphCanvas'),
+  graphInspector: query('#graphInspector'),
+  graphBuildStatus: query('#graphBuildStatus'),
+  graphAuthMode: query<HTMLSelectElement>('#graphAuthMode'),
+  graphProtocol: query<HTMLSelectElement>('#graphProtocol'),
+  graphModelInput: query<HTMLInputElement>('#graphModelInput'),
+  graphApiKeyInput: query<HTMLInputElement>('#graphApiKeyInput'),
+  graphBaseUrlInput: query<HTMLInputElement>('#graphBaseUrlInput'),
+  saveGraphLlmBtn: query<HTMLButtonElement>('#saveGraphLlmBtn'),
+  buildGraphBtn: query<HTMLButtonElement>('#buildGraphBtn'),
+  knowledgeSummary: query('#knowledgeSummary'),
+  builderTrace: query('#builderTrace'),
+  backToChatBtn: query<HTMLButtonElement>('#backToChatBtn'),
   transcriptScope: query<HTMLSelectElement>('#transcriptScope'),
   sendForm: query<HTMLFormElement>('#sendForm'),
   messageInput: query<HTMLTextAreaElement>('#messageInput'),
@@ -281,6 +395,8 @@ const els = {
   rawZipUploadForm: query<HTMLFormElement>('#rawZipUploadForm'),
   rawZipFile: query<HTMLInputElement>('#rawZipFile'),
   rawZipUploadBtn: query<HTMLButtonElement>('#rawZipUploadBtn'),
+  candidateCountInput: query<HTMLInputElement>('#candidateCountInput'),
+  knowledgeGraphBtn: query<HTMLButtonElement>('#knowledgeGraphBtn'),
   stateBtn: query<HTMLButtonElement>('#stateBtn'),
   llmBtn: query<HTMLButtonElement>('#llmBtn'),
   clearAllLogsBtn: query<HTMLButtonElement>('#clearAllLogsBtn'),
@@ -330,15 +446,71 @@ els.transcriptScope.addEventListener('change', () => {
 });
 els.stateBtn.addEventListener('click', () => showDetail('Workspace State', state.bootstrap?.state));
 els.llmBtn.addEventListener('click', () => showDetail('LLM Config', state.bootstrap?.llmConfig));
+els.backToChatBtn.addEventListener('click', () => {
+  state.view = 'chat';
+  history.pushState({}, '', '/');
+  render();
+});
+els.buildGraphBtn.addEventListener('click', async () => {
+  await postJson('/api/knowledge-graph/build', { trigger: 'manual' });
+  await refresh();
+});
+els.saveGraphLlmBtn.addEventListener('click', async () => {
+  await saveKnowledgeGraphLlmConfig();
+});
+els.knowledgeGraphBtn.addEventListener('click', async () => {
+  state.view = 'knowledgeGraph';
+  history.pushState({}, '', '/knowledge-graph');
+  const graph = await fetchJson<JsonMap>('/api/knowledge-graph');
+  if (state.bootstrap) state.bootstrap.knowledgeGraph = graph;
+  render();
+});
+window.addEventListener('popstate', () => {
+  state.view = window.location.pathname === '/knowledge-graph' ? 'knowledgeGraph' : 'chat';
+  render();
+});
+els.candidateCountInput.addEventListener('input', () => {
+  window.clearTimeout(state.candidateSaveTimer);
+  state.candidateSaveTimer = window.setTimeout(() => {
+    saveCandidateCount().catch((error) => showDetail('Runtime Settings Error', { message: error instanceof Error ? error.message : String(error) }));
+  }, 350);
+});
+els.candidateCountInput.addEventListener('change', async () => {
+  window.clearTimeout(state.candidateSaveTimer);
+  await saveCandidateCount();
+});
+async function saveCandidateCount() {
+  const value = Number.parseInt(els.candidateCountInput.value, 10);
+  if (!Number.isFinite(value)) return;
+  const result = await postJson('/api/runtime-settings', { iterativeCandidateCount: value });
+  state.bootstrap = result.bootstrap;
+  state.busy = Boolean(result.bootstrap?.runtime?.running);
+  render();
+}
+async function saveKnowledgeGraphLlmConfig() {
+  const result = await postJson('/api/knowledge-graph/llm-config', {
+    authMode: els.graphAuthMode.value,
+    protocol: els.graphProtocol.value || undefined,
+    model: els.graphModelInput.value.trim(),
+    apiKey: els.graphApiKeyInput.value.trim() || undefined,
+    baseUrl: els.graphBaseUrlInput.value.trim(),
+  });
+  state.bootstrap = result.bootstrap;
+  els.graphApiKeyInput.value = '';
+  render();
+}
 els.interruptBtn.addEventListener('click', async () => {
   const reason = els.messageInput.value.trim();
   await interruptCurrent(reason || 'User interrupted from web UI.');
 });
 els.clearAllLogsBtn.addEventListener('click', async () => {
-  if (!confirm('清空主聊天、timeline 和 node logs？该操作仅用于调试。')) return;
+  if (!confirm('这将重置整个工作区，删除 references、knowledge graph、日志、运行产物、报告和临时工具。设置中的 API key、endpoint、model 与 k 会保留。是否继续？')) return;
+  const typed = prompt('二次确认：请输入 RESET 来确认重置工作区。');
+  if (typed !== 'RESET') return;
   await runAction(async () => {
-    const result = await postJson('/api/debug/clear-logs', { scope: 'all' });
+    const result = await postJson('/api/debug/clear-logs', { scope: 'all', confirmReset: true });
     state.bootstrap = result.bootstrap;
+    state.transcriptScope = 'main';
     render();
   });
 });
@@ -441,8 +613,14 @@ function render() {
   renderPendingControl(ws.pendingControl);
   renderTranscriptScope(data.nodes);
   renderChat(data);
+  renderKnowledgeGraph(data.knowledgeGraph);
+  renderKnowledgeGraphBuilder(data);
+  renderKnowledgeWorkbench(data);
+  renderBuilderTrace(data.knowledgeGraphParts || []);
+  renderViewState();
   renderTimeline(data.timeline);
   renderFileTree(data.fileTree);
+  renderRuntimeSettings(data.runtimeSettings || ws.runtimeSettings);
   renderDebugActions(Boolean(data.debugEnabled));
   updateControls(data);
   renderShellState();
@@ -581,6 +759,205 @@ function renderChat(data: Bootstrap) {
   if (wasNearBottom || state.loadingMessage) {
     els.chatStream.scrollTop = els.chatStream.scrollHeight;
   }
+}
+
+function renderRuntimeSettings(settings: JsonMap | null | undefined) {
+  const value = settings?.iterativeCandidateCount ?? 3;
+  if (els.candidateCountInput.value !== String(value)) els.candidateCountInput.value = String(value);
+}
+
+function renderViewState() {
+  const graphMode = state.view === 'knowledgeGraph';
+  els.chatStream.hidden = graphMode;
+  els.knowledgeGraphView.hidden = !graphMode;
+  els.sendForm.hidden = graphMode;
+  els.transcriptScope.disabled = graphMode;
+  query('#mainTitle').textContent = graphMode ? 'Knowledge Graph' : 'Orchestrator';
+  document.body.classList.toggle('knowledge-page', graphMode);
+}
+
+function renderKnowledgeGraphBuilder(data: Bootstrap) {
+  const build = data.knowledgeGraphBuild || {};
+  const config = data.knowledgeGraphLlmConfig?.config || {};
+  const running = Boolean(data.runtime?.knowledgeGraphRunning || build.running);
+  els.graphBuildStatus.innerHTML = `
+    <span class="mini-pill ${build.status === 'failed' ? 'failed' : running ? 'active' : build.status === 'completed' ? 'ready' : 'pending'}">
+      ${running ? '<span data-icon="Loader2"></span>' : ''}
+      ${escapeHtml(running ? 'running' : build.status || 'idle')}
+    </span>
+    <span class="meta">${escapeHtml(build.message || '')}</span>
+  `;
+  if (els.graphAuthMode.value !== (config.authMode || 'manual')) els.graphAuthMode.value = config.authMode || 'manual';
+  if (els.graphProtocol.value !== (config.protocol || '')) els.graphProtocol.value = config.protocol || '';
+  if (els.graphModelInput.value !== (config.model || '')) els.graphModelInput.value = config.model || '';
+  if (els.graphBaseUrlInput.value !== (config.baseUrl || '')) els.graphBaseUrlInput.value = config.baseUrl || '';
+  els.buildGraphBtn.disabled = running;
+  els.saveGraphLlmBtn.disabled = false;
+}
+
+function renderKnowledgeWorkbench(data: Bootstrap) {
+  const summary = data.knowledgeBaseSummary || data.knowledgeGraph?.summary || {};
+  els.knowledgeSummary.innerHTML = `
+    <div class="knowledge-stat"><span>${escapeHtml(summary.knowledgeCount ?? 0)}</span><span>Knowledge</span></div>
+    <div class="knowledge-stat"><span>${escapeHtml(summary.evidenceCount ?? 0)}</span><span>Evidence</span></div>
+    <div class="knowledge-stat"><span>${escapeHtml(summary.classCount ?? 0)}</span><span>Classes</span></div>
+    <div class="knowledge-stat"><span>${escapeHtml(summary.relationCount ?? 0)}</span><span>Relations</span></div>
+  `;
+}
+
+function renderBuilderTrace(parts: JsonMap[]) {
+  const wasNearBottom = els.builderTrace.scrollHeight - els.builderTrace.scrollTop - els.builderTrace.clientHeight < 120;
+  const visible = normalizeChatParts((parts || []).map((part) => ({ ...part, sourceLabel: 'builder' }))).slice(-80);
+  if (!visible.length) {
+    els.builderTrace.innerHTML = emptyState('No builder agent trace yet. Click Build in the left settings bar.', 'TerminalSquare');
+    return;
+  }
+  els.builderTrace.innerHTML = visible.map((part) => messageHtml(part)).join('');
+  bindToolCards(els.builderTrace);
+  if (wasNearBottom) {
+    els.builderTrace.scrollTop = els.builderTrace.scrollHeight;
+  }
+}
+
+function renderKnowledgeGraph(graph: JsonMap | null | undefined) {
+  const nodes: JsonMap[] = graph?.nodes || [];
+  const edges: JsonMap[] = graph?.edges || [];
+  els.graphTitle.textContent = graph?.taskGoal || 'Reference Knowledge';
+  if (!nodes.length) {
+    els.graphCanvas.innerHTML = emptyState(graph?.notes || '暂无知识图谱。完成 problem-contract 后会在这里显示。', 'Network');
+    els.graphInspector.innerHTML = graphMetadataHtml(graph, nodes, edges);
+    return;
+  }
+
+  const selected = nodes.find((node) => node.id === state.selectedGraphNodeId) || nodes[0];
+  state.selectedGraphNodeId = selected?.id || null;
+  const width = 920;
+  const height = 620;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const radius = Math.min(width, height) * 0.36;
+  const positions = new Map<string, { x: number; y: number }>();
+  nodes.forEach((node, index) => {
+    const angle = (Math.PI * 2 * index) / Math.max(nodes.length, 1) - Math.PI / 2;
+    const typeOffset = graphNodeTypes.indexOf(node.type || '') % 5;
+    positions.set(String(node.id), {
+      x: centerX + Math.cos(angle) * (radius - typeOffset * 18),
+      y: centerY + Math.sin(angle) * (radius - typeOffset * 18),
+    });
+  });
+
+  els.graphCanvas.innerHTML = `
+    <svg class="graph-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Knowledge graph">
+      <g class="graph-edges">
+        ${edges.map((edge) => {
+          const source = positions.get(String(edge.source));
+          const target = positions.get(String(edge.target));
+          if (!source || !target) return '';
+          return `<line x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}" />`;
+        }).join('')}
+      </g>
+      <g class="graph-nodes">
+        ${nodes.map((node) => {
+          const position = positions.get(String(node.id));
+          if (!position) return '';
+          const selectedClass = node.id === state.selectedGraphNodeId ? ' selected' : '';
+          return `
+            <g class="graph-node${selectedClass}" data-node-id="${escapeHtml(node.id)}" transform="translate(${position.x} ${position.y})">
+              <circle r="22"></circle>
+              <text y="42">${escapeHtml(shortGraphLabel(node.label || node.id))}</text>
+            </g>
+          `;
+        }).join('')}
+      </g>
+    </svg>
+  `;
+  for (const item of els.graphCanvas.querySelectorAll<SVGGElement>('.graph-node')) {
+    item.addEventListener('click', () => {
+      state.selectedGraphNodeId = item.dataset.nodeId || null;
+      renderKnowledgeGraph(state.bootstrap?.knowledgeGraph);
+      hydrateIcons();
+    });
+  }
+  els.graphInspector.innerHTML = graphInspectorHtml(graph, selected, nodes, edges);
+  for (const item of els.graphInspector.querySelectorAll<HTMLElement>('.artifact-item')) {
+    item.addEventListener('click', async () => {
+      const previewUrl = item.dataset.previewUrl || '';
+      if (previewUrl) {
+        window.open(previewUrl, '_blank', 'noopener');
+        return;
+      }
+      await showWorkspaceFile(item.dataset.path || '');
+    });
+  }
+}
+
+const graphNodeTypes = ['task', 'concept', 'observable', 'method', 'metric', 'risk', 'assumption', 'data_field', 'case_pattern', 'reference'];
+
+function graphMetadataHtml(graph: JsonMap | null | undefined, nodes: JsonMap[], edges: JsonMap[]) {
+  return `
+    <div class="node-detail-title">Graph Metadata</div>
+    <dl class="kv graph-kv">
+      <dt>Classes</dt><dd>${nodes.length}</dd>
+      <dt>Relations</dt><dd>${edges.length}</dd>
+      <dt>Updated</dt><dd>${escapeHtml(graph?.updatedAt || '-')}</dd>
+    </dl>
+  `;
+}
+
+function graphInspectorHtml(graph: JsonMap | null | undefined, selected: JsonMap | undefined, nodes: JsonMap[], edges: JsonMap[]) {
+  if (!selected) return graphMetadataHtml(graph, nodes, edges);
+  const related = edges.filter((edge) => edge.source === selected.id || edge.target === selected.id);
+  return `
+    ${graphMetadataHtml(graph, nodes, edges)}
+    <div class="detail-section-title">Selected</div>
+    <div class="graph-selected">
+      <div class="node-detail-title">${escapeHtml(selected.label || selected.id)}</div>
+      <div class="meta">${escapeHtml(selected.type || 'class')} · ${escapeHtml(selected.id || '')}</div>
+      ${classDescriptionHtml(selected.summary || '')}
+    </div>
+    <div class="detail-section-title">Source Knowledge</div>
+    ${idListHtml(selected.knowledgeIds || [], 'Knowledge')}
+    <div class="detail-section-title">Evidence</div>
+    ${graphEvidenceHtml(selected.evidence || [])}
+    <div class="detail-section-title">Relations</div>
+    ${related.length ? `<div class="graph-relations">${related.map((edge) => `
+      <div class="graph-relation">
+        <div class="timeline-type">${escapeHtml(edge.relation || 'related')}</div>
+        <div class="meta">${escapeHtml(edge.sourceLabel || edge.source)} -> ${escapeHtml(edge.targetLabel || edge.target)}</div>
+        <div>${escapeHtml(edge.summary || '')}</div>
+        ${edge.knowledgeIds?.length ? idListHtml(edge.knowledgeIds, 'Knowledge') : ''}
+      </div>
+    `).join('')}</div>` : emptyState('暂无关联边。', 'GitBranch')}
+  `;
+}
+
+function idListHtml(items: string[], label: string) {
+  if (!items.length) return emptyState(`No supporting ${label.toLowerCase()} yet.`, 'Info');
+  return `<div class="graph-mini-list">${items.map((item) => `<span>${escapeHtml(item)}</span>`).join('')}</div>`;
+}
+
+function classDescriptionHtml(summary: string) {
+  if (!summary) return emptyState('暂无描述。', 'Info');
+  return `
+    <details class="class-description">
+      <summary>Description</summary>
+      <p>${escapeHtml(summary)}</p>
+    </details>
+  `;
+}
+
+function graphEvidenceHtml(items: JsonMap[]) {
+  if (!items.length) return emptyState('暂无证据。', 'File');
+  return `<div class="graph-evidence">${items.slice(0, 6).map((item) => `
+    <button class="artifact-item evidence-item" type="button" data-path="${escapeHtml(item.sourcePath || '')}" data-preview-url="${escapeHtml(item.previewUrl || '')}">
+      <span data-icon="File"></span>
+      <span>${escapeHtml(item.sourcePath || 'source')}: ${escapeHtml(item.quote || item.summary || '')}</span>
+    </button>
+  `).join('')}</div>`;
+}
+
+function shortGraphLabel(value: string) {
+  return value.length > 18 ? `${value.slice(0, 17)}...` : value;
 }
 
 function messageHtml(part: JsonMap) {
@@ -897,8 +1274,8 @@ function renderMarkdown(text: string) {
   return DOMPurify.sanitize(html);
 }
 
-function bindToolCards() {
-  for (const button of els.chatStream.querySelectorAll<HTMLButtonElement>('[data-tool-toggle]')) {
+function bindToolCards(root: HTMLElement = els.chatStream) {
+  for (const button of root.querySelectorAll<HTMLButtonElement>('[data-tool-toggle]')) {
     button.addEventListener('click', () => {
       const detail = button.nextElementSibling as HTMLElement | null;
       if (!detail) return;
@@ -1092,7 +1469,7 @@ function createIcon(iconNode: IconNode) {
 }
 
 setInterval(() => {
-  if (state.bootstrap?.runtime?.running || state.busy) {
+  if (state.bootstrap?.runtime?.running || state.bootstrap?.runtime?.knowledgeGraphRunning || state.busy) {
     refresh().catch(() => undefined);
   }
 }, 2500);

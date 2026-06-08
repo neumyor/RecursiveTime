@@ -51,6 +51,11 @@ class WorkspaceState(TypedDict):
     completedNodes: list[NodeType]
     contractConfirmed: bool
     finalSummaryConfirmed: bool
+    runtimeSettings: "RuntimeSettings"
+
+
+class RuntimeSettings(TypedDict):
+    iterativeCandidateCount: int
 
 
 class NodeSession(TypedDict, total=False):

@@ -1,6 +1,6 @@
 phase: iteration
 next: final-summary
-purpose: 根据 contract 每轮只构建并尝试一种新方法，或将此前已落盘工具进行一种明确组合；先把方法标准化为 tools/ 下可调用工具，再执行和分析结果；必须先生成 case review，再生成 iteration summary，最后判断结束迭代或继续下一轮优化。
+purpose: 根据 contract 每轮提出 k 个候选解决方案，分别分配 subagent 做可行性测试与 case review，再统一综合证据，选择本轮落盘执行对象或下一轮迭代方向；k 必须通过实时 runtime settings 获取；必须先生成候选审查与 case review，再生成 iteration summary，最后判断结束迭代或继续下一轮优化。
 
 requires:
 - user/problem-contract.md
@@ -8,6 +8,7 @@ requires:
 - tools/**
 - reports/iterations/**
 - user/iteration-state.md
+- knowledge_base/**
 
 produces:
 - tools/**
