@@ -139,6 +139,22 @@ uv run ts-harness training-template
 - `solution` 描述工具使用协议，不描述最佳模型。
 - 训练只是让某些工具可用的实现细节，不是系统目标。
 
+## Git 管理
+
+所有关键修改必须通过 git 妥善管理：
+
+- **每次完成一个逻辑完整的改动后立即提交**，不要积攒大量未提交的修改。
+- 提交信息（commit message）使用 [Conventional Commits](https://www.conventionalcommits.org/) 格式，清晰描述改动范围和内容。例如：
+  - `feat(frontend): incremental live rendering to preserve scroll positions`
+  - `fix(backend): correct loopDecision validation for iterative-solving`
+  - `docs(architecture): add MCP boundary design notes`
+- 提交前确保代码通过编译/语法检查：
+  - 后端：`uv run python -m compileall backend/harnessing_ts`
+  - 前端：`cd frontend && bun run build`
+- **禁止提交**：API key、密码、token、`.env` 文件、运行时产物（见下方禁止提交清单）。
+- 修改前先 `git status` 确认当前分支和已有改动，避免意外覆盖他人工作。
+- 不要提交调试用的临时日志打印、注释掉的代码块、或仅用于本地测试的临时文件。
+
 ## 当前 Node Chain
 
 ```text
