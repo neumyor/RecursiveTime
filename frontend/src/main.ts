@@ -91,6 +91,11 @@ const state = {
   knowledgeQuestion: '',
   knowledgeAnswer: null as JsonMap | null,
   knowledgeQueryBusy: false,
+  // Incremental render tracking — avoid full re-renders during polling
+  renderedPartIds: new Set<string>(),
+  renderedTimelineCount: 0,
+  renderedBuilderPartCount: 0,
+  lastTranscriptScope: 'all',
 };
 
 marked.setOptions({
@@ -603,6 +608,10 @@ async function refresh() {
   state.bootstrap = data;
   state.busy = Boolean(data.runtime?.running);
   state.lastRefreshAt = new Date();
+  // Reset incremental tracking on full refresh
+  state.renderedPartIds.clear();
+  state.renderedTimelineCount = 0;
+  state.renderedBuilderPartCount = 0;
   if (!data.runtime?.running) {
     state.loadingMessage = null;
     state.pendingParts = [];
@@ -611,6 +620,58 @@ async function refresh() {
   }
   render();
 }
+
+async function livePoll() {
+  const data = await fetchJson<Bootstrap>('/api/live');
+  state.bootstrap = data;
+  state.busy = Boolean(data.runtime?.running);
+  state.lastRefreshAt = new Date();
+  if (!data.runtime?.running) {
+    state.loadingMessage = null;
+    state.pendingParts = [];
+  } else if (!state.loadingMessage) {
+    state.loadingMessage = loadingPart('后端运行中，正在自动同步最新消息');
+  }
+  liveRender(data);
+}
+
+function liveRender(data: Bootstrap) {
+  const ws = data.state || {};
+  const activeNode = ws.activeNode;
+
+  // Lightweight status updates (text-only, no DOM rebuild)
+  els.statusText.innerHTML = statusPill(activeNode ? `Active: ${activeNode}` : 'Ready', activeNode ? 'active' : 'ready');
+  els.modeText.textContent = data.dryRun ? `${ws.controlMode || ws.mode} / dry-run` : (ws.controlMode || ws.mode || '-');
+  els.modelText.textContent = data.llmConfig?.config?.model || 'sdk-default';
+  els.runtimeUvText.innerHTML = runtimePill(data.runtime?.workspaceUv);
+
+  if (!state.selectedNodeType && data.nodeSpecs.length) {
+    state.selectedNodeType = activeNode || data.nodeSpecs[0].type;
+  }
+
+  // Incremental-only: only update things that change during a run
+  renderPendingControl(ws.pendingControl);
+  renderTranscriptScope(data.nodes);
+  renderChat(data, true);
+  renderTimeline(data.timeline, true);
+  renderRuntimeSettings(data.runtimeSettings || ws.runtimeSettings);
+  updateControls(data);
+
+  // Knowledge graph view extras
+  if (state.view === 'knowledgeGraph') {
+    renderKnowledgeGraphBuilder(data);
+    renderBuilderTrace(data.knowledgeGraphParts || [], true);
+  }
+
+  renderShellState();
+  hydrateIcons();
+}
+
+setInterval(() => {
+  if (state.bootstrap?.runtime?.running || state.bootstrap?.runtime?.knowledgeGraphRunning || state.busy) {
+    livePoll().catch(() => undefined);
+  }
+}, 2500);
 
 function render() {
   const data = state.bootstrap;
@@ -761,11 +822,20 @@ function renderNodeDetail(specs: JsonMap[], nodes: JsonMap[]) {
   }
 }
 
-function renderChat(data: Bootstrap) {
-  const wasNearBottom = els.chatStream.scrollHeight - els.chatStream.scrollTop - els.chatStream.clientHeight < 160;
+function renderChat(data: Bootstrap, incremental = false) {
   const parts = collectTranscriptParts(data);
   const visibleParts = normalizeChatParts(parts);
+
+  // Scope changed → force full re-render
+  if (incremental && state.lastTranscriptScope !== state.transcriptScope) {
+    incremental = false;
+    state.renderedPartIds.clear();
+  }
+  state.lastTranscriptScope = state.transcriptScope;
+
+  // Fresh start with no parts → show welcome
   if (!visibleParts.length) {
+    state.renderedPartIds.clear();
     els.chatStream.innerHTML = `
       <div class="welcome-state">
         <div class="welcome-orbit"><span data-icon="Sparkles"></span></div>
@@ -775,6 +845,24 @@ function renderChat(data: Bootstrap) {
     `;
     return;
   }
+
+  // Incremental: only append new parts, preserve scroll
+  if (incremental && state.renderedPartIds.size > 0) {
+    const newParts = visibleParts.filter((p) => !state.renderedPartIds.has(p.id));
+    if (!newParts.length) return;
+    const wasNearBottom = els.chatStream.scrollHeight - els.chatStream.scrollTop - els.chatStream.clientHeight < 160;
+    const html = newParts.map((part) => messageHtml(part)).join('');
+    els.chatStream.insertAdjacentHTML('beforeend', html);
+    for (const p of newParts) state.renderedPartIds.add(p.id);
+    bindToolCards();
+    if (wasNearBottom) els.chatStream.scrollTop = els.chatStream.scrollHeight;
+    return;
+  }
+
+  // Full render
+  state.renderedPartIds.clear();
+  for (const p of visibleParts) state.renderedPartIds.add(p.id);
+  const wasNearBottom = els.chatStream.scrollHeight - els.chatStream.scrollTop - els.chatStream.clientHeight < 160;
   els.chatStream.innerHTML = visibleParts.map((part) => messageHtml(part)).join('');
   bindToolCards();
   if (wasNearBottom || state.loadingMessage) {
@@ -935,13 +1023,31 @@ function knowledgeBaseCardHtml(card: JsonMap) {
   `;
 }
 
-function renderBuilderTrace(parts: JsonMap[]) {
-  const wasNearBottom = els.builderTrace.scrollHeight - els.builderTrace.scrollTop - els.builderTrace.clientHeight < 120;
+function renderBuilderTrace(parts: JsonMap[], incremental = false) {
   const visible = normalizeChatParts((parts || []).map((part) => ({ ...part, sourceLabel: 'builder' }))).slice(-80);
   if (!visible.length) {
+    state.renderedBuilderPartCount = 0;
     els.builderTrace.innerHTML = emptyState('No builder agent trace yet. Click Build in the left settings bar.', 'TerminalSquare');
     return;
   }
+
+  // Incremental: only append new messages
+  if (incremental && state.renderedBuilderPartCount > 0) {
+    const newCount = visible.length - state.renderedBuilderPartCount;
+    if (newCount <= 0) return;
+    const newVisible = visible.slice(state.renderedBuilderPartCount);
+    const wasNearBottom = els.builderTrace.scrollHeight - els.builderTrace.scrollTop - els.builderTrace.clientHeight < 120;
+    const html = newVisible.map((part) => messageHtml(part)).join('');
+    els.builderTrace.insertAdjacentHTML('beforeend', html);
+    bindToolCards(els.builderTrace);
+    state.renderedBuilderPartCount = visible.length;
+    if (wasNearBottom) els.builderTrace.scrollTop = els.builderTrace.scrollHeight;
+    return;
+  }
+
+  // Full render
+  state.renderedBuilderPartCount = visible.length;
+  const wasNearBottom = els.builderTrace.scrollHeight - els.builderTrace.scrollTop - els.builderTrace.clientHeight < 120;
   els.builderTrace.innerHTML = visible.map((part) => messageHtml(part)).join('');
   bindToolCards(els.builderTrace);
   if (wasNearBottom) {
@@ -1225,12 +1331,37 @@ function displayTextForPart(part: JsonMap) {
   return part.text || '';
 }
 
-function renderTimeline(events: JsonMap[]) {
+function renderTimeline(events: JsonMap[], incremental = false) {
   if (!events.length) {
+    state.renderedTimelineCount = 0;
     els.timeline.innerHTML = emptyState('暂无流程记录。', 'Clock3');
     return;
   }
-  els.timeline.innerHTML = events.slice(-80).reverse().map((event) => `
+  const display = events.slice(-80).reverse();
+
+  // Incremental: only append new events
+  if (incremental && state.renderedTimelineCount > 0) {
+    const newCount = display.length - state.renderedTimelineCount;
+    if (newCount <= 0) return;
+    const newEvents = display.slice(0, newCount);
+    const html = newEvents.map((event) => `
+      <button class="timeline-item" type="button">
+        <span class="timeline-dot"></span>
+        <span class="timeline-copy">
+          <span class="timeline-type">${escapeHtml(event.type)} ${event.nodeType ? `· ${escapeHtml(event.nodeType)}` : ''}</span>
+          <span class="meta">${formatTime(event.timestamp)}</span>
+          <span>${escapeHtml(event.message || '')}</span>
+        </span>
+      </button>
+    `).join('');
+    els.timeline.insertAdjacentHTML('afterbegin', html);
+    state.renderedTimelineCount = display.length;
+    return;
+  }
+
+  // Full render
+  state.renderedTimelineCount = display.length;
+  els.timeline.innerHTML = display.map((event) => `
     <button class="timeline-item" type="button">
       <span class="timeline-dot"></span>
       <span class="timeline-copy">
@@ -1600,7 +1731,7 @@ function createIcon(iconNode: IconNode) {
 
 setInterval(() => {
   if (state.bootstrap?.runtime?.running || state.bootstrap?.runtime?.knowledgeGraphRunning || state.busy) {
-    refresh().catch(() => undefined);
+    livePoll().catch(() => undefined);
   }
 }, 2500);
 
