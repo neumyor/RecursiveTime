@@ -659,12 +659,6 @@ function liveRender(data: Bootstrap) {
   hydrateIcons();
 }
 
-setInterval(() => {
-  if (state.bootstrap?.runtime?.running || state.bootstrap?.runtime?.knowledgeGraphRunning || state.busy) {
-    livePoll().catch(() => undefined);
-  }
-}, 10000);
-
 function render() {
   const data = state.bootstrap;
   if (!data) {
@@ -1665,6 +1659,6 @@ setInterval(() => {
   if (state.bootstrap?.runtime?.running || state.bootstrap?.runtime?.knowledgeGraphRunning || state.busy) {
     livePoll().catch(() => undefined);
   }
-}, 2500);
+}, 10000);
 
 refresh().catch((error) => showDetail('Startup Error', { message: error instanceof Error ? error.message : String(error) }));
