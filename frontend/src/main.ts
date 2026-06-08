@@ -655,6 +655,7 @@ function liveRender(data: Bootstrap) {
   }
 
   renderShellState();
+  renderViewState();
   hydrateIcons();
 }
 
@@ -668,6 +669,7 @@ function render() {
   const data = state.bootstrap;
   if (!data) {
     renderChat(emptyBootstrap());
+    renderViewState();
     return;
   }
 
