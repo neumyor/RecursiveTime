@@ -1166,11 +1166,27 @@ details[open] > summary.panel-heading::after {
 }
 
 .tool-collapsed {
+  flex: 0 0 auto;
   padding: 0;
   overflow: visible;
   min-height: 54px;
   border-color: var(--line-strong);
   background: var(--surface-raised);
+}
+
+.chat-stream .tool-collapsed {
+  width: min(980px, 86%);
+}
+
+.chat-stream .message.tool,
+.chat-stream .tool-collapsed.tool {
+  width: 100%;
+  max-width: none;
+}
+
+.tool-collapsed.expanded {
+  position: relative;
+  z-index: 1;
 }
 
 .tool-card {
@@ -1254,8 +1270,13 @@ dialog pre {
 }
 
 .tool-detail {
+  display: block;
   max-height: 300px;
   margin: 0 10px 10px;
+}
+
+.tool-detail[hidden] {
+  display: none;
 }
 
 .loading-line {

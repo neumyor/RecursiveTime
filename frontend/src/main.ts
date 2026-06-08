@@ -87,6 +87,7 @@ const state = {
   selectedKnowledgeBaseKind: null as string | null,
   knowledgeBaseCards: null as JsonMap | null,
   knowledgeBaseCardsBusy: false,
+  expandedToolPartIds: new Set<string>(),
   candidateSaveTimer: 0,
   knowledgeQuestion: '',
   knowledgeAnswer: null as JsonMap | null,
@@ -1179,9 +1180,11 @@ function messageHtml(part: JsonMap) {
     const detail = part.displayText || part.text || summarizeRaw(part.raw) || '';
     const toolName = toolNameForPart(part);
     const done = part.type === 'tool_result';
+    const partId = String(part.id || `${part.timestamp || ''}:${toolName}:${part.type || ''}`);
+    const expanded = state.expandedToolPartIds.has(partId);
     return `
-      <article class="message ${escapeHtml(roleClass)} tool-collapsed">
-        <button class="tool-card" type="button" data-tool-toggle>
+      <article class="message ${escapeHtml(roleClass)} tool-collapsed${expanded ? ' expanded' : ''}" data-part-id="${escapeHtml(partId)}">
+        <button class="tool-card${expanded ? ' expanded' : ''}" type="button" data-tool-toggle>
           <span class="tool-status ${done ? 'done' : 'running'}"><span data-icon="${done ? 'Check' : 'TerminalSquare'}"></span></span>
           <span class="tool-copy">
             <span class="tool-title">${escapeHtml(summary)}</span>
@@ -1189,7 +1192,7 @@ function messageHtml(part: JsonMap) {
           </span>
           <span class="tool-chevron" data-icon="ChevronRight"></span>
         </button>
-        <pre class="tool-detail" hidden>${escapeHtml(detail)}</pre>
+        <pre class="tool-detail" ${expanded ? '' : 'hidden'}>${escapeHtml(detail)}</pre>
       </article>
     `;
   }
@@ -1501,7 +1504,15 @@ function bindToolCards(root: HTMLElement = els.chatStream) {
       if (!detail) return;
       const expanded = detail.hidden === true;
       detail.hidden = !expanded;
+      const article = button.closest<HTMLElement>('.tool-collapsed');
+      const partId = article?.dataset.partId;
+      if (partId) {
+        if (expanded) state.expandedToolPartIds.add(partId);
+        else state.expandedToolPartIds.delete(partId);
+      }
+      article?.classList.toggle('expanded', expanded);
       button.classList.toggle('expanded', expanded);
+      if (expanded) requestAnimationFrame(() => article?.scrollIntoView({ block: 'nearest' }));
     });
   }
 }
