@@ -1281,7 +1281,9 @@ function displayTextForPart(part: JsonMap) {
       const more = result.truncated ? `\n... (${result.numFiles} files total)` : '';
       return result.filenames.length ? `工具结果：\n${files}${more}` : '工具结果：No files found';
     }
-    return part.text || '';
+    const rawText = toolResultTextFromRaw(part.raw);
+    if (rawText) return rawText;
+    return part.text === 'Tool result' ? '' : part.text || '';
   }
   if (part.role === 'system' && part.type === 'raw') {
     const subtype = part.raw?.subtype || part.text || '';
@@ -1603,6 +1605,31 @@ function summarizeRaw(raw: any) {
   if (raw.subtype) return raw.subtype;
   if (raw.type) return raw.type;
   return JSON.stringify(raw);
+}
+
+function toolResultTextFromRaw(raw: any): string {
+  const content = raw?.message?.content ?? raw?.content;
+  return extractToolResultText(content);
+}
+
+function extractToolResultText(value: any): string {
+  if (typeof value === 'string') return value.trim();
+  if (!Array.isArray(value)) return '';
+  const parts: string[] = [];
+  for (const item of value) {
+    if (typeof item === 'string') {
+      if (item.trim()) parts.push(item.trim());
+      continue;
+    }
+    if (!item || typeof item !== 'object') continue;
+    if (typeof item.text === 'string' && item.text.trim()) {
+      parts.push(item.text.trim());
+      continue;
+    }
+    const nested = extractToolResultText(item.content);
+    if (nested) parts.push(nested);
+  }
+  return parts.join('\n');
 }
 
 function formatTime(value: string) {

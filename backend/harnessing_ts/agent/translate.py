@@ -155,8 +155,34 @@ def _format_tool_use(name: Any, input_value: Any) -> str:
 def _format_tool_result(content: Any, structured: Any) -> str:
     if isinstance(content, str) and content.strip():
         return content
+    extracted = _extract_tool_result_text(content)
+    if extracted:
+        return extracted
     if structured is not None:
         import json
 
         return json.dumps(structured, ensure_ascii=False, indent=2)
     return "Tool result"
+
+
+def _extract_tool_result_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if not isinstance(value, list):
+        return ""
+    parts: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            if item.strip():
+                parts.append(item.strip())
+            continue
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and text.strip():
+            parts.append(text.strip())
+            continue
+        nested = _extract_tool_result_text(item.get("content"))
+        if nested:
+            parts.append(nested)
+    return "\n".join(parts)
