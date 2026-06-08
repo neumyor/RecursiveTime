@@ -832,8 +832,8 @@ function renderChat(data: Bootstrap) {
   }
   els.chatStream.innerHTML = visibleParts.map((part) => messageHtml(part)).join('');
   bindToolCards();
-  // Preserve scroll: if user was near bottom (or loading), auto-scroll; otherwise restore
-  if (wasNearBottom || state.loadingMessage) {
+  // Preserve scroll: auto-scroll only when user was already near bottom
+  if (wasNearBottom) {
     els.chatStream.scrollTop = els.chatStream.scrollHeight;
   } else if (savedScroll < els.chatStream.scrollHeight) {
     els.chatStream.scrollTop = Math.min(savedScroll, els.chatStream.scrollHeight - els.chatStream.clientHeight);
