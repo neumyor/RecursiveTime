@@ -169,6 +169,22 @@ def _add_knowledge_base_tools(tools: list[Any], tool: Any, callbacks: dict[str, 
         return text_result(await _maybe_await(callback("scan_references")(args)))
 
     @tool(
+        name="extract_reference_text",
+        description="Extract deterministic text from a reference. For PDFs this uses pdftotext page-by-page and writes a cache under knowledge_base/cache/reference_text. Use this before SDK Read when building evidence quoted_fragments.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "reference_id": {"type": "string"},
+                "path": {"type": "string"},
+                "pages": {"type": "string", "description": "Optional page selection like 1,3-5."},
+                "max_chars_per_page": {"type": "integer"},
+            },
+        },
+    )
+    async def _extract_reference_text(args: dict[str, Any]) -> dict[str, Any]:
+        return text_result(await _maybe_await(callback("extract_reference_text")(args)))
+
+    @tool(
         name="update_reference_brief",
         description="Update the compact title and brief for a processed reference.",
         input_schema={
@@ -325,6 +341,7 @@ def _add_knowledge_base_tools(tools: list[Any], tool: Any, callbacks: dict[str, 
 
     tools.extend([
         _scan_references,
+        _extract_reference_text,
         _update_reference_brief,
         _add_evidence,
         _add_knowledge,

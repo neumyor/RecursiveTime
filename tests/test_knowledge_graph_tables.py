@@ -1,10 +1,12 @@
 import csv
+from pathlib import Path
 
 import pytest
 
 from harnessing_ts.knowledge_graph import (
     add_evidence,
     add_knowledge,
+    extract_reference_text,
     finalize_knowledge_base,
     read_graph_view,
     scan_references,
@@ -148,6 +150,32 @@ def test_deterministic_tools_add_and_upsert_knowledge_base(tmp_path):
     assert qrs["class_id"] == "C-00001"
     assert relation["relation_id"] == "R-00001"
     assert graph["nodes"][0]["evidence"][0]["evidenceId"] == "E-00001"
+
+
+def test_extract_reference_text_uses_pdftotext_for_pdf(tmp_path):
+    kb = tmp_path / "knowledge_base"
+    kb.mkdir(parents=True)
+    (kb / "domain-brief.md").write_text("# Domain Brief\n", encoding="utf-8")
+    pdf = tmp_path / "references" / "paper.pdf"
+    pdf.parent.mkdir()
+    source_pdf = Path("/Users/niuyiming/harnessts/ecg/references/ECG5000_literature_review_cn.pdf")
+    if not source_pdf.exists():
+        pytest.skip("workspace smoke PDF is not available")
+    pdf.write_bytes(source_pdf.read_bytes())
+
+    refs = scan_references(tmp_path)
+    reference_id = refs["new_or_changed"][0]["reference_id"]
+    extracted = extract_reference_text(tmp_path, {
+        "reference_id": reference_id,
+        "pages": "1",
+        "max_chars_per_page": 800,
+    })
+
+    assert extracted["ok"] is True
+    assert extracted["method"] == "pdftotext"
+    assert extracted["pages"][0]["page"] == 1
+    assert "ECG5000" in extracted["pages"][0]["text"]
+    assert (tmp_path / extracted["cache_path"]).exists()
 
 
 def test_csv_knowledge_base_rejects_unescaped_list_columns(tmp_path):

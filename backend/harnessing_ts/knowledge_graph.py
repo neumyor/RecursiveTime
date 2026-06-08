@@ -4,6 +4,8 @@ import csv
 import hashlib
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -17,6 +19,7 @@ from harnessing_ts.state.workspace_store import WorkspaceStore, now_iso
 
 KG_TOOL_NAMES = [
     "scan_references",
+    "extract_reference_text",
     "update_reference_brief",
     "add_evidence",
     "add_knowledge",
@@ -45,13 +48,14 @@ BUILDER_SYSTEM_PROMPT = """你是 HarnessingTS 的 Agent 1：Literature Knowledg
 
 处理流程：
 1. 先调用 scan_references，优先处理 new_or_changed references。未变化 reference 可只使用 brief，不要重读全文。
-2. 读取 new_or_changed references，以及 user/problem-contract.md、user/data-spec.md、artifacts/reference-knowledge.md（如果存在）。
-3. 对每个新/变更 reference，提取 Evidence，并调用 add_evidence。
-4. 基于 Evidence 提取 Knowledge，并调用 add_knowledge。Knowledge 应包含 compact summary，便于后续复用上下文。
-5. 调用 update_reference_brief 为已处理 reference 写入短摘要。
-6. 调用 list_pending_knowledge，逐条把 Knowledge 转成 Classes 和 Relations。
-7. 处理每条 Knowledge 时，先用 search_classes/search_relations 检索相关候选，再用 upsert_class/upsert_relation 新建或合并。不要读取全量 class/relation 表。
-8. 最后调用 validate_knowledge_base；如果没有 error，再调用 finalize_knowledge_base。
+2. 对每个新/变更 PDF reference，先调用 extract_reference_text 获取确定性页级文本；quoted_fragments 必须优先来自该工具返回的文本。只有 extract_reference_text 明确失败或无文本时，才使用 SDK Read 做视觉检查；不要用 Grep 搜索 PDF 二进制文件来判断文本层是否存在。
+3. 读取 user/problem-contract.md、user/data-spec.md、artifacts/reference-knowledge.md（如果存在）。
+4. 对每个新/变更 reference，提取 Evidence，并调用 add_evidence。
+5. 基于 Evidence 提取 Knowledge，并调用 add_knowledge。Knowledge 应包含 compact summary，便于后续复用上下文。
+6. 调用 update_reference_brief 为已处理 reference 写入短摘要。
+7. 调用 list_pending_knowledge，逐条把 Knowledge 转成 Classes 和 Relations。
+8. 处理每条 Knowledge 时，先用 search_classes/search_relations 检索相关候选，再用 upsert_class/upsert_relation 新建或合并。不要读取全量 class/relation 表。
+9. 最后调用 validate_knowledge_base；如果没有 error，再调用 finalize_knowledge_base。
 
 不要做 RDF/OWL 或数据库导入。第一版用 CSV 表模拟数据库即可。
 不要回答在线问题；只负责构建和更新知识库。
@@ -208,6 +212,7 @@ def ensure_knowledge_base_layout(root: Path) -> None:
 def build_knowledge_base_tool_callbacks(root: Path) -> dict[str, Any]:
     return {
         "scan_references": lambda args: scan_references(root, bool(args.get("include_processed", False))),
+        "extract_reference_text": lambda args: extract_reference_text(root, args),
         "update_reference_brief": lambda args: update_reference_brief(
             root,
             str(args.get("reference_id", "")),
@@ -293,6 +298,50 @@ def update_reference_brief(root: Path, reference_id: str, title: str, brief: str
     row["updated_at"] = now_iso()
     _write_csv_rows(root / "knowledge_base" / "tables" / "references.csv", REFERENCE_FIELDS, references)
     return _reference_result(row)
+
+
+def extract_reference_text(root: Path, args: dict[str, Any]) -> dict[str, Any]:
+    ensure_knowledge_base_layout(root)
+    reference = _resolve_reference(root, str(args.get("reference_id", "") or ""), str(args.get("path", "") or ""))
+    path = root / reference["path"]
+    max_chars_per_page = int(args.get("max_chars_per_page") or 2400)
+    pages_arg = str(args.get("pages", "") or "").strip()
+    if not path.exists():
+        raise RuntimeError(f"reference file not found: {reference['path']}")
+    suffix = path.suffix.lower()
+    if suffix in {".txt", ".md", ".csv"}:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        return {
+            "reference_id": reference["reference_id"],
+            "path": reference["path"],
+            "method": "text_file",
+            "ok": bool(text.strip()),
+            "pages": [{"page": 1, "text": text[:max_chars_per_page], "char_count": len(text)}],
+            "cache_path": _write_reference_text_cache(root, reference["reference_id"], {1: text}),
+        }
+    if suffix != ".pdf":
+        raise RuntimeError(f"Unsupported reference text extraction type: {suffix or 'unknown'}")
+    page_count = _pdf_page_count(path)
+    selected_pages = _parse_page_selection(pages_arg, page_count)
+    page_texts: dict[int, str] = {}
+    for page in selected_pages:
+        text = _pdftotext_page(path, page)
+        page_texts[page] = text
+    cache_path = _write_reference_text_cache(root, reference["reference_id"], page_texts)
+    pages = [
+        {"page": page, "text": text[:max_chars_per_page], "char_count": len(text)}
+        for page, text in page_texts.items()
+    ]
+    return {
+        "reference_id": reference["reference_id"],
+        "path": reference["path"],
+        "method": "pdftotext",
+        "ok": any(item["char_count"] > 0 for item in pages),
+        "page_count": page_count,
+        "pages": pages,
+        "cache_path": cache_path,
+        "note": "" if any(item["char_count"] > 0 for item in pages) else "No text layer extracted by pdftotext. Use SDK Read only as visual fallback or add OCR tooling.",
+    }
 
 
 def add_evidence(root: Path, args: dict[str, Any]) -> dict[str, Any]:
@@ -788,6 +837,87 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _resolve_reference(root: Path, reference_id: str, source_path: str) -> dict[str, str]:
+    references = read_reference_rows(root)
+    if reference_id:
+        row = _find_row(references, "reference_id", reference_id)
+        if row:
+            return row
+        raise RuntimeError(f"Unknown reference_id: {reference_id}")
+    normalized = _normalize_reference_path(root, source_path)
+    row = _find_row(references, "path", normalized)
+    if row:
+        return row
+    if normalized and (root / normalized).exists():
+        scan_references(root, include_processed=True)
+        row = _find_row(read_reference_rows(root), "path", normalized)
+        if row:
+            return row
+    raise RuntimeError("extract_reference_text requires reference_id or known path.")
+
+
+def _pdf_page_count(path: Path) -> int:
+    pdfinfo = shutil.which("pdfinfo")
+    if not pdfinfo:
+        return 1
+    result = subprocess.run([pdfinfo, str(path)], text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        return 1
+    match = re.search(r"^Pages:\s+(\d+)\s*$", result.stdout, re.M)
+    return int(match.group(1)) if match else 1
+
+
+def _parse_page_selection(selection: str, page_count: int) -> list[int]:
+    if not selection:
+        return list(range(1, max(1, page_count) + 1))
+    pages: set[int] = set()
+    for part in selection.split(","):
+        chunk = part.strip()
+        if not chunk:
+            continue
+        if "-" in chunk:
+            start, end = chunk.split("-", 1)
+            try:
+                start_i = int(start)
+                end_i = int(end)
+            except ValueError:
+                continue
+            pages.update(range(max(1, start_i), min(page_count, end_i) + 1))
+            continue
+        try:
+            page = int(chunk)
+        except ValueError:
+            continue
+        if 1 <= page <= page_count:
+            pages.add(page)
+    return sorted(pages) or list(range(1, max(1, page_count) + 1))
+
+
+def _pdftotext_page(path: Path, page: int) -> str:
+    pdftotext = shutil.which("pdftotext")
+    if not pdftotext:
+        raise RuntimeError("pdftotext is not available; install poppler to extract PDF text.")
+    result = subprocess.run(
+        [pdftotext, "-layout", "-f", str(page), "-l", str(page), str(path), "-"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"pdftotext failed for page {page}: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def _write_reference_text_cache(root: Path, reference_id: str, page_texts: dict[int, str]) -> str:
+    cache_dir = root / "knowledge_base" / "cache" / "reference_text" / reference_id
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    for page, text in page_texts.items():
+        (cache_dir / f"page-{page:03d}.txt").write_text(text + ("\n" if text else ""), encoding="utf-8")
+    combined = "\n\n".join([f"--- Page {page} ---\n{text}" for page, text in sorted(page_texts.items())])
+    (cache_dir / "all.txt").write_text(combined + ("\n" if combined else ""), encoding="utf-8")
+    return str((cache_dir / "all.txt").relative_to(root))
 
 
 def _reference_result(row: dict[str, str]) -> dict[str, Any]:
