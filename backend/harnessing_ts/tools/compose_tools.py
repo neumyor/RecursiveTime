@@ -5,7 +5,7 @@ from harnessing_ts.schema import NodeType
 
 READ_ONLY = ["Read", "LS", "Glob", "Grep"]
 MAIN_POOL = ["mcp__ts_harness__enter_node", "mcp__ts_harness__query_knowledge"]
-NODE_POOL = ["mcp__ts_harness__finish_node", "mcp__ts_harness__get_runtime_settings", "mcp__ts_harness__record_artifact", "mcp__ts_harness__record_run"]
+NODE_POOL = ["mcp__ts_harness__finish_node", "mcp__ts_harness__get_runtime_settings", "mcp__ts_harness__record_artifact", "mcp__ts_harness__record_run", "mcp__ts_harness__query_knowledge"]
 
 
 def build_main_allowed_tools() -> list[str]:

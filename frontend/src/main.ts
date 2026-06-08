@@ -1245,6 +1245,8 @@ function normalizeChatParts(parts: JsonMap[]): JsonMap[] {
     'init',
     'task_started',
     'task_progress',
+    'task_updated',
+    'task_notification',
     'task_completed',
     'task_failed',
     'task_stopped',

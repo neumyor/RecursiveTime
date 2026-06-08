@@ -51,7 +51,7 @@ def create_harness_mcp_server(
 
         tools.append(_enter_node)
 
-    if session_role == "main" and query_knowledge:
+    if (session_role == "main" or session_role == "node") and query_knowledge:
         @tool(
             name="query_knowledge",
             description="Ask the independent knowledge reasoning agent a natural-language domain question. Use this to retrieve evidence-backed domain knowledge from the reference knowledge base.",

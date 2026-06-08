@@ -13,6 +13,7 @@
 - 读取 `user/problem-contract.md`，严格围绕 contract 的目标、输入输出、评价方式和停止条件工作。
 - 读取 `user/data-spec.md`，所有工具构建、训练、推理、评估、case review 和输出预测文件都必须遵守其中定义的数据路径等要求。
 - 读取 `knowledge_base/**`（如果存在），尤其是 `knowledge_base/tables/knowledge.csv`、`knowledge_base/tables/evidence.csv`、`knowledge_base/tables/classes.csv` 和 `knowledge_base/tables/relations.csv`，把与任务目标、reference knowledge、可观察特征、风险和评价口径相关的 knowledge、evidence、class 和 relation 作为候选生成和 case review 的背景证据；如果不存在，必须说明缺失风险，不要编造图谱内容。
+- **必须调用 `mcp__ts_harness__query_knowledge`** 进行语义检索，用自然语言问题查询知识图谱中的领域知识（如 ECG 异常类型定义、信号特征、常见方法、评价指标、bad case 归因线索等）。该工具提供比 CSV 直接阅读更精准的语义检索和证据溯源。在候选生成、case review 归因、和 iteration summary 阶段都应查询知识图谱获取领域背景。
 - 读取已有 `tools/**`、`reports/iterations/**` 和 `user/iteration-state.md`。首轮迭代时这些路径可以不存在；若不存在，应从 contract 和 data-spec 开始建立第一轮工具。
 - 调用 `mcp__ts_harness__get_runtime_settings`，读取 `iterativeCandidateCount`，并在本轮候选审查报告中记录实际使用的 k。
 - 根据 contract、上一轮 `user/iteration-state.md`、`knowledge_base/**` 和已有工具，提出 k 个候选对象：

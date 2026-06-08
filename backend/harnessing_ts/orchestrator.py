@@ -772,6 +772,7 @@ class HarnessOrchestrator:
         mcp_server = create_harness_mcp_server(
             session_role="node",
             finish_node=self.request_finish_node,
+            query_knowledge=self.request_query_knowledge,
             record_artifact=self.record_artifact,
             record_run=self.record_run,
             get_runtime_settings=self.get_runtime_settings,
