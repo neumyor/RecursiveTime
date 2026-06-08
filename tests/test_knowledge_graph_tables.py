@@ -9,6 +9,7 @@ from harnessing_ts.knowledge_graph import (
     extract_reference_text,
     finalize_knowledge_base,
     read_graph_view,
+    read_knowledge_base_cards,
     scan_references,
     search_knowledge_notes,
     upsert_class,
@@ -95,7 +96,9 @@ def test_csv_knowledge_base_validates_and_builds_graph_view(tmp_path):
     assert graph["nodes"][0]["type"] == "class"
     assert graph["nodes"][0]["evidence"][0]["evidenceId"] == "E-00001"
     assert graph["nodes"][0]["evidence"][0]["sourcePath"] == "references/paper.pdf"
-    assert graph["nodes"][0]["evidence"][0]["previewUrl"] == "/api/references/preview?path=references/paper.pdf"
+    assert graph["nodes"][0]["evidence"][0]["previewUrl"] == "/api/references/preview?path=references/paper.pdf#page=3"
+    evidence_cards = read_knowledge_base_cards(tmp_path, "evidence")
+    assert evidence_cards["cards"][0]["previewUrl"] == "/api/references/preview?path=references/paper.pdf#page=3"
     assert graph["edges"][0]["sourceLabel"] == "QRS-COMPLEX"
     assert graph["edges"][0]["targetLabel"] == "BUNDLE-BRANCH-BLOCK"
     assert graph["edges"][0]["evidence"][0]["evidenceId"] == "E-00001"
@@ -150,6 +153,39 @@ def test_deterministic_tools_add_and_upsert_knowledge_base(tmp_path):
     assert qrs["class_id"] == "C-00001"
     assert relation["relation_id"] == "R-00001"
     assert graph["nodes"][0]["evidence"][0]["evidenceId"] == "E-00001"
+
+
+def test_evidence_cards_resolve_reference_ids_to_pdf_preview(tmp_path):
+    kb = tmp_path / "knowledge_base"
+    kb.mkdir(parents=True)
+    tables = kb / "tables"
+    (tmp_path / "references").mkdir()
+    (tmp_path / "references" / "paper.pdf").write_bytes(b"%PDF-1.4\n")
+    write_csv(tables / "references.csv", ["reference_id", "path", "sha256", "title", "brief", "status", "updated_at"], [{
+        "reference_id": "REF-00001",
+        "path": "references/paper.pdf",
+        "sha256": "abc",
+        "title": "",
+        "brief": "",
+        "status": "processed",
+        "updated_at": "",
+    }])
+    write_csv(tables / "evidence.csv", ["evidence_id", "reference_file", "page", "section", "quoted_fragments", "notes"], [{
+        "evidence_id": "E-00001",
+        "reference_file": "REF-00001",
+        "page": "2",
+        "section": "",
+        "quoted_fragments": '["quote"]',
+        "notes": "",
+    }])
+    write_csv(tables / "knowledge.csv", ["knowledge_id", "topic", "description", "summary", "evidence_ids", "class_ids", "relation_ids", "status", "notes"], [])
+    write_csv(tables / "classes.csv", ["class_id", "label", "normalized_label", "description", "source_knowledge_ids", "evidence_ids", "aliases"], [])
+    write_csv(tables / "relations.csv", ["relation_id", "source_class_id", "relation_type", "target_class_id", "description", "source_knowledge_ids", "evidence_ids"], [])
+
+    cards = read_knowledge_base_cards(tmp_path, "evidence")
+
+    assert cards["cards"][0]["sourcePath"] == "references/paper.pdf"
+    assert cards["cards"][0]["previewUrl"] == "/api/references/preview?path=references/paper.pdf#page=2"
 
 
 def test_extract_reference_text_uses_pdftotext_for_pdf(tmp_path):

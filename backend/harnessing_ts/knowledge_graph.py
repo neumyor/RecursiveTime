@@ -619,6 +619,77 @@ def read_knowledge_base_summary(root: Path) -> dict[str, Any]:
     }
 
 
+def read_knowledge_base_cards(root: Path, kind: str, limit: int = 200) -> dict[str, Any]:
+    ensure_knowledge_base_layout(root)
+    normalized = kind.strip().lower()
+    if normalized in {"knowledge", "knowledge_notes"}:
+        cards = [
+            {
+                "id": row.get("knowledge_id", ""),
+                "title": row.get("topic", "") or row.get("knowledge_id", ""),
+                "subtitle": row.get("status", ""),
+                "body": row.get("summary") or row.get("description", "")[:600],
+                "meta": {
+                    "evidence": _split_ids(row.get("evidence_ids", "")),
+                    "classes": _split_ids(row.get("class_ids", "")),
+                    "relations": _split_ids(row.get("relation_ids", "")),
+                },
+            }
+            for row in read_knowledge_rows(root)
+        ]
+        label = "Knowledge"
+    elif normalized in {"evidence", "evidence_notes"}:
+        cards = []
+        for row in read_evidence_rows(root):
+            source_path = _normalize_reference_path(root, row.get("reference_file", ""))
+            fragments = _parse_json_list(row.get("quoted_fragments", ""))
+            cards.append({
+                "id": row.get("evidence_id", ""),
+                "title": row.get("evidence_id", ""),
+                "subtitle": source_path,
+                "body": " | ".join(fragments[:2]) if fragments else row.get("notes", ""),
+                "meta": {"page": row.get("page", ""), "section": row.get("section", "")},
+                "sourcePath": source_path,
+                "previewUrl": _reference_preview_url(source_path, row.get("page", "")),
+            })
+        label = "Evidence"
+    elif normalized in {"classes", "class"}:
+        cards = [
+            {
+                "id": row.get("class_id", ""),
+                "title": row.get("label", "") or row.get("class_id", ""),
+                "subtitle": row.get("normalized_label", ""),
+                "body": row.get("description", ""),
+                "meta": {
+                    "knowledge": _split_ids(row.get("source_knowledge_ids", "")),
+                    "evidence": _split_ids(row.get("evidence_ids", "")),
+                    "aliases": _split_ids(row.get("aliases", "")),
+                },
+            }
+            for row in read_class_rows(root)
+        ]
+        label = "Classes"
+    elif normalized in {"relations", "relation"}:
+        class_labels = {row.get("class_id", ""): row.get("label", "") for row in read_class_rows(root)}
+        cards = [
+            {
+                "id": row.get("relation_id", ""),
+                "title": f"{class_labels.get(row.get('source_class_id', ''), row.get('source_class_id', ''))} -> {class_labels.get(row.get('target_class_id', ''), row.get('target_class_id', ''))}",
+                "subtitle": row.get("relation_type", ""),
+                "body": row.get("description", ""),
+                "meta": {
+                    "knowledge": _split_ids(row.get("source_knowledge_ids", "")),
+                    "evidence": _split_ids(row.get("evidence_ids", "")),
+                },
+            }
+            for row in read_relation_rows(root)
+        ]
+        label = "Relations"
+    else:
+        raise RuntimeError(f"Unknown knowledge base card kind: {kind}")
+    return {"kind": normalized, "label": label, "count": len(cards), "cards": cards[:max(1, limit)]}
+
+
 def read_graph_view(root: Path) -> dict[str, Any]:
     ensure_knowledge_base_layout(root)
     classes = read_class_rows(root)
@@ -1107,7 +1178,7 @@ def evidence_items(root: Path, evidence_ids: str) -> list[dict[str, str]]:
         source_path = _normalize_reference_path(root, row.get("reference_file", ""))
         out.append({
             "sourcePath": source_path,
-            "previewUrl": _reference_preview_url(source_path),
+            "previewUrl": _reference_preview_url(source_path, row.get("page", "")),
             "quote": " | ".join(fragments[:2]) if fragments else row.get("notes", ""),
             "evidenceId": evidence_id,
             "page": row.get("page", ""),
@@ -1127,17 +1198,27 @@ def _merged_evidence_ids(evidence_ids: str, knowledge_ids: str, knowledge_eviden
     return json.dumps(merged, ensure_ascii=False)
 
 
-def _reference_preview_url(source_path: str) -> str:
+def _reference_preview_url(source_path: str, page: str = "") -> str:
     normalized = source_path.strip().lstrip("/")
     if normalized.startswith("references/"):
-        return "/api/references/preview?path=" + quote(normalized)
+        fragment = _page_fragment(page)
+        return "/api/references/preview?path=" + quote(normalized) + fragment
     return ""
+
+
+def _page_fragment(page: str) -> str:
+    match = re.search(r"\d+", page or "")
+    return f"#page={int(match.group(0))}" if match else ""
 
 
 def _normalize_reference_path(root: Path, source_path: str) -> str:
     raw = source_path.strip()
     if not raw:
         return ""
+    if re.match(r"^REF-\d+$", raw):
+        row = _find_row(read_reference_rows(root), "reference_id", raw)
+        if row and row.get("path"):
+            return row["path"]
     workspace_root = root.resolve()
     candidate = Path(raw)
     if candidate.is_absolute():

@@ -84,6 +84,9 @@ const state = {
   rightCollapsed: window.innerWidth <= 1180,
   view: (window.location.pathname === '/knowledge-graph' ? 'knowledgeGraph' : 'chat') as 'chat' | 'knowledgeGraph',
   selectedGraphNodeId: null as string | null,
+  selectedKnowledgeBaseKind: null as string | null,
+  knowledgeBaseCards: null as JsonMap | null,
+  knowledgeBaseCardsBusy: false,
   candidateSaveTimer: 0,
   knowledgeQuestion: '',
   knowledgeAnswer: null as JsonMap | null,
@@ -217,6 +220,7 @@ app.innerHTML = `
           <span>Knowledge Base</span>
         </div>
         <div class="knowledge-summary" id="knowledgeSummary"></div>
+        <div class="knowledge-card-list" id="knowledgeCards"></div>
       </section>
     </div>
   </aside>
@@ -379,6 +383,7 @@ const els = {
   saveGraphLlmBtn: query<HTMLButtonElement>('#saveGraphLlmBtn'),
   buildGraphBtn: query<HTMLButtonElement>('#buildGraphBtn'),
   knowledgeSummary: query('#knowledgeSummary'),
+  knowledgeCards: query('#knowledgeCards'),
   builderTrace: query('#builderTrace'),
   backToChatBtn: query<HTMLButtonElement>('#backToChatBtn'),
   transcriptScope: query<HTMLSelectElement>('#transcriptScope'),
@@ -798,10 +803,115 @@ function renderKnowledgeGraphBuilder(data: Bootstrap) {
 function renderKnowledgeWorkbench(data: Bootstrap) {
   const summary = data.knowledgeBaseSummary || data.knowledgeGraph?.summary || {};
   els.knowledgeSummary.innerHTML = `
-    <div class="knowledge-stat"><span>${escapeHtml(summary.knowledgeCount ?? 0)}</span><span>Knowledge</span></div>
-    <div class="knowledge-stat"><span>${escapeHtml(summary.evidenceCount ?? 0)}</span><span>Evidence</span></div>
-    <div class="knowledge-stat"><span>${escapeHtml(summary.classCount ?? 0)}</span><span>Classes</span></div>
-    <div class="knowledge-stat"><span>${escapeHtml(summary.relationCount ?? 0)}</span><span>Relations</span></div>
+    ${knowledgeStatHtml('knowledge', summary.knowledgeCount ?? 0, 'Knowledge')}
+    ${knowledgeStatHtml('evidence', summary.evidenceCount ?? 0, 'Evidence')}
+    ${knowledgeStatHtml('classes', summary.classCount ?? 0, 'Classes')}
+    ${knowledgeStatHtml('relations', summary.relationCount ?? 0, 'Relations')}
+  `;
+  for (const item of els.knowledgeSummary.querySelectorAll<HTMLButtonElement>('[data-kb-kind]')) {
+    item.addEventListener('click', async () => {
+      await openKnowledgeBaseCards(item.dataset.kbKind || '');
+    });
+  }
+  renderKnowledgeBaseCards();
+}
+
+function knowledgeStatHtml(kind: string, count: any, label: string) {
+  const selected = state.selectedKnowledgeBaseKind === kind ? ' selected' : '';
+  return `
+    <button class="knowledge-stat${selected}" type="button" data-kb-kind="${escapeHtml(kind)}">
+      <span>${escapeHtml(count)}</span>
+      <span>${escapeHtml(label)}</span>
+    </button>
+  `;
+}
+
+async function openKnowledgeBaseCards(kind: string) {
+  if (!kind) return;
+  state.selectedKnowledgeBaseKind = kind;
+  state.knowledgeBaseCardsBusy = true;
+  renderKnowledgeBaseCards();
+  try {
+    state.knowledgeBaseCards = await fetchJson<JsonMap>(`/api/knowledge-base/cards?kind=${encodeURIComponent(kind)}&limit=200`);
+  } catch (error) {
+    state.knowledgeBaseCards = {
+      label: kind,
+      cards: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    state.knowledgeBaseCardsBusy = false;
+    renderKnowledgeBaseCards();
+    hydrateIcons(els.knowledgeCards);
+  }
+}
+
+function closeKnowledgeBaseCards() {
+  state.selectedKnowledgeBaseKind = null;
+  state.knowledgeBaseCards = null;
+  state.knowledgeBaseCardsBusy = false;
+  renderKnowledgeBaseCards();
+}
+
+function renderKnowledgeBaseCards() {
+  if (!state.selectedKnowledgeBaseKind) {
+    els.knowledgeCards.innerHTML = '';
+    return;
+  }
+  if (state.knowledgeBaseCardsBusy) {
+    els.knowledgeCards.innerHTML = `
+      <div class="kb-list-head">
+        <div class="node-detail-title">${escapeHtml(state.selectedKnowledgeBaseKind)}</div>
+        <button class="icon-btn ghost" type="button" data-kb-close title="Close"><span data-icon="X"></span></button>
+      </div>
+      ${emptyState('Loading cards...', 'Loader2')}
+    `;
+    bindKnowledgeCardControls();
+    return;
+  }
+  const payload = state.knowledgeBaseCards || {};
+  const cards: JsonMap[] = payload.cards || [];
+  els.knowledgeCards.innerHTML = `
+    <div class="kb-list-head">
+      <div>
+        <div class="node-detail-title">${escapeHtml(payload.label || state.selectedKnowledgeBaseKind)}</div>
+        <div class="meta">${escapeHtml(cards.length)} shown${payload.count ? ` · ${escapeHtml(payload.count)} total` : ''}</div>
+      </div>
+      <button class="icon-btn ghost" type="button" data-kb-close title="Close"><span data-icon="X"></span></button>
+    </div>
+    ${payload.error ? `<div class="empty"><span data-icon="AlertTriangle"></span><span>${escapeHtml(payload.error)}</span></div>` : ''}
+    ${cards.length ? `<div class="kb-cards">${cards.map(knowledgeBaseCardHtml).join('')}</div>` : emptyState('No cards yet.', 'Info')}
+  `;
+  bindKnowledgeCardControls();
+}
+
+function bindKnowledgeCardControls() {
+  const close = els.knowledgeCards.querySelector<HTMLButtonElement>('[data-kb-close]');
+  close?.addEventListener('click', closeKnowledgeBaseCards);
+  for (const item of els.knowledgeCards.querySelectorAll<HTMLElement>('[data-preview-url]')) {
+    item.addEventListener('click', () => {
+      const previewUrl = item.dataset.previewUrl || '';
+      if (previewUrl) window.open(previewUrl, '_blank', 'noopener');
+    });
+  }
+}
+
+function knowledgeBaseCardHtml(card: JsonMap) {
+  const previewUrl = card.previewUrl || '';
+  const meta = card.meta || {};
+  const metaItems = Object.entries(meta)
+    .filter(([, value]) => Array.isArray(value) ? value.length : value)
+    .slice(0, 4);
+  return `
+    <article class="kb-card ${previewUrl ? 'clickable' : ''}" ${previewUrl ? `data-preview-url="${escapeHtml(previewUrl)}"` : ''}>
+      <div class="kb-card-title">
+        <span>${escapeHtml(card.title || card.id || 'card')}</span>
+        <span class="meta">${escapeHtml(card.id || '')}</span>
+      </div>
+      ${card.subtitle ? `<div class="meta">${escapeHtml(card.subtitle)}</div>` : ''}
+      ${card.body ? `<p>${escapeHtml(card.body)}</p>` : ''}
+      ${metaItems.length ? `<div class="graph-mini-list">${metaItems.map(([key, value]) => `<span>${escapeHtml(key)}: ${escapeHtml(Array.isArray(value) ? value.join(', ') : value)}</span>`).join('')}</div>` : ''}
+    </article>
   `;
 }
 

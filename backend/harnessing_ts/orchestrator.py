@@ -392,6 +392,10 @@ class HarnessOrchestrator:
         self._ensure_initialized()
         return self.store.read_knowledge_base_summary()
 
+    def get_knowledge_base_cards(self, kind: str, limit: int = 200) -> dict[str, Any]:
+        self._ensure_initialized()
+        return self.store.read_knowledge_base_cards(kind, limit)
+
     def get_knowledge_graph_build_status(self) -> dict[str, Any]:
         self._ensure_initialized()
         return self.store.read_knowledge_graph_build_status()

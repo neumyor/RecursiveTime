@@ -230,6 +230,11 @@ class WorkspaceStore:
 
         return read_knowledge_base_summary(self.root)
 
+    def read_knowledge_base_cards(self, kind: str, limit: int = 200) -> dict[str, Any]:
+        from harnessing_ts.knowledge_graph import read_knowledge_base_cards
+
+        return read_knowledge_base_cards(self.root, kind, limit)
+
     def read_knowledge_graph_parts(self) -> list[Part]:
         return read_jsonl(self.knowledge_graph_log_path)
 

@@ -816,12 +816,21 @@ details[open] > summary.panel-heading::after {
 }
 
 .knowledge-stat {
+  width: 100%;
   display: grid;
   gap: 2px;
   padding: 9px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-soft);
+  text-align: left;
+  color: var(--text);
+}
+
+.knowledge-stat:hover,
+.knowledge-stat.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .knowledge-stat span:first-child {
@@ -835,6 +844,74 @@ details[open] > summary.panel-heading::after {
   font-size: 12px;
   font-weight: 800;
   text-transform: uppercase;
+}
+
+.knowledge-card-list {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.kb-list-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.kb-cards {
+  max-height: 360px;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+  padding-right: 2px;
+}
+
+.kb-card {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.kb-card.clickable {
+  cursor: pointer;
+}
+
+.kb-card.clickable:hover {
+  border-color: var(--accent);
+  background: #fff;
+}
+
+.kb-card-title {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.kb-card-title span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.kb-card p {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .knowledge-query-form {

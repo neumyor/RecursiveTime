@@ -140,6 +140,13 @@ def create_app() -> FastAPI:
     async def knowledge_base_summary() -> dict[str, Any]:
         return orchestrator.get_knowledge_base_summary()
 
+    @app.get("/api/knowledge-base/cards")
+    async def knowledge_base_cards(kind: str, limit: int = 200) -> dict[str, Any]:
+        try:
+            return orchestrator.get_knowledge_base_cards(kind, limit)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+
     @app.post("/api/knowledge/query")
     async def query_knowledge(request: KnowledgeQueryRequest) -> dict[str, Any]:
         if not request.question.strip():
