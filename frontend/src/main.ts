@@ -1241,12 +1241,25 @@ function collectTranscriptParts(data: Bootstrap): JsonMap[] {
 }
 
 function normalizeChatParts(parts: JsonMap[]): JsonMap[] {
+  const SUPPRESS_SYSTEM_SUBTYPES = new Set([
+    'init',
+    'task_started',
+    'task_progress',
+    'task_completed',
+    'task_failed',
+    'task_stopped',
+    'task_output',
+    'system',
+  ]);
   return parts
     .map((part: JsonMap) => ({ ...part, displayText: displayTextForPart(part) }))
     .filter((part: JsonMap) => {
       if (part.type === 'loading') return true;
       if (!part.displayText.trim()) return false;
-      if (part.role === 'system' && part.type === 'raw' && ['init'].includes(part.displayText.trim())) return false;
+      if (part.role === 'system' && part.type === 'raw') {
+        const subtype = part.raw?.subtype || part.text || part.displayText || '';
+        if (SUPPRESS_SYSTEM_SUBTYPES.has(subtype.trim())) return false;
+      }
       if (part.role === 'system' && part.type === 'result' && part.raw?.is_error !== true) return false;
       return true;
     });
