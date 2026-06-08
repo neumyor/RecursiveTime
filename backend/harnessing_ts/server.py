@@ -189,6 +189,16 @@ def create_app() -> FastAPI:
         accepted = _start_knowledge_graph_build(app, orchestrator, request.trigger or "manual", [])
         return {"accepted": accepted, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
+    @app.post("/api/knowledge-graph/pause")
+    async def pause_knowledge_graph_build(request: InterruptRequest) -> dict[str, Any]:
+        await orchestrator.pause_knowledge_graph_build(request.reason)
+        return {"bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
+
+    @app.post("/api/knowledge-graph/continue")
+    async def continue_knowledge_graph_build() -> dict[str, Any]:
+        accepted = _start_knowledge_graph_build(app, orchestrator, "continue", [])
+        return {"accepted": accepted, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
+
     @app.get("/api/knowledge-graph/status")
     async def knowledge_graph_status() -> dict[str, Any]:
         return orchestrator.get_knowledge_graph_build_status()

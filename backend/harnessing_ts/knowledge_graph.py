@@ -154,6 +154,7 @@ async def build_knowledge_graph(
     trigger: str,
     uploaded_paths: list[str] | None = None,
     on_part: Any | None = None,
+    on_runner: Any | None = None,
 ) -> list[Part]:
     ensure_knowledge_base_layout(store.root)
     _ensure_domain_brief(store.root)
@@ -179,9 +180,13 @@ async def build_knowledge_graph(
         mcp_server=mcp_server,
         on_part=on_part,
     ))
+    if on_runner:
+        on_runner(runner)
     try:
         parts = await runner.send_with_user_echo(knowledge_graph_prompt(trigger, uploaded_paths))
     finally:
+        if on_runner:
+            on_runner(None)
         await runner.close()
     finalize_knowledge_base(store.root)
     return parts

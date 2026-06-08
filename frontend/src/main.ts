@@ -182,6 +182,8 @@ app.innerHTML = `
         <div id="graphBuildStatus" class="graph-build-status"></div>
         <div class="graph-left-actions">
           <button id="buildGraphBtn" type="button"><span data-icon="RefreshCw"></span><span>Build</span></button>
+          <button id="continueGraphBtn" type="button" class="secondary"><span data-icon="Play"></span><span>Continue</span></button>
+          <button id="pauseGraphBtn" type="button" class="danger ghost"><span data-icon="Pause"></span><span>Pause</span></button>
           <button id="backToChatBtn" type="button" class="ghost"><span data-icon="ChevronLeft"></span><span>Main</span></button>
         </div>
         <label>
@@ -387,6 +389,8 @@ const els = {
   graphExtractionDepthInput: query<HTMLInputElement>('#graphExtractionDepthInput'),
   saveGraphLlmBtn: query<HTMLButtonElement>('#saveGraphLlmBtn'),
   buildGraphBtn: query<HTMLButtonElement>('#buildGraphBtn'),
+  continueGraphBtn: query<HTMLButtonElement>('#continueGraphBtn'),
+  pauseGraphBtn: query<HTMLButtonElement>('#pauseGraphBtn'),
   knowledgeSummary: query('#knowledgeSummary'),
   knowledgeCards: query('#knowledgeCards'),
   builderTrace: query('#builderTrace'),
@@ -464,6 +468,15 @@ els.backToChatBtn.addEventListener('click', () => {
 els.buildGraphBtn.addEventListener('click', async () => {
   await postJson('/api/knowledge-graph/build', { trigger: 'manual' });
   await refresh();
+});
+els.continueGraphBtn.addEventListener('click', async () => {
+  await postJson('/api/knowledge-graph/continue', {});
+  await refresh();
+});
+els.pauseGraphBtn.addEventListener('click', async () => {
+  const result = await postJson('/api/knowledge-graph/pause', { reason: 'Paused from knowledge graph UI.' });
+  state.bootstrap = result.bootstrap;
+  render();
 });
 els.saveGraphLlmBtn.addEventListener('click', async () => {
   await saveKnowledgeGraphLlmConfig();
@@ -855,6 +868,7 @@ function renderKnowledgeGraphBuilder(data: Bootstrap) {
   const build = data.knowledgeGraphBuild || {};
   const config = data.knowledgeGraphLlmConfig?.config || {};
   const running = Boolean(data.runtime?.knowledgeGraphRunning || build.running);
+  const canContinue = !running && ['paused', 'failed'].includes(String(build.status || ''));
   els.graphBuildStatus.innerHTML = `
     <span class="mini-pill ${build.status === 'failed' ? 'failed' : running ? 'active' : build.status === 'completed' ? 'ready' : 'pending'}">
       ${running ? '<span data-icon="Loader2"></span>' : ''}
@@ -867,6 +881,8 @@ function renderKnowledgeGraphBuilder(data: Bootstrap) {
   if (els.graphModelInput.value !== (config.model || '')) els.graphModelInput.value = config.model || '';
   if (els.graphBaseUrlInput.value !== (config.baseUrl || '')) els.graphBaseUrlInput.value = config.baseUrl || '';
   els.buildGraphBtn.disabled = running;
+  els.continueGraphBtn.disabled = !canContinue;
+  els.pauseGraphBtn.disabled = !running;
   els.graphExtractionDepthInput.disabled = running;
   els.saveGraphLlmBtn.disabled = false;
 }

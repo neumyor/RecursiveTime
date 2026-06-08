@@ -470,6 +470,7 @@ class HarnessOrchestrator:
 
     async def build_knowledge_graph(self, trigger: str = "manual", uploaded_paths: list[str] | None = None) -> dict[str, Any]:
         self._ensure_initialized()
+        setattr(self, "_knowledge_graph_pause_requested", False)
         status = self.store.write_knowledge_graph_build_status({
             "running": True,
             "status": "running",
@@ -492,9 +493,24 @@ class HarnessOrchestrator:
                 llm_config=self._knowledge_graph_llm_config(),
                 trigger=trigger,
                 uploaded_paths=uploaded_paths,
+                on_runner=lambda runner: setattr(self, "_knowledge_graph_runner", runner),
             )
         except Exception as exc:
             finished = now_iso()
+            if getattr(self, "_knowledge_graph_pause_requested", False):
+                self.store.write_knowledge_graph_build_status({
+                    "running": False,
+                    "status": "paused",
+                    "finishedAt": finished,
+                    "message": "Knowledge graph builder paused.",
+                })
+                self.store.append_timeline({
+                    "type": "knowledge_graph_build_paused",
+                    "timestamp": finished,
+                    "message": "paused",
+                    "payload": {"trigger": trigger},
+                })
+                return {"ok": False, "paused": True, "knowledgeGraph": self.get_knowledge_graph(), "status": self.get_knowledge_graph_build_status()}
             self.store.write_knowledge_graph_build_status({
                 "running": False,
                 "status": "failed",
@@ -509,6 +525,20 @@ class HarnessOrchestrator:
             })
             raise
         finished = now_iso()
+        if getattr(self, "_knowledge_graph_pause_requested", False):
+            self.store.write_knowledge_graph_build_status({
+                "running": False,
+                "status": "paused",
+                "finishedAt": finished,
+                "message": "Knowledge graph builder paused.",
+            })
+            self.store.append_timeline({
+                "type": "knowledge_graph_build_paused",
+                "timestamp": finished,
+                "message": "paused",
+                "payload": {"trigger": trigger},
+            })
+            return {"ok": False, "paused": True, "knowledgeGraph": self.get_knowledge_graph(), "status": self.get_knowledge_graph_build_status()}
         self.store.write_knowledge_graph_build_status({
             "running": False,
             "status": "completed",
@@ -522,6 +552,35 @@ class HarnessOrchestrator:
             "payload": {"trigger": trigger},
         })
         return {"ok": True, "knowledgeGraph": self.get_knowledge_graph(), "status": self.get_knowledge_graph_build_status()}
+
+    async def pause_knowledge_graph_build(self, reason: str | None = None) -> dict[str, Any]:
+        message = reason or "Paused from knowledge graph UI."
+        setattr(self, "_knowledge_graph_pause_requested", True)
+        runner = getattr(self, "_knowledge_graph_runner", None)
+        if runner is not None:
+            await runner.interrupt()
+            status = self.store.write_knowledge_graph_build_status({
+                "status": "pausing",
+                "message": message,
+            })
+            self.store.append_timeline({
+                "type": "knowledge_graph_build_pausing",
+                "timestamp": now_iso(),
+                "message": message,
+            })
+            return {"paused": True, "status": status}
+        status = self.store.write_knowledge_graph_build_status({
+            "running": False,
+            "status": "paused",
+            "finishedAt": now_iso(),
+            "message": message,
+        })
+        self.store.append_timeline({
+            "type": "knowledge_graph_build_paused",
+            "timestamp": status["finishedAt"],
+            "message": message,
+        })
+        return {"paused": True, "status": status}
 
     def read_workspace_file(self, path: str) -> dict[str, Any]:
         self._ensure_initialized()
