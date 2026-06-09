@@ -282,7 +282,12 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="text required")
         current = app.state.run_task
         if current is not None and not current.done():
-            raise HTTPException(status_code=409, detail="a harness run is already active")
+            if not _active_node_is_paused(orchestrator):
+                raise HTTPException(status_code=409, detail="a harness run is already active")
+            try:
+                await asyncio.wait_for(asyncio.shield(current), timeout=2.0)
+            except TimeoutError:
+                raise HTTPException(status_code=409, detail="paused node is still settling; retry shortly") from None
         app.state.run_task = asyncio.create_task(_run_main_turn(orchestrator, text))
         setattr(orchestrator, "_server_run_task", app.state.run_task)
         return {"accepted": True, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
@@ -442,6 +447,15 @@ async def _run_knowledge_graph_build(orchestrator: HarnessOrchestrator, trigger:
 
 def _task_running(task: Any) -> bool:
     return task is not None and not task.done()
+
+
+def _active_node_is_paused(orchestrator: HarnessOrchestrator) -> bool:
+    state = orchestrator.get_state()
+    node_id = state.get("activeNodeSessionId")
+    if not node_id:
+        return False
+    node = orchestrator.store.read_node_session(node_id)
+    return bool(node and node.get("status") == "paused")
 
 
 def now_iso_for_server() -> str:

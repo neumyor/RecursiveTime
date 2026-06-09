@@ -571,7 +571,7 @@ els.sendForm.addEventListener('submit', async (event) => {
   render();
   await nextPaint();
   await runStreamingAction(async () => {
-    const result = await postJson('/api/send', { text });
+    const result = await postSend(text);
     state.bootstrap = result.bootstrap;
     state.pendingParts = state.pendingParts.filter((part) => part.id !== pendingId);
     render();
@@ -1565,12 +1565,71 @@ async function interruptCurrent(reason: string) {
   try {
     const result = await postJson('/api/interrupt', { reason });
     state.bootstrap = result.bootstrap;
-    state.busy = false;
-    state.loadingMessage = null;
-    render();
+    state.busy = Boolean(result.bootstrap?.runtime?.running);
+    if (state.busy) {
+      state.loadingMessage = loadingPart('暂停中，等待当前请求收尾');
+      render();
+      await waitForBackendIdle(5000);
+    } else {
+      state.loadingMessage = null;
+      render();
+    }
   } catch (error) {
     showDetail('Interrupt Error', { message: error instanceof Error ? error.message : String(error) });
   }
+}
+
+async function postSend(text: string): Promise<any> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await postJson('/api/send', { text });
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isPausedResumeSettling(message)) break;
+      state.loadingMessage = loadingPart('暂停恢复中，正在重试发送');
+      await sleep(700);
+      try {
+        state.bootstrap = await fetchJson<Bootstrap>('/api/bootstrap');
+        state.busy = Boolean(state.bootstrap.runtime?.running);
+      } catch {
+        // Keep retrying with the original send request if the refresh races the server.
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+function isPausedResumeSettling(message: string): boolean {
+  if (!isActiveNodePaused(state.bootstrap)) return false;
+  return message.includes('still settling') || message.includes('already active');
+}
+
+async function waitForBackendIdle(timeoutMs: number) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    await sleep(300);
+    const data = await fetchJson<Bootstrap>('/api/bootstrap');
+    state.bootstrap = data;
+    state.busy = Boolean(data.runtime?.running);
+    if (!state.busy) {
+      state.loadingMessage = null;
+      render();
+      return;
+    }
+    render();
+  }
+}
+
+function isActiveNodePaused(data: Bootstrap | null): boolean {
+  if (!data?.state?.activeNodeSessionId) return false;
+  const node = (data.nodes || []).find((item) => item.id === data.state.activeNodeSessionId);
+  return node?.status === 'paused';
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 async function fetchJson<T = any>(url: string): Promise<T> {
