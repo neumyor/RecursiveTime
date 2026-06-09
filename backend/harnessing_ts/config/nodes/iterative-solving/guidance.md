@@ -77,7 +77,7 @@
   exit_reason: ""
   ```
   如果满足退出条件，则写 `recommend_exit: true`，并在 `exit_reason` 中说明依据。
-  注意：这个文件只是审计工件，不能作为节点流转控制通道。真正的流转决策必须通过最后的 MCP `finish_node` 参数传给后端。
+  注意：这个文件是审计工件，不是主控制通道；但后端会用 `recommend_exit` 校验最后的 MCP `finish_node` 参数是否自洽。
 - 最后输出一份本轮迭代总结报告 `reports/iterations/<iteration-id>-summary.md`，包含当前迭代的候选综合结论、最终保留或执行的方法/组合、工具落盘路径、执行结果、目标差距、case review 的高层结论和路径、下一轮迭代思路。summary 不能替代 case review。
 - 本节点的硬契约产物包括 `tools/**`、`runs/iterations/<iteration-id>/**`、`reports/iterations/<iteration-id>-candidate-review.md`、`reports/iterations/<iteration-id>-case-review.md`、`reports/iterations/<iteration-id>-summary.md` 和 `user/iteration-state.md`。当新增可复用工具时，`tools/registry.json`、`user/toolset-spec.md`、`user/solution-plan.md` 需要生成且被 iteration summary 引用。
 
@@ -86,5 +86,5 @@
 - 不要把 k 个候选做成无边界的 sweep；每个候选必须有独立假设、独立 subagent review、明确证据和统一综合结论。
 - 如果本轮不满足停止条件，最后调用 MCP `mcp__ts_harness__finish_node` 时必须设置 `loopDecision: "continue"` 且 `nextNode: "iterative-solving"`。
 - 如果本轮满足停止条件，最后调用 MCP `mcp__ts_harness__finish_node` 时必须设置 `loopDecision: "exit"` 且 `nextNode: "final-summary"`。
-- `user/iteration-state.md` 中的 `recommend_exit` 必须和 MCP 参数一致，但后端不会解析该文件来控制流转。
+- `user/iteration-state.md` 中的 `recommend_exit` 必须和 MCP 参数一致；后端会拒绝二者不一致的 `finish_node`。
 - 完成本节点只能调用 MCP `mcp__ts_harness__finish_node`。不要输出 `harnessControl` JSON，也不要期望后端从文件产物推断节点完成。

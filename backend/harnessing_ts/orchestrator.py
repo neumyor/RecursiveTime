@@ -765,6 +765,50 @@ class HarnessOrchestrator:
             raise RuntimeError("iterative-solving loopDecision=continue requires nextNode=iterative-solving.")
         if loop_decision == "exit" and next_node not in {None, "final-summary"}:
             raise RuntimeError("iterative-solving loopDecision=exit requires nextNode=final-summary.")
+        route_decision = self._iterative_route_decision(next_node, loop_decision)
+        recommend_exit = self._read_iteration_state_recommend_exit()
+        if recommend_exit is False and route_decision == "exit":
+            raise RuntimeError(
+                "iterative-solving finish_node requested final-summary, but user/iteration-state.md "
+                "has recommend_exit: false. Use loopDecision=continue with nextNode=iterative-solving, "
+                "or update iteration-state.md only if the contract stop criteria are actually met."
+            )
+        if recommend_exit is True and route_decision == "continue":
+            raise RuntimeError(
+                "iterative-solving finish_node requested another iteration, but user/iteration-state.md "
+                "has recommend_exit: true. Use loopDecision=exit with nextNode=final-summary, "
+                "or update iteration-state.md if the work should continue."
+            )
+
+    def _iterative_route_decision(self, next_node: NodeType | None, loop_decision: str | None) -> str | None:
+        if loop_decision in {"continue", "exit"}:
+            return loop_decision
+        if next_node == "iterative-solving":
+            return "continue"
+        if next_node == "final-summary":
+            return "exit"
+        return None
+
+    def _read_iteration_state_recommend_exit(self) -> bool | None:
+        path = self.workspace_path / "user" / "iteration-state.md"
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            return None
+        for line in text.splitlines()[:80]:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or stripped.startswith("```"):
+                continue
+            if not stripped.startswith("recommend_exit"):
+                continue
+            _, _, raw = stripped.partition(":")
+            value = raw.strip().strip("\"'").lower()
+            if value == "true":
+                return True
+            if value == "false":
+                return False
+            return None
+        return None
 
     def _ensure_initialized(self) -> None:
         if not self.state:
