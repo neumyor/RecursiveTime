@@ -85,12 +85,12 @@ def create_harness_mcp_server(
                     "nextNode": {
                         "type": "string",
                         "enum": [*list(NODE_TYPES), "none"],
-                        "description": "Structured node routing decision. For iterative-solving, use iterative-solving to continue or final-summary to exit.",
+                        "description": "Structured node routing decision. For iterative-solving, this must agree with loopDecision: iterative-solving for continue, final-summary for exit.",
                     },
                     "loopDecision": {
                         "type": "string",
                         "enum": ["continue", "exit", "none"],
-                        "description": "Structured loop decision for iterative-solving. Use continue for another iteration, exit for final-summary.",
+                        "description": "Required for iterative-solving. Use continue for another iteration, exit for final-summary.",
                     },
                     "outputPaths": {"type": "array", "items": {"type": "string"}},
                 },

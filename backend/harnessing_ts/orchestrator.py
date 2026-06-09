@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -92,12 +93,25 @@ class HarnessOrchestrator:
             return result
         return await self.finish_node(args)
 
+    async def request_finish_node_for_node(self, args: dict[str, Any], node_id: str) -> dict[str, Any]:
+        self._ensure_initialized()
+        assert self.state
+        active_id = self.state.get("activeNodeSessionId")
+        if active_id != node_id:
+            raise RuntimeError(
+                f"finish_node rejected: MCP session is bound to node {node_id}, "
+                f"but active node is {active_id or 'none'}."
+            )
+        return await self.request_finish_node(args)
+
     async def enter_node(self, args: dict[str, Any]) -> NodeSession:
         self._ensure_initialized()
         assert self.state
         node_type = args["nodeType"]
         if self.state["activeNode"]:
             raise RuntimeError(f"Cannot enter {node_type}; active node {self.state['activeNode']} is still running.")
+        if node_type == "final-summary" and self._read_iteration_state_recommend_exit() is False:
+            raise RuntimeError("Cannot enter final-summary while user/iteration-state.md has recommend_exit: false.")
         node = self.store.create_node_session(node_type, args.get("rationale"), args.get("inputSummary"))
         node["status"] = "running"
         self.store.write_node_session(node)
@@ -133,15 +147,21 @@ class HarnessOrchestrator:
         if not self.active_node_session:
             raise RuntimeError("No active node session to finish.")
         node = self.active_node_session
-        node["status"] = "completed" if args.get("success", True) else "failed"
+        success = args.get("success", True)
+        goal_met = args.get("goalMet")
+        next_node = self._normalize_next_node(args.get("nextNode"))
+        loop_decision = self._normalize_loop_decision(args.get("loopDecision"))
+        output_paths = list(args.get("outputPaths") or [])
+        self._validate_finish_control(node["nodeType"], success, next_node, loop_decision, output_paths, goal_met)
+
+        node["status"] = "completed" if success else "failed"
         node["completedAt"] = now_iso()
         node["summary"] = args.get("summary", "")
-        node["success"] = args.get("success", True)
-        node["goalMet"] = args.get("goalMet")
-        node["nextNode"] = self._normalize_next_node(args.get("nextNode"))
-        node["loopDecision"] = self._normalize_loop_decision(args.get("loopDecision"))
-        self._validate_finish_control(node["nodeType"], node["success"], node.get("nextNode"), node.get("loopDecision"))
-        node["outputPaths"] = list(args.get("outputPaths") or [])
+        node["success"] = success
+        node["goalMet"] = goal_met
+        node["nextNode"] = next_node
+        node["loopDecision"] = loop_decision
+        node["outputPaths"] = output_paths
         self.store.write_node_session(node)
 
         if node["success"] and node["nodeType"] not in self.state["completedNodes"]:
@@ -177,12 +197,33 @@ class HarnessOrchestrator:
         self.store.record_artifact(args["path"], self.active_node_session.get("id") if self.active_node_session else None, self.active_node_session.get("nodeType") if self.active_node_session else None, args.get("summary"))
         return {"ok": True}
 
+    def record_artifact_for_node(self, args: dict[str, Any], node_id: str, node_type: NodeType) -> dict[str, bool]:
+        self._ensure_initialized()
+        node = self.store.read_node_session(node_id)
+        event_type = "late_after_finish" if node and node.get("status") in {"completed", "failed", "exited"} else None
+        summary = args.get("summary")
+        if event_type:
+            summary = f"[{event_type}] {summary or args['path']}"
+        self.store.record_artifact(args["path"], node_id, node_type, summary)
+        return {"ok": True}
+
     def record_run(self, args: RunRecord) -> dict[str, bool]:
         self._ensure_initialized()
         record = dict(args)
         if self.active_node_session:
             record.setdefault("nodeSessionId", self.active_node_session["id"])
             record.setdefault("nodeType", self.active_node_session["nodeType"])
+        self.store.record_run(record)
+        return {"ok": True}
+
+    def record_run_for_node(self, args: RunRecord, node_id: str, node_type: NodeType) -> dict[str, bool]:
+        self._ensure_initialized()
+        record = dict(args)
+        record["nodeSessionId"] = node_id
+        record["nodeType"] = node_type
+        node = self.store.read_node_session(node_id)
+        if node and node.get("status") in {"completed", "failed", "exited"}:
+            record["status"] = f"late_after_finish:{record.get('status', 'unknown')}"
         self.store.record_run(record)
         return {"ok": True}
 
@@ -756,16 +797,22 @@ class HarnessOrchestrator:
         success: bool,
         next_node: NodeType | None,
         loop_decision: str | None,
+        output_paths: list[str] | None = None,
+        goal_met: bool | None = None,
     ) -> None:
         if node_type != "iterative-solving":
             return
-        if success and not next_node and not loop_decision:
-            raise RuntimeError("iterative-solving finish_node requires loopDecision or nextNode.")
+        if success and not loop_decision:
+            raise RuntimeError("iterative-solving finish_node requires explicit loopDecision.")
         if loop_decision == "continue" and next_node not in {None, "iterative-solving"}:
             raise RuntimeError("iterative-solving loopDecision=continue requires nextNode=iterative-solving.")
         if loop_decision == "exit" and next_node not in {None, "final-summary"}:
             raise RuntimeError("iterative-solving loopDecision=exit requires nextNode=final-summary.")
         route_decision = self._iterative_route_decision(next_node, loop_decision)
+        if success and route_decision == "continue" and goal_met is True:
+            raise RuntimeError("iterative-solving cannot set goalMet=true while loopDecision=continue.")
+        if success:
+            self._validate_iterative_output_paths(output_paths or [])
         recommend_exit = self._read_iteration_state_recommend_exit()
         if recommend_exit is False and route_decision == "exit":
             raise RuntimeError(
@@ -778,6 +825,26 @@ class HarnessOrchestrator:
                 "iterative-solving finish_node requested another iteration, but user/iteration-state.md "
                 "has recommend_exit: true. Use loopDecision=exit with nextNode=final-summary, "
                 "or update iteration-state.md if the work should continue."
+            )
+
+    def _validate_iterative_output_paths(self, output_paths: list[str]) -> None:
+        normalized = [_workspace_relative_path(path, self.workspace_path) for path in output_paths]
+        requirements = {
+            "candidate review": r"^reports/iterations/.+-candidate-review\.md$",
+            "case review": r"^reports/iterations/.+-case-review\.md$",
+            "iteration summary": r"^reports/iterations/.+-summary\.md$",
+            "iteration state": r"^user/iteration-state\.md$",
+        }
+        missing = [
+            label
+            for label, pattern in requirements.items()
+            if not any(re.match(pattern, path) for path in normalized)
+        ]
+        if missing:
+            raise RuntimeError(
+                "iterative-solving finish_node is missing required outputPaths: "
+                + ", ".join(missing)
+                + ". Complete the full node artifacts before calling finish_node."
             )
 
     def _iterative_route_decision(self, next_node: NodeType | None, loop_decision: str | None) -> str | None:
@@ -875,12 +942,14 @@ class HarnessOrchestrator:
         ctx = PromptContext(str(self.workspace_path), self.locale)
         llm_config = read_effective_llm_config(self.workspace_path)
         sdk_config = build_sdk_invocation_config(llm_config)
+        node_id = node["id"]
+        node_type = node["nodeType"]
         mcp_server = create_harness_mcp_server(
             session_role="node",
-            finish_node=self.request_finish_node,
+            finish_node=lambda args: self.request_finish_node_for_node(args, node_id),
             query_knowledge=self.request_query_knowledge,
-            record_artifact=self.record_artifact,
-            record_run=self.record_run,
+            record_artifact=lambda args: self.record_artifact_for_node(args, node_id, node_type),
+            record_run=lambda args: self.record_run_for_node(args, node_id, node_type),
             get_runtime_settings=self.get_runtime_settings,
         )
         if mcp_server is None:
@@ -902,3 +971,13 @@ class HarnessOrchestrator:
             log=MessageLog(self.store.node_log_path(node["id"])),
             on_session_id=on_session_id,
         ))
+
+
+def _workspace_relative_path(path: str, workspace_path: Path) -> str:
+    candidate = Path(path)
+    if candidate.is_absolute():
+        try:
+            return candidate.resolve().relative_to(workspace_path.resolve()).as_posix()
+        except ValueError:
+            return candidate.as_posix().lstrip("/")
+    return candidate.as_posix().lstrip("./")

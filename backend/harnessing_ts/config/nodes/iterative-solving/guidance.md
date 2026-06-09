@@ -87,4 +87,6 @@
 - 如果本轮不满足停止条件，最后调用 MCP `mcp__ts_harness__finish_node` 时必须设置 `loopDecision: "continue"` 且 `nextNode: "iterative-solving"`。
 - 如果本轮满足停止条件，最后调用 MCP `mcp__ts_harness__finish_node` 时必须设置 `loopDecision: "exit"` 且 `nextNode: "final-summary"`。
 - `user/iteration-state.md` 中的 `recommend_exit` 必须和 MCP 参数一致；后端会拒绝二者不一致的 `finish_node`。
+- `goalMet` 表示 problem contract 目标或 contract 停止条件是否满足，不表示“本轮 node 是否完成”。如果继续下一轮，必须设置 `goalMet: false`。
+- `finish_node.outputPaths` 必须包含本轮 candidate review、case review、summary 和 `user/iteration-state.md`。只有候选 subagent 报告、候选 metrics 或单个工具路径不足以完成本 node。
 - 完成本节点只能调用 MCP `mcp__ts_harness__finish_node`。不要输出 `harnessControl` JSON，也不要期望后端从文件产物推断节点完成。

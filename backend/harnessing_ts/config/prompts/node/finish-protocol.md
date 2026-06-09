@@ -4,13 +4,13 @@
 你必须在完成必要工件后调用 MCP 工具 `mcp__ts_harness__finish_node`，参数为：
 - `success`: 本 node 是否成功完成。
 - `summary`: 极短摘要，长内容必须写入报告文件。
-- `goalMet`: 如果本 node 能判断目标是否达成，则给出布尔值；否则可省略。
-- `nextNode`: 结构化节点流转决策。普通节点通常省略，由后端按 node spec 的 `next` 推进；`iterative-solving` 必须填写：
+- `goalMet`: 是否已经满足 problem contract 的目标或明确达到 contract 停止条件；不要用它表示“本 node 已完成”。
+- `nextNode`: 结构化节点流转决策。普通节点通常省略，由后端按 node spec 的 `next` 推进；`iterative-solving` 必须填写，且必须和 `loopDecision` 一致：
   - `iterative-solving`: 继续下一轮迭代。
   - `final-summary`: 停止迭代并进入最终总结。
   - `none`: 停止 pipeline，不进入后续节点。
-- `loopDecision`: 仅 `iterative-solving` 使用。继续迭代填 `continue`，退出迭代填 `exit`。
-- `outputPaths`: 本 node 的关键产物路径，只列锚点文件。
+- `loopDecision`: `iterative-solving` 必填。继续迭代填 `continue`，退出迭代填 `exit`。
+- `outputPaths`: 本 node 的关键产物路径，只列锚点文件。`iterative-solving` 必须包含 candidate review、case review、iteration summary 和 `user/iteration-state.md`，否则后端会拒绝完成请求。
 
 控制模式由后端决定：
 - `auto`: MCP 请求会被 harness 自动放行并推进 pipeline。
