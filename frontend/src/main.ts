@@ -92,7 +92,6 @@ const state = {
   knowledgeBaseCards: null as JsonMap | null,
   knowledgeBaseCardsBusy: false,
   expandedToolPartIds: new Set<string>(),
-  candidateSaveTimer: 0,
   settings: {
     iterativeK: 3,
     graphDepth: 2,
@@ -333,17 +332,18 @@ app.innerHTML = `
   </main>
 
   <aside class="right-rail">
-    <section class="panel">
-      <div class="panel-heading">
-        <span data-icon="SlidersHorizontal"></span>
-        <span>Runtime Controls</span>
+    <button id="kgCta" class="kg-cta" type="button" data-state="idle" aria-label="Open Knowledge Graph">
+      <div class="kg-cta-icon"><span data-icon="Network"></span></div>
+      <div class="kg-cta-body">
+        <div class="kg-cta-eyebrow">Reference Knowledge</div>
+        <div class="kg-cta-title">Knowledge Graph</div>
+        <div class="kg-cta-meta">
+          <span class="kg-cta-pill" id="kgCtaPill">Idle</span>
+          <span class="kg-cta-stats" id="kgCtaStats">not built</span>
+        </div>
       </div>
-      <label>
-        <span>Iterative candidates (k)</span>
-        <input id="candidateCountInput" type="number" min="1" max="8" step="1" />
-      </label>
-      <button id="knowledgeGraphBtn" type="button" class="secondary full-width"><span data-icon="Network"></span><span>Knowledge Graph</span></button>
-    </section>
+      <div class="kg-cta-arrow"><span data-icon="ChevronRight"></span></div>
+    </button>
     <section class="panel files-panel">
       <div class="panel-heading">
         <span data-icon="FolderTree"></span>
@@ -463,8 +463,9 @@ const els = {
   rawZipUploadForm: query<HTMLFormElement>('#rawZipUploadForm'),
   rawZipFile: query<HTMLInputElement>('#rawZipFile'),
   rawZipUploadBtn: query<HTMLButtonElement>('#rawZipUploadBtn'),
-  candidateCountInput: query<HTMLInputElement>('#candidateCountInput'),
-  knowledgeGraphBtn: query<HTMLButtonElement>('#knowledgeGraphBtn'),
+  kgCta: query<HTMLButtonElement>('#kgCta'),
+  kgCtaPill: query<HTMLElement>('#kgCtaPill'),
+  kgCtaStats: query<HTMLElement>('#kgCtaStats'),
   stateBtn: query<HTMLButtonElement>('#stateBtn'),
   llmBtn: query<HTMLButtonElement>('#llmBtn'),
   settingsBtn: query<HTMLButtonElement>('#settingsBtn'),
@@ -549,7 +550,7 @@ els.pauseGraphBtn.addEventListener('click', async () => {
 els.saveGraphLlmBtn.addEventListener('click', async () => {
   await saveKnowledgeGraphLlmConfig();
 });
-els.knowledgeGraphBtn.addEventListener('click', async () => {
+els.kgCta.addEventListener('click', async () => {
   state.view = 'knowledgeGraph';
   history.pushState({}, '', '/knowledge-graph');
   const graph = await fetchJson<JsonMap>('/api/knowledge-graph');
@@ -561,27 +562,9 @@ window.addEventListener('popstate', () => {
   state.view = path === '/knowledge-graph' ? 'knowledgeGraph' : path === '/settings' ? 'settings' : 'chat';
   render();
 });
-els.candidateCountInput.addEventListener('input', () => {
-  window.clearTimeout(state.candidateSaveTimer);
-  state.candidateSaveTimer = window.setTimeout(() => {
-    saveCandidateCount().catch((error) => showDetail('Runtime Settings Error', { message: error instanceof Error ? error.message : String(error) }));
-  }, 350);
-});
-els.candidateCountInput.addEventListener('change', async () => {
-  window.clearTimeout(state.candidateSaveTimer);
-  await saveCandidateCount();
-});
 els.graphExtractionDepthInput.addEventListener('change', async () => {
   await saveGraphExtractionDepth();
 });
-async function saveCandidateCount() {
-  const value = Number.parseInt(els.candidateCountInput.value, 10);
-  if (!Number.isFinite(value)) return;
-  const result = await postJson('/api/runtime-settings', { iterativeCandidateCount: value });
-  state.bootstrap = result.bootstrap;
-  state.busy = Boolean(result.bootstrap?.runtime?.running);
-  render();
-}
 async function saveGraphExtractionDepth() {
   const value = Number.parseInt(els.graphExtractionDepthInput.value, 10);
   if (!Number.isFinite(value)) return;
@@ -736,6 +719,7 @@ function liveRender(data: Bootstrap) {
     renderBuilderTrace(data.knowledgeGraphParts || []);
   }
 
+  renderKgCta(data);
   renderShellState();
   renderViewState();
   hydrateIcons();
@@ -773,6 +757,7 @@ function render() {
   renderTimeline(data.timeline);
   renderFileTree(data.fileTree);
   renderRuntimeSettings(data.runtimeSettings || ws.runtimeSettings);
+  renderKgCta(data);
   renderDebugActions(Boolean(data.debugEnabled));
   updateControls(data);
   renderShellState();
@@ -833,22 +818,31 @@ function renderNodes(specs: JsonMap[], ws: JsonMap, sessions: JsonMap[]) {
     const done = completedNodes.includes(spec.type);
     const failed = !done && session?.status === 'failed';
     const status = active ? 'active' : done ? 'done' : failed ? 'failed' : 'pending';
+    const isOpen = state.selectedNodeType === spec.type;
     return `
-      <button class="node-item ${state.selectedNodeType === spec.type ? 'selected' : ''}" data-node="${escapeHtml(spec.type)}">
-        <span class="node-index">${index + 1}</span>
-        <span class="node-copy">
+      <details class="node-item" data-node="${escapeHtml(spec.type)}" ${isOpen ? 'open' : ''}>
+        <summary class="node-header">
+          <span class="node-index">${index + 1}</span>
           <span class="node-name">${escapeHtml(spec.type)}</span>
-          <span class="meta">${escapeHtml(spec.phase)} · ${escapeHtml(spec.purpose)}</span>
-        </span>
-        <span class="badge ${status}">${statusIcon(status)}${status}</span>
-      </button>
+          <span class="badge ${status}">${statusIcon(status)}${status}</span>
+          <span class="node-chevron" data-icon="ChevronRight"></span>
+        </summary>
+        <div class="node-body">
+          <div class="node-purpose">${escapeHtml(spec.phase)} · ${escapeHtml(spec.purpose)}</div>
+        </div>
+      </details>
     `;
   }).join('');
 
-  for (const item of els.nodeList.querySelectorAll<HTMLElement>('.node-item')) {
-    item.addEventListener('click', () => {
-      state.selectedNodeType = item.dataset.node || null;
-      render();
+  for (const details of els.nodeList.querySelectorAll<HTMLDetailsElement>('details.node-item')) {
+    details.addEventListener('toggle', () => {
+      if (!details.open) return;
+      // Close any other open details (exclusive accordion)
+      for (const other of els.nodeList.querySelectorAll<HTMLDetailsElement>('details.node-item')) {
+        if (other !== details && other.open) other.open = false;
+      }
+      state.selectedNodeType = details.dataset.node || null;
+      renderNodeDetail(specs, sessions);
     });
   }
 }
@@ -918,10 +912,35 @@ function renderChat(data: Bootstrap) {
 }
 
 function renderRuntimeSettings(settings: JsonMap | null | undefined) {
-  const value = settings?.iterativeCandidateCount ?? 3;
-  if (els.candidateCountInput.value !== String(value)) els.candidateCountInput.value = String(value);
   const graphDepth = settings?.knowledgeGraphExtractionDepth ?? 2;
   if (els.graphExtractionDepthInput.value !== String(graphDepth)) els.graphExtractionDepthInput.value = String(graphDepth);
+}
+
+function renderKgCta(data: Bootstrap) {
+  if (!data) return;
+  const build = data.knowledgeGraphBuild || {};
+  const graph = data.knowledgeGraph || {};
+  const running = Boolean(data.runtime?.knowledgeGraphRunning || build.running);
+  const classes = (graph.nodes || []).length;
+  const relations = (graph.edges || []).length;
+  let state: 'idle' | 'building' | 'built' | 'failed' = 'idle';
+  let label = 'Idle';
+  if (build.status === 'failed') {
+    state = 'failed';
+    label = 'Failed';
+  } else if (running) {
+    state = 'building';
+    label = 'Building';
+  } else if (build.status === 'completed' && classes > 0) {
+    state = 'built';
+    label = 'Built';
+  }
+  els.kgCta.dataset.state = state;
+  els.kgCtaPill.textContent = label;
+  els.kgCtaPill.className = `kg-cta-pill ${state}`;
+  els.kgCtaStats.textContent = classes > 0 || relations > 0
+    ? `${classes} classes · ${relations} relations`
+    : 'not built';
 }
 
 function syncSettingsFromBootstrap(data: Bootstrap) {
