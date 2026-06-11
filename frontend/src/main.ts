@@ -492,11 +492,34 @@ els.messageInput.addEventListener('input', () => {
   autosizeComposer();
   updateSendButton();
 });
+
+// Track IME composition state locally. We need this because some mobile
+// IMEs (e.g. iOS Chinese) commit the candidate and *then* fire the final
+// Enter keydown with isComposing already false — by the time the keydown
+// arrives the composition has ended, so a flag tracked via
+// compositionstart / compositionend is the only reliable signal.
+let imeActive = false;
+els.messageInput.addEventListener('compositionstart', () => {
+  imeActive = true;
+});
+els.messageInput.addEventListener('compositionend', () => {
+  imeActive = false;
+});
 els.messageInput.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-    event.preventDefault();
-    if (!els.sendBtn.disabled) els.sendForm.requestSubmit();
-  }
+  // An IME-processing Enter must never send. Four independent signals cover
+  // the matrix of browsers and IMEs:
+  //   1. event.isComposing  — modern Chromium / WebKit / Firefox (Chrome 66+,
+  //      Firefox 68+, Safari 13+). True while a composition is active.
+  //   2. event.keyCode === 229 — the legacy "IME processed" indicator that
+  //      every browser still emits as a fallback (deprecated but universal).
+  //   3. event.key === 'Process' — what older WebKit and some mobile IMEs
+  //      set on the keydown of a key the IME consumed.
+  //   4. imeActive — the composition-state flag tracked above, for the
+  //      post-composition-end race on iOS Chinese / Korean keyboards.
+  if (event.isComposing || event.keyCode === 229 || event.key === 'Process' || imeActive) return;
+  if (event.key !== 'Enter' || event.shiftKey) return;
+  event.preventDefault();
+  if (!els.sendBtn.disabled) els.sendForm.requestSubmit();
 });
 els.approveControlBtn.addEventListener('click', async () => {
   await runAction(async () => {
