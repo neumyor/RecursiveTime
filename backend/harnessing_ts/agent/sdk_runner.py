@@ -77,7 +77,17 @@ class SdkRunner:
         options = ClaudeCodeOptions(**kwargs)
         if self._client is None:
             self._client = ClaudeSDKClient(options=options)
-            await self._client.connect()
+            try:
+                await self._client.connect()
+            except Exception:
+                # The Claude Code CLI failed to start (missing binary,
+                # version mismatch, unknown extra_args option, etc.).
+                # The cached client would deadlock the next send() on the
+                # SDK's 60s "initialize" control-request timeout because
+                # connect() never finished. Drop it so the next call
+                # spawns a fresh CLI.
+                self._client = None
+                raise
         self._running = True
         self._interrupted = False
         try:
@@ -93,6 +103,14 @@ class SdkRunner:
                 if self.config.on_part:
                     self.config.on_part(part)
                 parts.append(part)
+        except BaseException:
+            # Anything that escapes the receive loop — SDK exceptions,
+            # "Control request timeout: initialize", user interrupt, or
+            # BaseException-derived cancellations — leaves the client in
+            # an unusable state. Clear it so the next send() spawns a
+            # fresh CLI subprocess instead of hanging on the cached one.
+            self._client = None
+            raise
         finally:
             self._running = False
         if self._interrupted:

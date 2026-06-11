@@ -48,7 +48,13 @@ def build_sdk_invocation_config(cfg: LlmConfig) -> SdkInvocationConfig:
     model = cfg.model.strip() or None
     extra_args: dict[str, Any] = {}
     if cfg.contextWindow == "1m":
-        extra_args["--betas"] = "context-1m-2025-08-07"
+        # The Claude Code SDK transport prepends its own "--" to every
+        # extra_args key (see claude_code_sdk/_internal/transport/subprocess_cli.py
+        # line ~157: `cmd.extend([f"--{flag}", str(value)])`). Putting the
+        # leading "--" on the key here would produce "----betas" and the
+        # CLI rejects the unknown option on startup, hanging the harness
+        # until the SDK's 60s "initialize" control-request timeout fires.
+        extra_args["betas"] = "context-1m-2025-08-07"
     if cfg.authMode != "manual" or not cfg.apiKey:
         return SdkInvocationConfig(model=model, extra_args=extra_args or None)
 
