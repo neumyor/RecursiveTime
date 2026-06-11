@@ -42,7 +42,7 @@ async def _main() -> None:
     finish.add_argument("--goal-met")
     finish.add_argument("--next-node", choices=[*NODE_TYPES, "none"])
     finish.add_argument("--loop-decision", choices=["continue", "exit", "none"])
-    finish.add_argument("--output-path")
+    finish.add_argument("--output-path", nargs="*", default=None)
 
     training = sub.add_parser("training-template")
     training.add_argument("--output", default="examples/training/agent_lightning_template.py")
@@ -84,7 +84,7 @@ async def _main() -> None:
             "goalMet": _optional_bool(args.goal_met),
             "nextNode": args.next_node,
             "loopDecision": args.loop_decision,
-            "outputPaths": [args.output_path] if args.output_path else None,
+            "outputPaths": list(args.output_path) if args.output_path else None,
         }))
         return
     if command == "training-template":

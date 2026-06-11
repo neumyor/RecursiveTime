@@ -2,6 +2,22 @@
 
 本项目是一个基于 Claude Code SDK 的时间序列 tool-use harness。它不是 research agent；核心目标是让 agent 更可靠地结合背景知识、数据证据和工具集来完成时间序列问题求解。
 
+## 文档同步要求（强制）
+
+`AGENT.md` 是面向 agent / 后续维护者的入口规范，必须与代码、prompt、CLI、配置保持一致。任何一次涉及以下范围的改动，**都必须**在同一个 commit（或紧随其后的 commit）里检查并同步 `AGENT.md`：
+
+- Node chain 增删、节点 `phase/purpose/next` 变化、节点 spec / guidance 重大改写
+- CLI 子命令、参数、flag 增删（`backend/harnessing_ts/cli.py`）
+- MCP 工具集（`backend/harnessing_ts/mcp/server.py`）增删、schema 变更
+- node native 工具白名单（`backend/harnessing_ts/config/nodes/<node>/native-tools.md`）
+- 关键 prompt 模板（`backend/harnessing_ts/config/prompts/`）
+- 控制模式（`TS_HARNESS_CONTROL_MODE`）、dry-run / debug / max-turns / workspace 等环境变量
+- LLM 配置字段（`backend/harnessing_ts/settings/llm.py`、`config.llm.example.json`）
+- 运行时记录 / 工作区布局 / `.gitignore` 变化
+- 新增/废弃的运行命令、启动入口、Web UI 端口
+
+提交前请用 `git diff -- AGENT.md README.md docs/` 复核一次；如果只改了代码而这两份规范没动，需要在 commit message 中显式说明 “no doc change required: …”，否则视为遗漏。
+
 ## 项目入口
 
 本项目后端使用 Python 实现，依赖由 `uv` 管理。前端是 `frontend/` 下的静态页面，直接由 Python FastAPI 服务托管。
@@ -28,8 +44,8 @@ Dry-run 状态流转：
 
 ```bash
 uv run ts-harness --dry-run init
-uv run ts-harness --dry-run start-node problem-definition --input-summary "ECG5000 abnormal sample classification"
-uv run ts-harness --dry-run finish-node --summary "Wrote user/problem.md" --goal-met true --output-path user/problem.md
+uv run ts-harness --dry-run start-node problem-contract --input-summary "ECG5000 abnormal sample classification"
+uv run ts-harness --dry-run finish-node --summary "Wrote user/problem-contract.md and user/data-spec.md" --goal-met true --output-path user/problem-contract.md --output-path user/data-spec.md
 ```
 
 Python 语法检查：
@@ -61,14 +77,6 @@ TS_HARNESS_DRY_RUN=true uv run ts-harness-server
 ```bash
 TS_HARNESS_DEBUG=true uv run ts-harness-server
 ```
-
-第三方 Anthropic-compatible provider 的最小链路测试可临时关闭 Python in-process MCP：
-
-```bash
-TS_HARNESS_DISABLE_MCP=true uv run ts-harness send "请只回复：调用成功。"
-```
-
-手动 `baseUrl` provider 默认使用文本控制协议，不依赖 in-process MCP。main agent 通过 `harnessControl.action=enter_node` 请求进入 node；node agent 通过 `harnessControl.action=finish_node` 交还状态。后端负责解析并写入 timeline。
 
 ## LLM 配置
 
@@ -158,18 +166,16 @@ uv run ts-harness training-template
 ## 当前 Node Chain
 
 ```text
-problem-definition
-→ knowledge-ingestion
-→ data-conversion
-→ data-understanding
-→ task-formalization
-→ toolset-construction
-→ tool-use-planning
-→ tool-guided-solving
-→ case-review
-→ solution-finalization
-→ process-summary
+problem-contract
+→ iterative-solving
+→ final-summary
 ```
+
+- `problem-contract`：用用户输入和 `references/**` 拉取/处理数据、exploration、明确真实任务，产出 `user/problem-contract.md`、`user/data-spec.md`，并为独立 Literature Knowledge Builder 写 `knowledge_base/domain-brief.md`。
+- `iterative-solving`：可重复执行。每轮先用 `mcp__ts_harness__get_runtime_settings` 读取 `iterativeCandidateCount` 作为 k，提出 k 个候选，用 `Task` subagent 分别做可行性测试和 case review，统一综合后把本轮保留或执行的方法落盘为 `tools/<tool-name>/`，更新 `tools/registry.json` / `user/toolset-spec.md` / `user/solution-plan.md`，执行并把结果写入 `runs/iterations/<iteration-id>/`，最后**先写** `reports/iterations/<iteration-id>-case-review.md`、**再写** `reports/iterations/<iteration-id>-summary.md`、更新 `user/iteration-state.md`。通过 `mcp__ts_harness__finish_node(loopDecision=continue|exit, nextNode=iterative-solving|final-summary, outputPaths=…)` 交还控制权。
+- `final-summary`：迭代结束才进。基于 timeline、runs、tools、problem-contract、data-spec 总结整个优化历程、最终工具使用方案、最终结果和系统边界，产出 `reports/final-summary.md` 和 `user/final-solution.md`。如果进入后发现 `user/iteration-state.md` 的 `recommend_exit` 或 contract 指向继续迭代，应标记失败并要求回到 `iterative-solving`。
+
+每个 node 都是独立 Claude Code SDK session，拥有自己的 system prompt、native-tools 白名单和 node 日志。所有节点流转（`enter_node` / `finish_node`）一律走 MCP `mcp__ts_harness__*` 工具，禁止用 JSON 文本块或 `harnessControl.action=…` 等替代控制协议。
 
 ## 运行记录
 
