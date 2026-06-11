@@ -512,6 +512,12 @@ class HarnessOrchestrator:
         cfg = self._knowledge_graph_llm_config()
         return {"config": mask_llm_config(cfg), "sdk": {}}
 
+    def update_main_llm_config(self, values: dict[str, Any]) -> dict[str, Any]:
+        self._ensure_initialized()
+        self.store.write_main_llm_config(values)
+        cfg = read_effective_llm_config(self.workspace_path)
+        return {"config": mask_llm_config(cfg), "sdk": {}}
+
     async def build_knowledge_graph(self, trigger: str = "manual", uploaded_paths: list[str] | None = None) -> dict[str, Any]:
         self._ensure_initialized()
         setattr(self, "_knowledge_graph_pause_requested", False)

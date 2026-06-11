@@ -82,13 +82,49 @@ const state = {
   lastRefreshAt: null as Date | null,
   leftCollapsed: window.innerWidth <= 820,
   rightCollapsed: window.innerWidth <= 1180,
-  view: (window.location.pathname === '/knowledge-graph' ? 'knowledgeGraph' : 'chat') as 'chat' | 'knowledgeGraph',
+  view: ((window.location.pathname === '/knowledge-graph'
+    ? 'knowledgeGraph'
+    : window.location.pathname === '/settings'
+    ? 'settings'
+    : 'chat') as 'chat' | 'knowledgeGraph' | 'settings'),
   selectedGraphNodeId: null as string | null,
   selectedKnowledgeBaseKind: null as string | null,
   knowledgeBaseCards: null as JsonMap | null,
   knowledgeBaseCardsBusy: false,
   expandedToolPartIds: new Set<string>(),
   candidateSaveTimer: 0,
+  settings: {
+    iterativeK: 3,
+    graphDepth: 2,
+    graphAuthMode: 'manual',
+    graphProtocol: '',
+    graphContext: '',
+    graphModel: '',
+    graphBaseUrl: '',
+    graphApiKey: '',
+    mainAuthMode: 'manual',
+    mainProtocol: '',
+    mainContext: '',
+    mainModel: '',
+    mainBaseUrl: '',
+    mainApiKey: '',
+  } as {
+    iterativeK: number;
+    graphDepth: number;
+    graphAuthMode: string;
+    graphProtocol: string;
+    graphContext: string;
+    graphModel: string;
+    graphBaseUrl: string;
+    graphApiKey: string;
+    mainAuthMode: string;
+    mainProtocol: string;
+    mainContext: string;
+    mainModel: string;
+    mainBaseUrl: string;
+    mainApiKey: string;
+  },
+  settingsSaveTimer: 0,
   knowledgeQuestion: '',
   knowledgeAnswer: null as JsonMap | null,
   knowledgeQueryBusy: false,
@@ -135,6 +171,7 @@ app.innerHTML = `
         <button id="stateBtn" type="button" class="ghost"><span data-icon="Archive"></span><span>State</span></button>
         <button id="llmBtn" type="button" class="ghost"><span data-icon="Settings2"></span><span>LLM</span></button>
       </div>
+      <button id="settingsBtn" type="button" class="workspace-settings-btn"><span data-icon="SlidersHorizontal"></span><span>Settings</span></button>
     </section>
 
     <section id="pendingControlPanel" class="panel control-panel" hidden>
@@ -251,6 +288,22 @@ app.innerHTML = `
     </header>
 
     <section id="chatStream" class="chat-stream"></section>
+
+    <section id="settingsView" class="settings-view" hidden>
+      <header class="settings-header">
+        <div class="settings-header-inner">
+          <div class="settings-header-text">
+            <div class="settings-eyebrow"><span data-icon="SlidersHorizontal"></span><span>Workspace</span></div>
+            <h1 class="settings-title">Settings</h1>
+            <p class="settings-subtitle">All configurable parameters for this workspace. Changes apply immediately or on the next message.</p>
+          </div>
+          <div class="settings-header-actions">
+            <button id="settingsDoneBtn" type="button" class="settings-done-btn"><span data-icon="ChevronLeft"></span><span>Back to Chat</span></button>
+          </div>
+        </div>
+      </header>
+      <div id="settingsContent" class="settings-content"></div>
+    </section>
     <section id="knowledgeGraphView" class="knowledge-graph-view" hidden>
       <div class="graph-header">
         <div class="graph-title-block">
@@ -414,6 +467,10 @@ const els = {
   knowledgeGraphBtn: query<HTMLButtonElement>('#knowledgeGraphBtn'),
   stateBtn: query<HTMLButtonElement>('#stateBtn'),
   llmBtn: query<HTMLButtonElement>('#llmBtn'),
+  settingsBtn: query<HTMLButtonElement>('#settingsBtn'),
+  settingsView: query<HTMLElement>('#settingsView'),
+  settingsContent: query<HTMLElement>('#settingsContent'),
+  settingsDoneBtn: query<HTMLButtonElement>('#settingsDoneBtn'),
   clearAllLogsBtn: query<HTMLButtonElement>('#clearAllLogsBtn'),
   dialog: query<HTMLDialogElement>('#detailDialog'),
   dialogTitle: query('#dialogTitle'),
@@ -466,6 +523,16 @@ els.backToChatBtn.addEventListener('click', () => {
   history.pushState({}, '', '/');
   render();
 });
+els.settingsBtn.addEventListener('click', () => {
+  state.view = 'settings';
+  history.pushState({}, '', '/settings');
+  render();
+});
+els.settingsDoneBtn.addEventListener('click', () => {
+  state.view = 'chat';
+  history.pushState({}, '', '/');
+  render();
+});
 els.buildGraphBtn.addEventListener('click', async () => {
   await postJson('/api/knowledge-graph/build', { trigger: 'manual' });
   await refresh();
@@ -490,7 +557,8 @@ els.knowledgeGraphBtn.addEventListener('click', async () => {
   render();
 });
 window.addEventListener('popstate', () => {
-  state.view = window.location.pathname === '/knowledge-graph' ? 'knowledgeGraph' : 'chat';
+  const path = window.location.pathname;
+  state.view = path === '/knowledge-graph' ? 'knowledgeGraph' : path === '/settings' ? 'settings' : 'chat';
   render();
 });
 els.candidateCountInput.addEventListener('input', () => {
@@ -700,6 +768,7 @@ function render() {
   renderKnowledgeGraphBuilder(data);
   renderKnowledgeWorkbench(data);
   renderBuilderTrace(data.knowledgeGraphParts || []);
+  renderSettings(data);
   renderViewState();
   renderTimeline(data.timeline);
   renderFileTree(data.fileTree);
@@ -855,14 +924,325 @@ function renderRuntimeSettings(settings: JsonMap | null | undefined) {
   if (els.graphExtractionDepthInput.value !== String(graphDepth)) els.graphExtractionDepthInput.value = String(graphDepth);
 }
 
+function syncSettingsFromBootstrap(data: Bootstrap) {
+  const settings = data.runtimeSettings || data.state?.runtimeSettings || {};
+  state.settings.iterativeK = settings.iterativeCandidateCount ?? 3;
+  state.settings.graphDepth = settings.knowledgeGraphExtractionDepth ?? 2;
+
+  const main = data.llmConfig?.config || {};
+  state.settings.mainAuthMode = main.authMode || 'manual';
+  state.settings.mainProtocol = main.protocol || '';
+  state.settings.mainContext = main.contextWindow || '';
+  state.settings.mainModel = main.model || '';
+  state.settings.mainBaseUrl = main.baseUrl || '';
+  // apiKey is masked (e.g. "****1234"); never seed the editor with a real value
+
+  const graph = data.knowledgeGraphLlmConfig?.config || {};
+  state.settings.graphAuthMode = graph.authMode || 'manual';
+  state.settings.graphProtocol = graph.protocol || '';
+  state.settings.graphContext = graph.contextWindow || '';
+  state.settings.graphModel = graph.model || '';
+  state.settings.graphBaseUrl = graph.baseUrl || '';
+}
+
+function renderSettings(data: Bootstrap) {
+  if (state.view !== 'settings') return;
+  if (!data) return;
+  syncSettingsFromBootstrap(data);
+  const ws = data.state || {};
+
+  const workspaceRows = [
+    { label: 'Active node', value: ws.activeNode
+      ? `<span class="settings-readout-pill active">${escapeHtml(ws.activeNode)}</span>`
+      : `<span class="settings-readout-pill">—</span>` },
+    { label: 'Control mode', value: `<span class="settings-readout-pill ${ws.controlMode === 'auto' ? 'active' : ''}">${escapeHtml(ws.controlMode || ws.mode || 'manual')}</span>` },
+    { label: 'Dry run', value: data.dryRun
+      ? `<span class="settings-readout-pill active">on</span>`
+      : `<span class="settings-readout-pill">off</span>` },
+    { label: 'Debug actions', value: data.debugEnabled
+      ? `<span class="settings-readout-pill active">enabled</span>`
+      : `<span class="settings-readout-pill">disabled</span>` },
+    { label: 'Workspace UV', value: runtimePill(data.runtime?.workspaceUv) },
+    { label: 'Workspace path', value: `<span class="settings-readout-mono">${escapeHtml(data.runtime?.workspaceUv?.workspace || '')}</span>`, copyable: data.runtime?.workspaceUv?.workspace || '' },
+  ];
+
+  const kOptions = [1, 2, 3, 4, 5, 6, 7, 8];
+  const depthOptions = [1, 2, 3, 4];
+
+  els.settingsContent.innerHTML = `
+    <div class="settings-section">
+      <div class="settings-section-header">Workspace</div>
+      <div class="settings-card">
+        ${workspaceRows.map((row) => `
+          <div class="settings-row">
+            <div class="settings-row-label">${escapeHtml(row.label)}</div>
+            <div class="settings-row-control">${row.value}${row.copyable ? `<button class="settings-icon-btn" type="button" data-copy="${escapeHtml(row.copyable)}" title="Copy"><span data-icon="Archive"></span></button>` : ''}</div>
+          </div>
+        `).join('')}
+      </div>
+      <p class="settings-section-foot">Read-only at runtime. Control mode, dry run, and debug actions are server launch env vars (<code>TS_HARNESS_CONTROL_MODE</code> / <code>TS_HARNESS_DRY_RUN</code> / <code>TS_HARNESS_DEBUG</code>); restart the server to change them.</p>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-header">Runtime</div>
+      <div class="settings-card">
+        <div class="settings-row">
+          <div class="settings-row-label">
+            <div>Iterative candidates (k)</div>
+            <div class="settings-row-help">How many parallel methods the iterative-solving node generates per loop.</div>
+          </div>
+          <div class="settings-row-control">
+            ${segmentedHtml('iterativeK', kOptions.map(String), String(state.settings.iterativeK), (v) => v)}
+          </div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-label">
+            <div>Knowledge graph extraction depth</div>
+            <div class="settings-row-help">How many hops the reference knowledge builder follows per source.</div>
+          </div>
+          <div class="settings-row-control">
+            ${segmentedHtml('graphDepth', depthOptions.map(String), String(state.settings.graphDepth), (v) => v)}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    ${renderLlmSection('graph', 'Knowledge Graph Builder LLM', 'Used by the reference knowledge graph builder agent. Leave fields blank to inherit from Main LLM.')}
+    ${renderLlmSection('main', 'Main LLM', 'Used by the orchestrator and all node agents. Saved to <code>&lt;workspace&gt;/config.llm.json</code>; takes effect on the next message.', true)}
+  `;
+
+  bindSettingsHandlers();
+  hydrateIcons(els.settingsContent);
+}
+
+function renderLlmSection(prefix: 'graph' | 'main', title: string, description: string, isMain = false): string {
+  const s = state.settings;
+  const authValue = (isMain ? s.mainAuthMode : s.graphAuthMode) || 'manual';
+  const protocolValue = isMain ? s.mainProtocol : s.graphProtocol;
+  const contextValue = isMain ? s.mainContext : s.graphContext;
+  const modelValue = isMain ? s.mainModel : s.graphModel;
+  const baseUrlValue = isMain ? s.mainBaseUrl : s.graphBaseUrl;
+  const authOptions = [
+    { value: 'manual', label: 'manual' },
+    { value: 'sdk-default', label: 'sdk-default' },
+  ];
+  const protocolOptions = [
+    { value: '', label: 'auto' },
+    { value: 'anthropic', label: 'anthropic' },
+    { value: 'openai-compat', label: 'openai-compat' },
+  ];
+  const contextOptions = [
+    { value: '', label: 'default' },
+    { value: '200k', label: '200k' },
+    { value: '1m', label: '1m' },
+  ];
+  const modelPlaceholder = isMain ? 'e.g. deepseek-v4-pro' : 'inherits main model';
+  const baseUrlPlaceholder = isMain ? 'https://api.example.com/anthropic' : 'inherits main endpoint';
+  const apiKeyPlaceholder = 'leave blank to keep current';
+  const saveBtnId = isMain ? 'saveMainLlmBtn' : 'saveGraphLlmBtn2';
+  const resetBtnId = isMain ? 'resetMainLlmBtn' : '';
+  const modelId = `${prefix}Model`;
+  const baseUrlId = `${prefix}BaseUrl`;
+  const apiKeyId = `${prefix}ApiKey`;
+  return `
+    <div class="settings-section">
+      <div class="settings-section-header">${escapeHtml(title)}</div>
+      <div class="settings-card">
+        <div class="settings-row">
+          <div class="settings-row-label">Auth</div>
+          <div class="settings-row-control">${segmentedHtml(`${prefix}AuthMode`, authOptions.map((o) => o.value), authValue, (v) => v, authOptions.map((o) => o.label))}</div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-label">Protocol</div>
+          <div class="settings-row-control">${segmentedHtml(`${prefix}Protocol`, protocolOptions.map((o) => o.value), protocolValue, (v) => v, protocolOptions.map((o) => o.label))}</div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-label">Context window</div>
+          <div class="settings-row-control">${segmentedHtml(`${prefix}Context`, contextOptions.map((o) => o.value), contextValue, (v) => v, contextOptions.map((o) => o.label))}</div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-label">Model</div>
+          <div class="settings-row-control"><input class="settings-input" type="text" id="${modelId}" value="${escapeHtml(modelValue)}" placeholder="${escapeHtml(modelPlaceholder)}" /></div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-label">Endpoint</div>
+          <div class="settings-row-control"><input class="settings-input" type="text" id="${baseUrlId}" value="${escapeHtml(baseUrlValue)}" placeholder="${escapeHtml(baseUrlPlaceholder)}" /></div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-label">API key</div>
+          <div class="settings-row-control"><input class="settings-input" type="password" id="${apiKeyId}" value="" placeholder="${escapeHtml(apiKeyPlaceholder)}" autocomplete="off" /></div>
+        </div>
+        <div class="settings-card-footer">
+          <button id="${saveBtnId}" type="button" class="settings-primary-btn"><span data-icon="Check"></span><span>${escapeHtml(isMain ? 'Save main LLM' : 'Save builder LLM')}</span></button>
+          ${isMain ? `<button id="${resetBtnId}" type="button" class="settings-secondary-btn"><span data-icon="RefreshCw"></span><span>Reset to file default</span></button>` : ''}
+          <span class="settings-save-status" id="${prefix}SaveStatus"></span>
+        </div>
+      </div>
+      <p class="settings-section-foot">${description}</p>
+    </div>
+  `;
+}
+
+function segmentedHtml(group: string, values: string[], current: string, format: (v: string) => string = (v) => v, labels: string[] | null = null): string {
+  return `
+    <div class="settings-segmented" data-segmented-group="${escapeHtml(group)}" role="group">
+      ${values.map((v, i) => {
+        const label = labels ? labels[i] : format(v);
+        const selected = (current || '') === v ? 'selected' : '';
+        return `<button type="button" class="settings-segmented-item ${selected}" data-value="${escapeHtml(v)}">${escapeHtml(label)}</button>`;
+      }).join('')}
+    </div>
+  `;
+}
+
+function bindSettingsHandlers() {
+  for (const group of els.settingsContent.querySelectorAll<HTMLElement>('[data-segmented-group]')) {
+    const name = group.dataset.segmentedGroup || '';
+    for (const item of group.querySelectorAll<HTMLButtonElement>('.settings-segmented-item')) {
+      item.addEventListener('click', () => {
+        const value = item.dataset.value || '';
+        for (const sibling of group.querySelectorAll<HTMLButtonElement>('.settings-segmented-item')) {
+          sibling.classList.toggle('selected', sibling === item);
+        }
+        if (name === 'iterativeK') {
+          state.settings.iterativeK = Number(value) || 3;
+          saveRuntimeSettings();
+        } else if (name === 'graphDepth') {
+          state.settings.graphDepth = Number(value) || 2;
+          saveRuntimeSettings();
+        } else if (name === 'graphAuthMode') state.settings.graphAuthMode = value;
+        else if (name === 'graphProtocol') state.settings.graphProtocol = value;
+        else if (name === 'graphContext') state.settings.graphContext = value;
+        else if (name === 'mainAuthMode') state.settings.mainAuthMode = value;
+        else if (name === 'mainProtocol') state.settings.mainProtocol = value;
+        else if (name === 'mainContext') state.settings.mainContext = value;
+      });
+    }
+  }
+  for (const input of els.settingsContent.querySelectorAll<HTMLInputElement>('.settings-input')) {
+    input.addEventListener('input', () => {
+      const id = input.id;
+      if (id === 'graphModel') state.settings.graphModel = input.value;
+      else if (id === 'graphBaseUrl') state.settings.graphBaseUrl = input.value;
+      else if (id === 'graphApiKey') state.settings.graphApiKey = input.value;
+      else if (id === 'mainModel') state.settings.mainModel = input.value;
+      else if (id === 'mainBaseUrl') state.settings.mainBaseUrl = input.value;
+      else if (id === 'mainApiKey') state.settings.mainApiKey = input.value;
+    });
+  }
+  const graphSave = els.settingsContent.querySelector<HTMLButtonElement>('#saveGraphLlmBtn2');
+  graphSave?.addEventListener('click', () => saveLlmConfig(false));
+  const mainSave = els.settingsContent.querySelector<HTMLButtonElement>('#saveMainLlmBtn');
+  mainSave?.addEventListener('click', () => saveLlmConfig(true));
+  const mainReset = els.settingsContent.querySelector<HTMLButtonElement>('#resetMainLlmBtn');
+  mainReset?.addEventListener('click', () => resetMainLlmConfig());
+  for (const copyBtn of els.settingsContent.querySelectorAll<HTMLButtonElement>('[data-copy]')) {
+    copyBtn.addEventListener('click', async () => {
+      const text = copyBtn.dataset.copy || '';
+      try {
+        await navigator.clipboard.writeText(text);
+        const original = copyBtn.innerHTML;
+        copyBtn.innerHTML = '<span data-icon="Check"></span>';
+        copyBtn.classList.add('copied');
+        hydrateIcons(copyBtn);
+        window.setTimeout(() => {
+          copyBtn.innerHTML = original;
+          copyBtn.classList.remove('copied');
+          hydrateIcons(copyBtn);
+        }, 1100);
+      } catch (error) {
+        showDetail('Copy failed', { message: error instanceof Error ? error.message : String(error) });
+      }
+    });
+  }
+}
+
+async function saveRuntimeSettings() {
+  const result = await postJson('/api/runtime-settings', {
+    iterativeCandidateCount: state.settings.iterativeK,
+    knowledgeGraphExtractionDepth: state.settings.graphDepth,
+  });
+  state.bootstrap = result.bootstrap;
+  state.busy = Boolean(result.bootstrap?.runtime?.running);
+  render();
+}
+
+async function saveLlmConfig(isMain: boolean) {
+  const s = state.settings;
+  const status = els.settingsContent.querySelector<HTMLElement>(isMain ? '#mainSaveStatus' : '#graphSaveStatus');
+  const body: JsonMap = isMain
+    ? {
+        authMode: s.mainAuthMode,
+        protocol: s.mainProtocol,
+        model: s.mainModel,
+        apiKey: s.mainApiKey || undefined,
+        baseUrl: s.mainBaseUrl,
+        contextWindow: s.mainContext,
+      }
+    : {
+        authMode: s.graphAuthMode,
+        protocol: s.graphProtocol,
+        model: s.graphModel,
+        apiKey: s.graphApiKey || undefined,
+        baseUrl: s.graphBaseUrl,
+        contextWindow: s.graphContext,
+      };
+  try {
+    const url = isMain ? '/api/llm-config' : '/api/knowledge-graph/llm-config';
+    const result = await postJson(url, body);
+    state.bootstrap = result.bootstrap;
+    // Clear the password field after a successful save.
+    if (isMain) {
+      state.settings.mainApiKey = '';
+      const input = document.getElementById('mainApiKey') as HTMLInputElement | null;
+      if (input) input.value = '';
+    } else {
+      state.settings.graphApiKey = '';
+      const input = document.getElementById('graphApiKey') as HTMLInputElement | null;
+      if (input) input.value = '';
+    }
+    if (status) {
+      status.textContent = 'Saved';
+      status.classList.add('saved');
+      window.setTimeout(() => {
+        status.textContent = '';
+        status.classList.remove('saved');
+      }, 1800);
+    }
+  } catch (error) {
+    showDetail(isMain ? 'Save main LLM failed' : 'Save builder LLM failed', { message: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function resetMainLlmConfig() {
+  if (!confirm('Reset main LLM to file default? This clears model, endpoint, protocol, and context window saved in <workspace>/config.llm.json. API key is kept.')) return;
+  try {
+    const result = await postJson('/api/llm-config', {
+      authMode: 'sdk-default',
+      protocol: '',
+      model: '',
+      baseUrl: '',
+      contextWindow: '',
+    });
+    state.bootstrap = result.bootstrap;
+    syncSettingsFromBootstrap(result.bootstrap);
+    render();
+  } catch (error) {
+    showDetail('Reset main LLM failed', { message: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 function renderViewState() {
   const graphMode = state.view === 'knowledgeGraph';
-  els.chatStream.hidden = graphMode;
+  const settingsMode = state.view === 'settings';
+  els.chatStream.hidden = graphMode || settingsMode;
   els.knowledgeGraphView.hidden = !graphMode;
-  els.sendForm.hidden = graphMode;
+  els.settingsView.hidden = !settingsMode;
+  els.sendForm.hidden = graphMode || settingsMode;
   els.transcriptScope.disabled = graphMode;
-  query('#mainTitle').textContent = graphMode ? 'Knowledge Graph' : 'Orchestrator';
+  query('#mainTitle').textContent = graphMode ? 'Knowledge Graph' : settingsMode ? 'Settings' : 'Orchestrator';
   document.body.classList.toggle('knowledge-page', graphMode);
+  document.body.classList.toggle('settings-page', settingsMode);
 }
 
 function renderKnowledgeGraphBuilder(data: Bootstrap) {

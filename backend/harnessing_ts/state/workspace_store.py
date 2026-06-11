@@ -173,6 +173,35 @@ class WorkspaceStore:
         write_json(self.knowledge_graph_status_path, current)
         return current
 
+    @property
+    def main_llm_path(self) -> Path:
+        return self.root / "config.llm.json"
+
+    def read_main_llm_config(self) -> dict[str, Any]:
+        raw = read_json(self.main_llm_path) or {}
+        return _sanitize_llm_config(raw, default_auth_mode="manual")
+
+    def write_main_llm_config(self, values: dict[str, Any]) -> dict[str, Any]:
+        current = self.read_main_llm_config()
+        merged = dict(current)
+        for key in ("authMode", "protocol", "model", "apiKey", "baseUrl", "contextWindow"):
+            if key not in values:
+                continue
+            value = values[key]
+            if key == "apiKey" and (value is None or value == "" or _looks_masked_secret(str(value))):
+                continue
+            merged[key] = value
+        sanitized = _sanitize_llm_config(merged, default_auth_mode="manual")
+        self.main_llm_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json(self.main_llm_path, sanitized)
+        self.append_timeline({
+            "type": "main_llm_updated",
+            "timestamp": now_iso(),
+            "message": f"model={sanitized.get('model') or 'sdk-default'}",
+            "payload": _mask_llm_config_dict(sanitized),
+        })
+        return sanitized
+
     def read_knowledge_graph_llm_config(self) -> dict[str, Any]:
         raw = read_json(self.knowledge_graph_llm_path) or {}
         return _sanitize_llm_config(raw, default_auth_mode="manual")

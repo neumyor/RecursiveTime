@@ -52,6 +52,15 @@ class KnowledgeGraphLlmConfigRequest(BaseModel):
     contextWindow: str | None = None
 
 
+class MainLlmConfigRequest(BaseModel):
+    authMode: str | None = None
+    protocol: str | None = None
+    model: str | None = None
+    apiKey: str | None = None
+    baseUrl: str | None = None
+    contextWindow: str | None = None
+
+
 class KnowledgeQueryRequest(BaseModel):
     domain: str | None = None
     question: str
@@ -227,6 +236,11 @@ def create_app() -> FastAPI:
     @app.post("/api/knowledge-graph/llm-config")
     async def update_knowledge_graph_llm_config(request: KnowledgeGraphLlmConfigRequest) -> dict[str, Any]:
         config = orchestrator.update_knowledge_graph_llm_config(request.model_dump(exclude_none=True))
+        return {"config": config, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
+
+    @app.post("/api/llm-config")
+    async def update_main_llm_config(request: MainLlmConfigRequest) -> dict[str, Any]:
+        config = orchestrator.update_main_llm_config(request.model_dump(exclude_none=True))
         return {"config": config, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
     @app.get("/api/files/tree")
