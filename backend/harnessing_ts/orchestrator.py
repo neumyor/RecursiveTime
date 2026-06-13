@@ -110,6 +110,21 @@ class HarnessOrchestrator:
         node_type = args["nodeType"]
         if self.state["activeNode"]:
             raise RuntimeError(f"Cannot enter {node_type}; active node {self.state['activeNode']} is still running.")
+        # Defensive: once the pipeline is fully complete (final-summary
+        # finished, no next node), refuse to re-enter any node. The
+        # Claude Code SDK's main-session MCP transport is known to
+        # deliver tool_results with multi-hour delays; a stale
+        # enter_node from the original task would otherwise respawn
+        # a runner for an already-completed node and have the agent
+        # re-do work in the chat (e.g. "now writing problem-contract
+        # artifacts" after final-summary is done). The user must
+        # reset the workspace before re-running.
+        if self._is_pipeline_complete():
+            raise RuntimeError(
+                f"Cannot enter {node_type}: pipeline is already complete "
+                f"(completedNodes={self.state['completedNodes']}). "
+                f"Use the Reset Workspace action to clear state before re-running."
+            )
         if node_type == "final-summary" and self._read_iteration_state_recommend_exit() is False:
             raise RuntimeError("Cannot enter final-summary while user/iteration-state.md has recommend_exit: false.")
         node = self.store.create_node_session(node_type, args.get("rationale"), args.get("inputSummary"))
@@ -720,6 +735,17 @@ class HarnessOrchestrator:
         if latest.get("status") == "completed":
             if self._control_mode() == "auto":
                 await self._maybe_auto_enter_next_node(latest)
+            # Once the pipeline is fully complete (no more auto-next
+            # node), close the long-lived main runner. The Claude Code
+            # SDK has a known issue where the main session's MCP
+            # transport delays tool_result delivery by hours. Closing
+            # the runner here terminates the CLI subprocess and its
+            # in-memory buffers so any stale tool_results from the
+            # main session's earlier enter_node call are dropped
+            # instead of being processed and re-entering an already-
+            # completed node.
+            if self._is_pipeline_complete():
+                await self._close_main_runner()
             return
         if latest.get("status") in {"paused", "failed", "exited"}:
             return
@@ -735,6 +761,34 @@ class HarnessOrchestrator:
             "summary": "Node runner returned without calling finish_node MCP.",
             "goalMet": False,
             "outputPaths": [],
+        })
+
+    async def _close_main_runner(self) -> None:
+        """Terminate the long-lived main runner and its Claude Code CLI
+        subprocess. Used to discard any pending, possibly hours-stale
+        tool_results from the main session's earlier enter_node call so
+        they don't get re-processed and re-enter an already-completed
+        node.
+
+        Safe to call multiple times; subsequent calls are no-ops."""
+        runner = self.main_runner
+        if runner is None:
+            return
+        self.main_runner = None
+        if runner.is_running:
+            try:
+                await runner.interrupt()
+            except Exception:
+                pass
+        try:
+            await runner.close()
+        except Exception:
+            pass
+        self.store.append_timeline({
+            "type": "main_runner_closed",
+            "timestamp": now_iso(),
+            "message": "Main runner closed (pipeline complete); late tool_results from the main session will be discarded.",
+            "payload": {},
         })
 
     async def _maybe_auto_enter_next_node(self, finished_node: NodeSession) -> None:
@@ -761,6 +815,24 @@ class HarnessOrchestrator:
             "rationale": f"Previous node {latest['nodeType']} completed successfully; continuing node chain.",
             "inputSummary": f"Upstream node {latest['nodeType']} completed. Summary: {latest.get('summary', '')}. Output paths: {', '.join(latest.get('outputPaths', []))}",
         })
+
+    def _is_pipeline_complete(self) -> bool:
+        """The node chain is fully complete: final-summary is in
+        completedNodes AND there is no active node. Used to refuse
+        re-entering completed nodes after the SDK delivers a delayed
+        tool_result for the main session's first enter_node call.
+
+        Always re-reads state from disk so callers who just wrote the
+        state file (e.g. tests, or finish_node's own write) see the
+        fresh value."""
+        state = self.store.read_state()
+        if not state:
+            return False
+        return (
+            "final-summary" in state.get("completedNodes", [])
+            and not state.get("activeNode")
+            and not state.get("activeNodeSessionId")
+        )
 
     def _next_node_after_completion(self, latest: NodeSession) -> NodeType | None:
         if latest["nodeType"] == "iterative-solving":
