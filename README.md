@@ -173,6 +173,74 @@ bun run build
 
 When `frontend/dist/` exists, `ts-harness-server` serves the built frontend automatically.
 
+## Deploy On A Server
+
+HarnessingTS can run on a remote Linux/macOS server and be opened from other computers on the same network, or through a reverse proxy/VPN. The important difference from local development is that the server must bind to a non-loopback interface.
+
+1. Install runtime dependencies on the server:
+
+   ```bash
+   cd /path/to/HarnessingTS
+   uv sync
+   cd frontend
+   bun install
+   bun run build
+   cd ..
+   ```
+
+2. Choose a persistent runtime workspace. Keep it outside the source checkout so generated logs, data, reports, tools, and API settings are not mixed with repository files:
+
+   ```bash
+   export TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/default
+   uv run ts-harness --workspace "$TS_HARNESS_WORKSPACE" init
+   ```
+
+3. Configure the LLM used by the server process. Either log in to Claude Code on the server account, or create the workspace LLM config from the UI/CLI. For manual API use, store `config.llm.json` in the runtime workspace, not in the git checkout.
+
+4. Start the web server on all network interfaces:
+
+   ```bash
+   HOST=0.0.0.0 PORT=4327 TS_HARNESS_WORKSPACE="$TS_HARNESS_WORKSPACE" uv run ts-harness-server
+   ```
+
+   The server will print a `LAN access URL` when it can detect the machine's LAN address. From another computer, open:
+
+   ```text
+   http://<server-ip-or-hostname>:4327
+   ```
+
+5. Open the port in the server firewall if needed. Examples:
+
+   ```bash
+   # Ubuntu ufw
+   sudo ufw allow 4327/tcp
+
+   # firewalld
+   sudo firewall-cmd --add-port=4327/tcp --permanent
+   sudo firewall-cmd --reload
+   ```
+
+6. For long-running use, run the process under a service manager such as `systemd`, `supervisord`, Docker, tmux, or a platform process manager. A minimal `systemd` service looks like:
+
+   ```ini
+   [Unit]
+   Description=HarnessingTS
+   After=network.target
+
+   [Service]
+   WorkingDirectory=/path/to/HarnessingTS
+   Environment=HOST=0.0.0.0
+   Environment=PORT=4327
+   Environment=TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/default
+   ExecStart=/usr/bin/env uv run ts-harness-server
+   Restart=on-failure
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+7. If the server is reachable from untrusted networks, put it behind a reverse proxy with authentication, HTTPS, and network allowlisting. Do not expose a debug server publicly. Keep `TS_HARNESS_DEBUG` unset in shared or public deployments because debug actions include workspace reset controls.
+
 For UI testing without calling the model:
 
 ```bash

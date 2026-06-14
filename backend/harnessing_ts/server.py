@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import mimetypes
 import os
+import socket
 from typing import Any
 from urllib.parse import unquote
 
@@ -536,6 +537,10 @@ def main() -> None:
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "4327"))
     print(f"HarnessingTS web UI: http://{host}:{port}")
+    if host in {"0.0.0.0", "::"}:
+        lan_host = _best_effort_lan_host()
+        if lan_host:
+            print(f"LAN access URL: http://{lan_host}:{port}")
     print(f"Workspace: {default_workspace_path()}")
     print(f"Control mode: {os.getenv('TS_HARNESS_CONTROL_MODE', 'auto')}")
     if os.getenv("TS_HARNESS_DRY_RUN") == "true":
@@ -543,6 +548,20 @@ def main() -> None:
     if os.getenv("TS_HARNESS_DEBUG") == "true":
         print("Debug actions enabled")
     uvicorn.run("harnessing_ts.server:create_app", host=host, port=port, factory=True)
+
+
+def _best_effort_lan_host() -> str | None:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            host = sock.getsockname()[0]
+            return host if host and not host.startswith("127.") else None
+    except OSError:
+        try:
+            host = socket.gethostbyname(socket.gethostname())
+            return host if host and not host.startswith("127.") else None
+        except OSError:
+            return None
 
 
 if __name__ == "__main__":

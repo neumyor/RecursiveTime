@@ -66,6 +66,14 @@ uv run ts-harness-server
 http://127.0.0.1:4327
 ```
 
+服务器部署并允许其他电脑访问时，必须显式绑定非 loopback 地址：
+
+```bash
+HOST=0.0.0.0 PORT=4327 TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/default uv run ts-harness-server
+```
+
+对外共享部署必须先构建 `frontend/dist/`，并在 README 的 “Deploy On A Server” 章节同步维护防火墙、进程守护、反向代理和安全注意事项。不要在公网部署时启用 `TS_HARNESS_DEBUG`。
+
 不调用模型的前端测试模式：
 
 ```bash
