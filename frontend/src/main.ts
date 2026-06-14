@@ -299,8 +299,12 @@ app.innerHTML = `
         <div class="chain-title-block">
           <div class="eyebrow"><span data-icon="Activity"></span><span>Chain Summary</span></div>
           <h2>思维链总结</h2>
+          <p>把当前 workspace 的日志、iteration 报告、运行结果和样本证据组织成一条可审计的决策链。</p>
         </div>
-        <button id="buildChainSummaryBtn" type="button" class="chain-generate-btn"><span data-icon="RefreshCw"></span><span>生成思维链总结</span></button>
+        <div class="chain-header-actions">
+          <button id="backToChatFromChainBtn" type="button" class="chain-back-btn"><span data-icon="ChevronLeft"></span><span>返回主会话</span></button>
+          <button id="buildChainSummaryBtn" type="button" class="chain-generate-btn"><span data-icon="RefreshCw"></span><span>生成思维链总结</span></button>
+        </div>
       </header>
       <section id="chainBuildStatus" class="chain-build-status"></section>
       <section id="chainMetricChart" class="chain-chart-panel"></section>
@@ -428,6 +432,7 @@ const els = {
   chatStream: query<HTMLElement>('#chatStream'),
   knowledgeGraphView: query<HTMLElement>('#knowledgeGraphView'),
   chainSummaryView: query<HTMLElement>('#chainSummaryView'),
+  backToChatFromChainBtn: query<HTMLButtonElement>('#backToChatFromChainBtn'),
   buildChainSummaryBtn: query<HTMLButtonElement>('#buildChainSummaryBtn'),
   chainBuildStatus: query<HTMLElement>('#chainBuildStatus'),
   chainMetricChart: query<HTMLElement>('#chainMetricChart'),
@@ -590,6 +595,11 @@ els.chainCta.addEventListener('click', async () => {
   history.pushState({}, '', '/chain-summary');
   const summary = await fetchJson<JsonMap>('/api/chain-summary');
   if (state.bootstrap) state.bootstrap.chainSummary = summary;
+  render();
+});
+els.backToChatFromChainBtn.addEventListener('click', () => {
+  state.view = 'chat';
+  history.pushState({}, '', '/');
   render();
 });
 els.buildChainSummaryBtn.addEventListener('click', async () => {
@@ -1355,13 +1365,25 @@ function renderChainSummary(data: Bootstrap) {
   const build = data.chainSummaryBuild || {};
   const summary = data.chainSummary || {};
   const running = Boolean(data.runtime?.chainSummaryRunning || build.running);
+  const iterations = Array.isArray(summary.iterations) ? summary.iterations.length : 0;
+  const metrics = Array.isArray(summary.metricSeries) ? summary.metricSeries.length : 0;
+  const samples = Array.isArray(summary.iterations)
+    ? summary.iterations.reduce((count: number, iteration: JsonMap) => count + (Array.isArray(iteration.sampleInspirations) ? iteration.sampleInspirations.length : 0), 0)
+    : 0;
   els.buildChainSummaryBtn.disabled = running;
   els.chainBuildStatus.innerHTML = `
-    <span class="mini-pill ${build.status === 'failed' ? 'failed' : running ? 'active' : build.status === 'completed' ? 'ready' : 'pending'}">
-      ${running ? '<span data-icon="Loader2"></span>' : ''}
-      ${escapeHtml(running ? 'running' : build.status || 'idle')}
-    </span>
-    <span class="meta">${escapeHtml(build.message || '')}</span>
+    <div class="chain-status-main">
+      <span class="mini-pill ${build.status === 'failed' ? 'failed' : running ? 'active' : build.status === 'completed' ? 'ready' : 'pending'}">
+        ${running ? '<span data-icon="Loader2"></span>' : ''}
+        ${escapeHtml(running ? 'running' : build.status || 'idle')}
+      </span>
+      <span class="meta">${escapeHtml(build.message || 'Chain builder uses the current workspace logs and artifacts.')}</span>
+    </div>
+    <div class="chain-status-stats">
+      <span><strong>${escapeHtml(iterations)}</strong><small>Iterations</small></span>
+      <span><strong>${escapeHtml(metrics)}</strong><small>Metrics</small></span>
+      <span><strong>${escapeHtml(samples)}</strong><small>Samples</small></span>
+    </div>
   `;
   renderChainMetricChart(summary.metricSeries || []);
   renderChainContent(summary, build);
