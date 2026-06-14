@@ -1633,14 +1633,16 @@ function toolDetail(part: JsonMap) {
       `Tool: ${toolNameForPart(part)}`,
       `Status: ${part.status || 'pending'}`,
       '',
-      'Intent:',
+      '调用意图:',
       part.intend || '',
       '',
-      'Parameters:',
+      '调用参数:',
       JSON.stringify(part.input ?? {}, null, 2),
     ];
     if (part.status === 'completed' || part.resultText || part.resultRaw) {
-      chunks.push('', 'Result:', part.resultText || toolResultTextFromRaw(part.resultRaw) || summarizeRaw(part.resultRaw) || '');
+      chunks.push('', '调用结果:', part.resultText || toolResultTextFromRaw(part.resultRaw) || summarizeRaw(part.resultRaw) || '');
+    } else {
+      chunks.push('', '调用结果:', '等待工具返回结果。');
     }
     return chunks.join('\n');
   }

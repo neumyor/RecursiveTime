@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -201,8 +202,41 @@ def _extract_intend(input_value: Any, name: Any) -> str:
         value = input_value.get("intend")
         if isinstance(value, str) and value.strip():
             return value.strip()
+        description = input_value.get("description")
+        if isinstance(description, str) and description.strip():
+            return description.strip()
+        inferred = _infer_builtin_tool_intend(str(name or "tool"), input_value)
+        if inferred:
+            return inferred
     label = name if isinstance(name, str) else "tool"
     return f"调用工具：{label}"
+
+
+def _infer_builtin_tool_intend(name: str, input_value: dict[str, Any]) -> str | None:
+    if name == "Read":
+        file_path = input_value.get("file_path")
+        if isinstance(file_path, str) and file_path.strip():
+            return f"读取 {Path(file_path).name or file_path}。"
+    if name == "LS":
+        path = input_value.get("path")
+        if isinstance(path, str) and path.strip():
+            return f"列出 {Path(path).name or path} 下的文件。"
+    if name == "Glob":
+        pattern = input_value.get("pattern")
+        if isinstance(pattern, str) and pattern.strip():
+            return f"查找匹配 {pattern} 的文件。"
+    if name == "Grep":
+        pattern = input_value.get("pattern")
+        if isinstance(pattern, str) and pattern.strip():
+            return f"搜索 {pattern} 的出现位置。"
+    if name == "Bash":
+        command = input_value.get("command")
+        if isinstance(command, str) and command.strip():
+            first_line = command.strip().splitlines()[0]
+            if len(first_line) > 80:
+                first_line = first_line[:77] + "..."
+            return f"执行命令：{first_line}"
+    return None
 
 
 def _normalize_tool_call_part(part: Part) -> Part:

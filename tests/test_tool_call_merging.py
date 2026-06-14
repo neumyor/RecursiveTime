@@ -21,6 +21,41 @@ def _assistant_tool_message() -> dict:
     }
 
 
+def _assistant_builtin_read_message_without_intend() -> dict:
+    return {
+        "type": "assistant",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_read",
+                    "name": "Read",
+                    "input": {"file_path": "/tmp/workspace/user/problem-contract.md"},
+                }
+            ]
+        },
+    }
+
+
+def _assistant_builtin_bash_message_with_description() -> dict:
+    return {
+        "type": "assistant",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_bash",
+                    "name": "Bash",
+                    "input": {
+                        "command": "uv run python explore.py",
+                        "description": "运行数据探索脚本以生成 contract 证据。",
+                    },
+                }
+            ]
+        },
+    }
+
+
 def _user_tool_result_message() -> dict:
     return {
         "type": "user",
@@ -48,6 +83,22 @@ def test_tool_use_and_result_collapse_to_one_tool_call_part() -> None:
     assert collapsed[0]["status"] == "completed"
     assert collapsed[0]["intend"] == "读取 README 以确认项目说明。"
     assert collapsed[0]["resultText"] == "# HarnessingTS"
+
+
+def test_builtin_tool_call_without_intend_gets_useful_inferred_title() -> None:
+    part = sdk_message_to_part(_assistant_builtin_read_message_without_intend())
+
+    assert part["type"] == "tool_call"
+    assert part["intend"] == "读取 problem-contract.md。"
+    assert part["input"]["file_path"].endswith("problem-contract.md")
+
+
+def test_builtin_tool_call_prefers_description_as_intend() -> None:
+    part = sdk_message_to_part(_assistant_builtin_bash_message_with_description())
+
+    assert part["type"] == "tool_call"
+    assert part["intend"] == "运行数据探索脚本以生成 contract 证据。"
+    assert part["input"]["command"] == "uv run python explore.py"
 
 
 def test_message_log_merges_tool_result_into_prior_tool_call(tmp_path) -> None:
