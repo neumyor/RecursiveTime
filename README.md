@@ -42,6 +42,56 @@ backend/harnessing_ts/config/nodes/<node-type>/native-tools.md
 
 Python code reads these files read-only and only handles parsing, validation, and prompt assembly.
 
+## Code Architecture
+
+The backend is intentionally split into a thin HTTP entrypoint, an application orchestration facade, domain state-machine logic, and filesystem/SDK adapters:
+
+```text
+backend/harnessing_ts/server.py
+  FastAPI app factory, route registration, background task wiring, static frontend serving.
+
+backend/harnessing_ts/api/payloads.py
+  Stable aggregate payloads for /api/bootstrap and /api/live.
+
+backend/harnessing_ts/orchestrator.py
+  Application facade coordinating workspace state, main/node sessions, control requests, knowledge operations, and runner lifecycle.
+
+backend/harnessing_ts/node_state.py
+  Node-chain routing, loopDecision/nextNode validation, pipeline-complete guard, and iterative-solving output-path requirements.
+
+backend/harnessing_ts/agent/sdk_runner.py
+  Claude Code SDK client wrapper, message translation, interrupt/close behavior, and SDK failure recovery.
+
+backend/harnessing_ts/agent/session_factory.py
+  Main/node SDK runner construction: prompts, allowed tools, MCP server wiring, and LLM invocation config.
+
+backend/harnessing_ts/mcp/server.py
+  MCP governance, audit, runtime-settings, knowledge-query, and deterministic knowledge-base tool schemas.
+
+backend/harnessing_ts/state/workspace_store.py
+  Workspace repository facade for JSON/JSONL state, logs, file reads, uploads, reset behavior, runtime settings, and run/artifact records.
+
+backend/harnessing_ts/state/workspace_layout.py
+  Runtime workspace directory layout, built-in read_docx helper, and DOCX reference text derivatives.
+
+backend/harnessing_ts/knowledge_graph.py
+  File-backed knowledge-base tables, deterministic knowledge tools, graph view/search/cards, and builder/reasoner execution.
+
+backend/harnessing_ts/knowledge_prompts.py
+  Literature Knowledge Builder and Knowledge Reasoning Agent prompts.
+
+frontend/src/main.ts
+  Static UI rendering and event binding.
+
+frontend/src/api.ts
+  Frontend HTTP helpers and error-message normalization.
+
+frontend/src/types.ts
+  Shared frontend DTO types.
+```
+
+Keep new behavior inside these boundaries. Routing rules belong in `node_state.py`; SDK session construction belongs in `agent/session_factory.py`; aggregate API response shape belongs in `api/payloads.py`; workspace layout details belong in `state/workspace_layout.py`.
+
 | Node | Responsibility | Produces | Native tools |
 |---|---|---|---|
 | `problem-contract` | Use the user request and references to acquire/process data, explore it, clarify the real task, write the workflow contract, and prepare a domain brief for the independent literature knowledge builder. | `user/problem-contract.md`, `user/data-spec.md`, `knowledge_base/domain-brief.md` | `Read`, `LS`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Write`, `Edit`, `Bash` |

@@ -147,6 +147,28 @@ uv run ts-harness training-template
 - `solution` 描述工具使用协议，不描述最佳模型。
 - 训练只是让某些工具可用的实现细节，不是系统目标。
 
+## 当前代码架构
+
+后端采用“薄入口 + 应用编排 + 文件型基础设施”的结构。维护时应保持以下边界：
+
+- `backend/harnessing_ts/server.py`：FastAPI 装配入口，负责路由注册、后台 task 启停和静态前端托管；不要在这里新增业务规则。
+- `backend/harnessing_ts/api/payloads.py`：`/api/bootstrap`、`/api/live` 等前端聚合响应的组装层，负责稳定 HTTP contract。
+- `backend/harnessing_ts/orchestrator.py`：应用编排 facade，协调主会话、node session、workspace store、知识服务和 runner 生命周期。
+- `backend/harnessing_ts/node_state.py`：node chain 状态机、`loopDecision` / `nextNode` 校验、pipeline 完成判断、iterative-solving 输出路径约束。
+- `backend/harnessing_ts/agent/sdk_runner.py`：Claude Code SDK client wrapper，处理消息收发、SDK session id、interrupt/close 和 SDK 异常自恢复。
+- `backend/harnessing_ts/agent/session_factory.py`：主会话和 node 会话的 prompt、allowed tools、MCP server、LLM invocation config 组装。
+- `backend/harnessing_ts/mcp/server.py`：MCP tool schema 和 callback 绑定；只暴露治理、审计和知识库确定性工具。
+- `backend/harnessing_ts/state/workspace_store.py`：workspace 文件/JSON/JSONL repository facade，保留读写状态、日志、运行记录、上传、reset 等外部 API。
+- `backend/harnessing_ts/state/workspace_layout.py`：workspace 目录布局、内置 `tools/read_docx.py`、DOCX reference 文本派生。
+- `backend/harnessing_ts/knowledge_graph.py`：文件型知识库表、确定性工具、graph view/search/cards、builder/reasoner 调用逻辑。
+- `backend/harnessing_ts/knowledge_prompts.py`：Knowledge Builder / Reasoning Agent prompt 文本与知识图谱构建请求文本。
+- `backend/harnessing_ts/config/`：Markdown prompt、node spec、guidance、native-tools 配置，Python 只读取、解析和校验。
+- `frontend/src/main.ts`：当前仍是主要 UI 渲染和事件绑定入口。
+- `frontend/src/api.ts`：前端 JSON/Form API client 和错误消息规范。
+- `frontend/src/types.ts`：前端共享 DTO / bootstrap 类型。
+
+新增功能时优先落在上述已有边界内。不要把 node 路由规则重新写回 `orchestrator.py`，不要把 workspace layout 细节写回 `WorkspaceStore` 主体，不要把 API 聚合 payload 直接散落在路由函数里。
+
 ## Git 管理
 
 所有关键修改必须通过 git 妥善管理：
