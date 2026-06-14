@@ -22,7 +22,7 @@ The current implementation keeps runtime orchestration, domain routing rules, fi
 - `backend/harnessing_ts/api/payloads.py`: aggregate response construction for `/api/bootstrap` and `/api/live`.
 - `backend/harnessing_ts/orchestrator.py`: application facade that coordinates workspace state, main/node sessions, pending control, knowledge operations, and runner lifecycle.
 - `backend/harnessing_ts/node_state.py`: node-chain routing and validation, including `loopDecision`, `nextNode`, pipeline completion, and iterative-solving output requirements.
-- `backend/harnessing_ts/agent/sdk_runner.py`: Claude Code SDK wrapper for message send/receive, session id capture, interrupt/close, and client recovery after SDK failures.
+- `backend/harnessing_ts/agent/sdk_runner.py`: Claude Code SDK wrapper for message send/receive, tool-call/result merging, session id capture, interrupt/close, and client recovery after SDK failures.
 - `backend/harnessing_ts/agent/session_factory.py`: SDK runner construction for main and node sessions, including prompt assembly, allowed tools, MCP server wiring, and LLM invocation settings.
 - `backend/harnessing_ts/mcp/server.py`: MCP schemas and callback binding for governance, audit, runtime settings, knowledge query, and deterministic knowledge-base tools.
 - `backend/harnessing_ts/state/workspace_store.py`: repository facade for workspace JSON/JSONL state, logs, file reads, uploads, resets, runtime settings, and run/artifact records.
@@ -88,6 +88,25 @@ reports/final-summary.md
 ```
 
 The frontend is intentionally thin: it renders the same JSONL logs, node metadata, timeline, and runtime state that the Python backend persists on disk.
+
+## Tool Message Protocol
+
+Every agent tool call should include an `intend` argument: one short sentence describing the immediate reason for the call. Harness MCP tools require this field in their JSON schema and strip it before dispatching to business callbacks. Claude Code built-in tools are governed by the shared role prompt and should also include `intend` whenever the underlying tool schema accepts it.
+
+The backend converts SDK `tool_use` messages into `tool_call` parts. When the matching SDK `tool_result` arrives with the same `toolUseId`, the log entry is updated so the call and result are represented as one message:
+
+```json
+{
+  "type": "tool_call",
+  "name": "Read",
+  "intend": "Read the contract to confirm the current task boundary.",
+  "input": {"file_path": "user/problem-contract.md", "intend": "..."},
+  "status": "completed",
+  "resultText": "..."
+}
+```
+
+The frontend renders `tool_call` messages collapsed by default. The row title shows `intend`; expanded details show tool name, status, full parameters, and returned result text.
 
 ## MCP Boundary
 

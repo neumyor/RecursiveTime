@@ -100,10 +100,15 @@ class Part(TypedDict, total=False):
     id: str
     timestamp: str
     role: Literal["user", "assistant", "system", "tool"]
-    type: Literal["text", "tool_use", "tool_result", "result", "raw"]
+    type: Literal["text", "tool_call", "tool_use", "tool_result", "result", "raw"]
     text: str
     name: str
     input: Any
+    intend: str
+    toolUseId: str
+    status: Literal["pending", "completed"]
+    resultText: str
+    resultRaw: Any
     raw: Any
 
 

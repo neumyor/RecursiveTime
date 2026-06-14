@@ -8,6 +8,7 @@ import time
 from typing import Any
 from uuid import uuid4
 
+from harnessing_ts.agent.translate import collapse_tool_parts
 from harnessing_ts.schema import CONTROL_MODES, NODE_TYPES, ControlRequest, NodeSession, NodeType, Part, RunRecord, RuntimeSettings, TimelineEvent, WorkspaceState
 from harnessing_ts.state.jsonl import append_jsonl, clear_file, read_json, read_jsonl, write_json
 from harnessing_ts.state.workspace_layout import (
@@ -330,10 +331,10 @@ class WorkspaceStore:
         return read_jsonl(self.timeline_path)
 
     def read_main_parts(self) -> list[Part]:
-        return read_jsonl(self.main_log_path)
+        return collapse_tool_parts(read_jsonl(self.main_log_path))
 
     def read_node_parts(self, node_session_id: str) -> list[Part]:
-        return read_jsonl(self.node_log_path(node_session_id))
+        return collapse_tool_parts(read_jsonl(self.node_log_path(node_session_id)))
 
     def list_file_tree(self, max_entries: int = 800) -> dict[str, Any]:
         self.ensure_layout()

@@ -11,6 +11,25 @@ def text_result(value: Any) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": json.dumps(value, ensure_ascii=False)}]}
 
 
+def _require_intend(schema: dict[str, Any]) -> dict[str, Any]:
+    properties = dict(schema.get("properties") or {})
+    properties["intend"] = {
+        "type": "string",
+        "description": "One short sentence describing why this tool is being called now.",
+    }
+    required = list(schema.get("required") or [])
+    if "intend" not in required:
+        required.append("intend")
+    out = dict(schema)
+    out["properties"] = properties
+    out["required"] = required
+    return out
+
+
+def _without_intend(args: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in args.items() if key != "intend"}
+
+
 def create_harness_mcp_server(
     *,
     session_role: str,
@@ -36,7 +55,7 @@ def create_harness_mcp_server(
         @tool(
             name="enter_node",
             description="Request entry into a time-series tool-use harness node. The harness either auto-allows it or parks it for human approval according to TS_HARNESS_CONTROL_MODE.",
-            input_schema={
+            input_schema=_require_intend({
                 "type": "object",
                 "properties": {
                     "nodeType": {"type": "string", "enum": list(NODE_TYPES)},
@@ -44,10 +63,10 @@ def create_harness_mcp_server(
                     "inputSummary": {"type": "string"},
                 },
                 "required": ["nodeType", "rationale"],
-            },
+            }),
         )
         async def _enter_node(args: dict[str, Any]) -> dict[str, Any]:
-            return text_result(await _maybe_await(enter_node(args)))
+            return text_result(await _maybe_await(enter_node(_without_intend(args))))
 
         tools.append(_enter_node)
 
@@ -55,7 +74,7 @@ def create_harness_mcp_server(
         @tool(
             name="query_knowledge",
             description="Ask the independent knowledge reasoning agent a natural-language domain question. Use this instead of reading knowledge_base/tables files directly. Returns a concise answer by default; set includeEvidence=true only when citations or raw evidence details are needed.",
-            input_schema={
+            input_schema=_require_intend({
                 "type": "object",
                 "properties": {
                     "question": {"type": "string"},
@@ -65,10 +84,10 @@ def create_harness_mcp_server(
                     "includeEvidence": {"type": "boolean"},
                 },
                 "required": ["question"],
-            },
+            }),
         )
         async def _query_knowledge(args: dict[str, Any]) -> dict[str, Any]:
-            return text_result(await _maybe_await(query_knowledge(args)))
+            return text_result(await _maybe_await(query_knowledge(_without_intend(args))))
 
         tools.append(_query_knowledge)
 
@@ -76,7 +95,7 @@ def create_harness_mcp_server(
         @tool(
             name="finish_node",
             description="Request completion of the active node. The harness either auto-allows it or parks it for human approval according to TS_HARNESS_CONTROL_MODE.",
-            input_schema={
+            input_schema=_require_intend({
                 "type": "object",
                 "properties": {
                     "success": {"type": "boolean"},
@@ -95,10 +114,10 @@ def create_harness_mcp_server(
                     "outputPaths": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["success", "summary"],
-            },
+            }),
         )
         async def _finish_node(args: dict[str, Any]) -> dict[str, Any]:
-            return text_result(await _maybe_await(finish_node(args)))
+            return text_result(await _maybe_await(finish_node(_without_intend(args))))
 
         tools.append(_finish_node)
 
@@ -106,14 +125,14 @@ def create_harness_mcp_server(
         @tool(
             name="record_artifact",
             description="Record a produced artifact path in the harness timeline.",
-            input_schema={
+            input_schema=_require_intend({
                 "type": "object",
                 "properties": {"path": {"type": "string"}, "summary": {"type": "string"}},
                 "required": ["path"],
-            },
+            }),
         )
         async def _record_artifact(args: dict[str, Any]) -> dict[str, Any]:
-            return text_result(await _maybe_await(record_artifact(args)))
+            return text_result(await _maybe_await(record_artifact(_without_intend(args))))
 
         tools.append(_record_artifact)
 
@@ -121,7 +140,7 @@ def create_harness_mcp_server(
         @tool(
             name="record_run",
             description="Record a tool-guided solving run in runs/registry.jsonl.",
-            input_schema={
+            input_schema=_require_intend({
                 "type": "object",
                 "properties": {
                     "runId": {"type": "string"},
@@ -133,10 +152,10 @@ def create_harness_mcp_server(
                     "metrics": {"type": "object"},
                 },
                 "required": ["runId", "status", "startedAt", "artifactPaths"],
-            },
+            }),
         )
         async def _record_run(args: dict[str, Any]) -> dict[str, Any]:
-            return text_result(await _maybe_await(record_run(args)))
+            return text_result(await _maybe_await(record_run(_without_intend(args))))
 
         tools.append(_record_run)
 
@@ -144,10 +163,10 @@ def create_harness_mcp_server(
         @tool(
             name="get_runtime_settings",
             description="Read live harness runtime parameters. Iterative-solving must call this before proposing candidate solutions so UI changes to iterativeCandidateCount take effect.",
-            input_schema={
+            input_schema=_require_intend({
                 "type": "object",
                 "properties": {},
-            },
+            }),
         )
         async def _get_runtime_settings(args: dict[str, Any]) -> dict[str, Any]:
             return text_result(await _maybe_await(get_runtime_settings()))
@@ -164,15 +183,15 @@ def _add_knowledge_base_tools(tools: list[Any], tool: Any, callbacks: dict[str, 
     @tool(
         name="scan_references",
         description="Scan workspace references, compute hashes, and return new/changed references plus compact unchanged reference briefs.",
-        input_schema={"type": "object", "properties": {"include_processed": {"type": "boolean"}}},
+        input_schema=_require_intend({"type": "object", "properties": {"include_processed": {"type": "boolean"}}}),
     )
     async def _scan_references(args: dict[str, Any]) -> dict[str, Any]:
-        return text_result(await _maybe_await(callback("scan_references")(args)))
+        return text_result(await _maybe_await(callback("scan_references")(_without_intend(args))))
 
     @tool(
         name="extract_reference_text",
         description="Extract deterministic text from a reference. For PDFs this uses pdftotext page-by-page and writes a cache under knowledge_base/cache/reference_text. Use this before SDK Read when building evidence quoted_fragments.",
-        input_schema={
+        input_schema=_require_intend({
             "type": "object",
             "properties": {
                 "reference_id": {"type": "string"},
@@ -180,15 +199,15 @@ def _add_knowledge_base_tools(tools: list[Any], tool: Any, callbacks: dict[str, 
                 "pages": {"type": "string", "description": "Optional page selection like 1,3-5."},
                 "max_chars_per_page": {"type": "integer"},
             },
-        },
+        }),
     )
     async def _extract_reference_text(args: dict[str, Any]) -> dict[str, Any]:
-        return text_result(await _maybe_await(callback("extract_reference_text")(args)))
+        return text_result(await _maybe_await(callback("extract_reference_text")(_without_intend(args))))
 
     @tool(
         name="update_reference_brief",
         description="Update the compact title and brief for a processed reference.",
-        input_schema={
+        input_schema=_require_intend({
             "type": "object",
             "properties": {
                 "reference_id": {"type": "string"},
@@ -196,15 +215,15 @@ def _add_knowledge_base_tools(tools: list[Any], tool: Any, callbacks: dict[str, 
                 "brief": {"type": "string"},
             },
             "required": ["reference_id", "brief"],
-        },
+        }),
     )
     async def _update_reference_brief(args: dict[str, Any]) -> dict[str, Any]:
-        return text_result(await _maybe_await(callback("update_reference_brief")(args)))
+        return text_result(await _maybe_await(callback("update_reference_brief")(_without_intend(args))))
 
     @tool(
         name="add_evidence",
         description="Add an evidence record. The tool assigns E-xxxxx, normalizes reference_file, JSON-serializes quoted_fragments, and writes evidence.csv.",
-        input_schema={
+        input_schema=_require_intend({
             "type": "object",
             "properties": {
                 "reference_file": {"type": "string"},
@@ -214,15 +233,15 @@ def _add_knowledge_base_tools(tools: list[Any], tool: Any, callbacks: dict[str, 
                 "notes": {"type": "string"},
             },
             "required": ["reference_file", "quoted_fragments"],
-        },
+        }),
     )
     async def _add_evidence(args: dict[str, Any]) -> dict[str, Any]:
-        return text_result(await _maybe_await(callback("add_evidence")(args)))
+        return text_result(await _maybe_await(callback("add_evidence")(_without_intend(args))))
 
     @tool(
         name="add_knowledge",
         description="Add a knowledge record supported by evidence. The tool assigns K-xxxxx and marks it pending_graph.",
-        input_schema={
+        input_schema=_require_intend({
             "type": "object",
             "properties": {
                 "topic": {"type": "string"},
@@ -232,50 +251,50 @@ def _add_knowledge_base_tools(tools: list[Any], tool: Any, callbacks: dict[str, 
                 "notes": {"type": "string"},
             },
             "required": ["topic", "description", "evidence_ids"],
-        },
+        }),
     )
     async def _add_knowledge(args: dict[str, Any]) -> dict[str, Any]:
-        return text_result(await _maybe_await(callback("add_knowledge")(args)))
+        return text_result(await _maybe_await(callback("add_knowledge")(_without_intend(args))))
 
     @tool(
         name="list_pending_knowledge",
         description="Return compact pending knowledge records that still need class/relation graph processing.",
-        input_schema={"type": "object", "properties": {"limit": {"type": "integer"}}},
+        input_schema=_require_intend({"type": "object", "properties": {"limit": {"type": "integer"}}}),
     )
     async def _list_pending_knowledge(args: dict[str, Any]) -> dict[str, Any]:
-        return text_result(await _maybe_await(callback("list_pending_knowledge")(args)))
+        return text_result(await _maybe_await(callback("list_pending_knowledge")(_without_intend(args))))
 
     @tool(
         name="get_knowledge",
         description="Read one knowledge record. Compact detail avoids long context; full includes description and notes.",
-        input_schema={
+        input_schema=_require_intend({
             "type": "object",
             "properties": {
                 "knowledge_id": {"type": "string"},
                 "detail": {"type": "string", "enum": ["compact", "full"]},
             },
             "required": ["knowledge_id"],
-        },
+        }),
     )
     async def _get_knowledge(args: dict[str, Any]) -> dict[str, Any]:
-        return text_result(await _maybe_await(callback("get_knowledge")(args)))
+        return text_result(await _maybe_await(callback("get_knowledge")(_without_intend(args))))
 
     @tool(
         name="search_classes",
         description="Search existing classes by normalized label, aliases, and keywords before deciding whether to reuse or create a class.",
-        input_schema={
+        input_schema=_require_intend({
             "type": "object",
             "properties": {"query": {"type": "string"}, "top_k": {"type": "integer"}},
             "required": ["query"],
-        },
+        }),
     )
     async def _search_classes(args: dict[str, Any]) -> dict[str, Any]:
-        return text_result(await _maybe_await(callback("search_classes")(args)))
+        return text_result(await _maybe_await(callback("search_classes")(_without_intend(args))))
 
     @tool(
         name="upsert_class",
         description="Create or merge a class. The tool normalizes label, assigns/reuses C-xxxxx, merges evidence and source knowledge, and backfills knowledge.class_ids.",
-        input_schema={
+        input_schema=_require_intend({
             "type": "object",
             "properties": {
                 "label": {"type": "string"},
@@ -287,30 +306,30 @@ def _add_knowledge_base_tools(tools: list[Any], tool: Any, callbacks: dict[str, 
                 "evidence_ids": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["label", "concept_level", "concept_type", "description_addition", "source_knowledge_ids"],
-        },
+        }),
     )
     async def _upsert_class(args: dict[str, Any]) -> dict[str, Any]:
-        return text_result(await _maybe_await(callback("upsert_class")(args)))
+        return text_result(await _maybe_await(callback("upsert_class")(_without_intend(args))))
 
     @tool(
         name="search_relations",
         description="Search existing relations by source class, target class, and optional relation type before upserting.",
-        input_schema={
+        input_schema=_require_intend({
             "type": "object",
             "properties": {
                 "source_class_id": {"type": "string"},
                 "target_class_id": {"type": "string"},
                 "relation_type": {"type": "string"},
             },
-        },
+        }),
     )
     async def _search_relations(args: dict[str, Any]) -> dict[str, Any]:
-        return text_result(await _maybe_await(callback("search_relations")(args)))
+        return text_result(await _maybe_await(callback("search_relations")(_without_intend(args))))
 
     @tool(
         name="upsert_relation",
         description="Create or merge a relation. The tool validates class ids, normalizes relation_type, merges evidence/source knowledge, and backfills knowledge.relation_ids.",
-        input_schema={
+        input_schema=_require_intend({
             "type": "object",
             "properties": {
                 "source_class_id": {"type": "string"},
@@ -322,26 +341,26 @@ def _add_knowledge_base_tools(tools: list[Any], tool: Any, callbacks: dict[str, 
                 "evidence_ids": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["source_class_id", "relation_type", "target_class_id", "description_addition", "source_knowledge_ids"],
-        },
+        }),
     )
     async def _upsert_relation(args: dict[str, Any]) -> dict[str, Any]:
-        return text_result(await _maybe_await(callback("upsert_relation")(args)))
+        return text_result(await _maybe_await(callback("upsert_relation")(_without_intend(args))))
 
     @tool(
         name="validate_knowledge_base",
         description="Validate CSV schema, references, IDs, graph endpoints, and evidence coverage. Returns errors and warnings without writing manifest.",
-        input_schema={"type": "object", "properties": {}},
+        input_schema=_require_intend({"type": "object", "properties": {}}),
     )
     async def _validate_knowledge_base(args: dict[str, Any]) -> dict[str, Any]:
-        return text_result(await _maybe_await(callback("validate_knowledge_base")(args)))
+        return text_result(await _maybe_await(callback("validate_knowledge_base")(_without_intend(args))))
 
     @tool(
         name="finalize_knowledge_base",
         description="Finalize the knowledge base: inherit evidence, validate, write manifest, and update indexes.",
-        input_schema={"type": "object", "properties": {}},
+        input_schema=_require_intend({"type": "object", "properties": {}}),
     )
     async def _finalize_knowledge_base(args: dict[str, Any]) -> dict[str, Any]:
-        return text_result(await _maybe_await(callback("finalize_knowledge_base")(args)))
+        return text_result(await _maybe_await(callback("finalize_knowledge_base")(_without_intend(args))))
 
     tools.extend([
         _scan_references,

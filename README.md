@@ -60,7 +60,7 @@ backend/harnessing_ts/node_state.py
   Node-chain routing, loopDecision/nextNode validation, pipeline-complete guard, and iterative-solving output-path requirements.
 
 backend/harnessing_ts/agent/sdk_runner.py
-  Claude Code SDK client wrapper, message translation, interrupt/close behavior, and SDK failure recovery.
+  Claude Code SDK client wrapper, message translation, tool-call/result merging, interrupt/close behavior, and SDK failure recovery.
 
 backend/harnessing_ts/agent/session_factory.py
   Main/node SDK runner construction: prompts, allowed tools, MCP server wiring, and LLM invocation config.
@@ -239,7 +239,7 @@ The browser UI uses this split:
 - Right rail upload: use `Reference Files` to upload PDFs, markdown, text, CSV, or other reference files into `references/`. The upload is recorded in `logs/timeline.jsonl`.
 - Right rail upload: use `Raw Data Zip` to upload a `.zip` archive and extract it into `data/raw/` as original data. The backend rejects unsafe archive paths such as `../...` and records the upload in `logs/timeline.jsonl`.
 
-The frontend stays static after each action. Use the refresh button to pull the latest JSONL-backed logs from the backend. Tool calls and tool results are summarized by default; expand each row to inspect the full payload.
+The frontend stays static after each action. Use the refresh button to pull the latest JSONL-backed logs from the backend. Tool calls and tool results are merged into a single collapsed tool message. The collapsed row primarily shows the call's `intend` field; expand it to inspect detailed parameters and returned results.
 
 Default control mode is `auto`. Once a node finishes successfully, the harness automatically advances to the next node. Set `TS_HARNESS_CONTROL_MODE=manual` when you want every node entry and node completion to require explicit approval in the left-side Pending Control panel.
 - DOCX references are automatically extracted to `<filename>.docx.txt`. Agents can also run `uv run python tools/read_docx.py references/<file>.docx artifacts/<file>.txt`.

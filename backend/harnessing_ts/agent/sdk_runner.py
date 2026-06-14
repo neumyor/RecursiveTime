@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from harnessing_ts.agent.translate import sdk_message_to_part, user_text_part
+from harnessing_ts.agent.translate import merge_tool_result_part, sdk_message_to_part, should_merge_tool_result, user_text_part
 from harnessing_ts.schema import Part
 from harnessing_ts.state.message_log import MessageLog
 
@@ -102,6 +102,8 @@ class SdkRunner:
                 self.config.log.append(part)
                 if self.config.on_part:
                     self.config.on_part(part)
+                if part.get("type") == "tool_result" and _merge_returned_tool_result(parts, part):
+                    continue
                 parts.append(part)
         except BaseException:
             # Anything that escapes the receive loop — SDK exceptions,
@@ -189,3 +191,12 @@ BUILTIN_TOOLS = {
 def build_disallowed_tools(allowed_tools: list[str]) -> list[str]:
     allowed_builtin = {tool for tool in allowed_tools if not tool.startswith("mcp__")}
     return sorted(BUILTIN_TOOLS - allowed_builtin)
+
+
+def _merge_returned_tool_result(parts: list[Part], tool_result: Part) -> bool:
+    for index in range(len(parts) - 1, -1, -1):
+        candidate = parts[index]
+        if should_merge_tool_result(candidate, tool_result):
+            parts[index] = merge_tool_result_part(candidate, tool_result)
+            return True
+    return False

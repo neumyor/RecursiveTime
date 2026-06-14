@@ -29,14 +29,19 @@ def sdk_message_to_part(message: Any) -> Part:
         content = _content(raw)
         tool_use = next((item for item in content if _is_tool_use(item)), None)
         if tool_use:
+            input_value = tool_use.get("input")
+            intend = _extract_intend(input_value, tool_use.get("name"))
             return {
                 "id": str(uuid4()),
                 "timestamp": timestamp,
                 "role": "assistant",
-                "type": "tool_use",
+                "type": "tool_call",
                 "name": tool_use.get("name", "tool"),
-                "input": tool_use.get("input"),
-                "text": _format_tool_use(tool_use.get("name"), tool_use.get("input")),
+                "input": input_value,
+                "intend": intend,
+                "toolUseId": tool_use.get("id"),
+                "status": "pending",
+                "text": intend,
                 "raw": raw,
             }
         return {"id": str(uuid4()), "timestamp": timestamp, "role": "assistant", "type": "text", "text": _extract_visible_text(raw), "raw": raw}
@@ -47,17 +52,56 @@ def sdk_message_to_part(message: Any) -> Part:
     if msg_type == "user":
         tool_result = next((item for item in _content(raw) if _is_tool_result(item)), None)
         if tool_result:
+            result_text = _format_tool_result(tool_result.get("content"), raw.get("tool_use_result"))
             return {
                 "id": str(uuid4()),
                 "timestamp": timestamp,
                 "role": "tool",
                 "type": "tool_result",
-                "text": _format_tool_result(tool_result.get("content"), raw.get("tool_use_result")),
+                "toolUseId": tool_result.get("tool_use_id"),
+                "resultText": result_text,
+                "text": result_text,
                 "raw": raw,
             }
         return {"id": str(uuid4()), "timestamp": timestamp, "role": "user", "type": "text", "text": _extract_visible_text(raw), "raw": raw}
 
     return {"id": str(uuid4()), "timestamp": timestamp, "role": "system", "type": "raw", "text": str(raw.get("subtype") or msg_type or ""), "raw": raw}
+
+
+def merge_tool_result_part(tool_call: Part, tool_result: Part) -> Part:
+    merged = dict(tool_call)
+    merged["status"] = "completed"
+    merged["resultText"] = tool_result.get("resultText") or tool_result.get("text") or ""
+    merged["resultRaw"] = tool_result.get("raw")
+    merged["text"] = merged.get("intend") or _format_tool_use(merged.get("name"), merged.get("input"))
+    return merged
+
+
+def should_merge_tool_result(tool_call: Part, tool_result: Part) -> bool:
+    if tool_call.get("type") not in {"tool_call", "tool_use"} or tool_result.get("type") != "tool_result":
+        return False
+    call_id = tool_call.get("toolUseId") or _tool_use_id_from_raw(tool_call.get("raw"))
+    result_id = tool_result.get("toolUseId")
+    return isinstance(call_id, str) and call_id != "" and call_id == result_id
+
+
+def collapse_tool_parts(parts: list[Part]) -> list[Part]:
+    out: list[Part] = []
+    for part in parts:
+        if part.get("type") == "tool_result":
+            merged = False
+            for index in range(len(out) - 1, -1, -1):
+                if should_merge_tool_result(out[index], part):
+                    out[index] = merge_tool_result_part(_normalize_tool_call_part(out[index]), part)
+                    merged = True
+                    break
+            if merged:
+                continue
+        if part.get("type") == "tool_use":
+            out.append(_normalize_tool_call_part(part))
+        else:
+            out.append(part)
+    return out
 
 
 def _class_type(message: Any) -> str:
@@ -150,6 +194,38 @@ def _format_tool_use(name: Any, input_value: Any) -> str:
     import json
 
     return f"Tool call: {label}\n{json.dumps(input_value, ensure_ascii=False, indent=2)}"
+
+
+def _extract_intend(input_value: Any, name: Any) -> str:
+    if isinstance(input_value, dict):
+        value = input_value.get("intend")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    label = name if isinstance(name, str) else "tool"
+    return f"调用工具：{label}"
+
+
+def _normalize_tool_call_part(part: Part) -> Part:
+    if part.get("type") == "tool_call":
+        return part
+    input_value = part.get("input")
+    name = part.get("name") or "tool"
+    normalized = dict(part)
+    normalized["type"] = "tool_call"
+    normalized["role"] = "assistant"
+    normalized["intend"] = _extract_intend(input_value, name)
+    normalized["toolUseId"] = part.get("toolUseId") or _tool_use_id_from_raw(part.get("raw"))
+    normalized["status"] = part.get("status") or "pending"
+    normalized["text"] = normalized["intend"]
+    return normalized
+
+
+def _tool_use_id_from_raw(raw: Any) -> str | None:
+    if not isinstance(raw, dict):
+        return None
+    tool_block = next((item for item in _content(raw) if _is_tool_use(item)), None)
+    value = tool_block.get("id") if isinstance(tool_block, dict) else None
+    return value if isinstance(value, str) else None
 
 
 def _format_tool_result(content: Any, structured: Any) -> str:

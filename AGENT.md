@@ -155,7 +155,7 @@ uv run ts-harness training-template
 - `backend/harnessing_ts/api/payloads.py`：`/api/bootstrap`、`/api/live` 等前端聚合响应的组装层，负责稳定 HTTP contract。
 - `backend/harnessing_ts/orchestrator.py`：应用编排 facade，协调主会话、node session、workspace store、知识服务和 runner 生命周期。
 - `backend/harnessing_ts/node_state.py`：node chain 状态机、`loopDecision` / `nextNode` 校验、pipeline 完成判断、iterative-solving 输出路径约束。
-- `backend/harnessing_ts/agent/sdk_runner.py`：Claude Code SDK client wrapper，处理消息收发、SDK session id、interrupt/close 和 SDK 异常自恢复。
+- `backend/harnessing_ts/agent/sdk_runner.py`：Claude Code SDK client wrapper，处理消息收发、工具调用/结果合并、SDK session id、interrupt/close 和 SDK 异常自恢复。
 - `backend/harnessing_ts/agent/session_factory.py`：主会话和 node 会话的 prompt、allowed tools、MCP server、LLM invocation config 组装。
 - `backend/harnessing_ts/mcp/server.py`：MCP tool schema 和 callback 绑定；只暴露治理、审计和知识库确定性工具。
 - `backend/harnessing_ts/state/workspace_store.py`：workspace 文件/JSON/JSONL repository facade，保留读写状态、日志、运行记录、上传、reset 等外部 API。
@@ -199,6 +199,8 @@ problem-contract
 - `final-summary`：迭代结束才进。基于 timeline、runs、tools、problem-contract、data-spec 总结整个优化历程、最终工具使用方案、最终结果和系统边界，产出 `reports/final-summary.md` 和 `user/final-solution.md`。如果进入后发现 `user/iteration-state.md` 的 `recommend_exit` 或 contract 指向继续迭代，应标记失败并要求回到 `iterative-solving`。
 
 每个 node 都是独立 Claude Code SDK session，拥有自己的 system prompt、native-tools 白名单和 node 日志。所有节点流转（`enter_node` / `finish_node`）一律走 MCP `mcp__ts_harness__*` 工具，禁止用 JSON 文本块或 `harnessControl.action=…` 等替代控制协议。
+
+所有 agent 工具调用都必须在参数中包含 `intend` 字段，用一句简短的话说明本次调用的直接意图。Harness MCP 工具 schema 会强制要求该字段；Claude Code 内置工具也必须按 shared role prompt 的要求尽量携带该字段。后端日志会把同一 `toolUseId` 的工具调用和工具结果合并成一条 `tool_call` 消息；前端默认折叠展示，主标题显示 `intend`，展开后显示详细参数和返回结果。
 
 ## 运行记录
 

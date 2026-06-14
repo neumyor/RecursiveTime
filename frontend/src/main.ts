@@ -1580,11 +1580,11 @@ function messageHtml(part: JsonMap) {
       </article>
     `;
   }
-  if (part.type === 'tool_use' || part.type === 'tool_result') {
+  if (part.type === 'tool_call' || part.type === 'tool_use' || part.type === 'tool_result') {
     const summary = toolSummary(part);
-    const detail = part.displayText || part.text || summarizeRaw(part.raw) || '';
+    const detail = toolDetail(part);
     const toolName = toolNameForPart(part);
-    const done = part.type === 'tool_result';
+    const done = part.type === 'tool_result' || part.status === 'completed';
     const partId = String(part.id || `${part.timestamp || ''}:${toolName}:${part.type || ''}`);
     const expanded = state.expandedToolPartIds.has(partId);
     return `
@@ -1610,15 +1610,41 @@ function messageHtml(part: JsonMap) {
 }
 
 function toolSummary(part: JsonMap) {
+  if (part.type === 'tool_call') {
+    const intend = typeof part.intend === 'string' && part.intend.trim() ? part.intend.trim() : '';
+    return intend || `调用工具：${toolNameForPart(part)}`;
+  }
   if (part.type === 'tool_use') {
     const name = part.name || part.raw?.message?.content?.find?.((block: JsonMap) => block.type === 'tool_use')?.name || 'tool';
     const input = part.input || part.raw?.message?.content?.find?.((block: JsonMap) => block.type === 'tool_use')?.input;
+    const intend = input?.intend;
+    if (typeof intend === 'string' && intend.trim()) return intend.trim();
     const hint = input && typeof input === 'object' ? Object.keys(input).slice(0, 3).join(', ') : '';
     return hint ? `调用工具：${name} (${hint})` : `调用工具：${name}`;
   }
   const text = part.displayText || part.text || '';
   const firstLine = text.split('\n').find((line: string) => line.trim()) || '工具结果';
   return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
+}
+
+function toolDetail(part: JsonMap) {
+  if (part.type === 'tool_call') {
+    const chunks = [
+      `Tool: ${toolNameForPart(part)}`,
+      `Status: ${part.status || 'pending'}`,
+      '',
+      'Intent:',
+      part.intend || '',
+      '',
+      'Parameters:',
+      JSON.stringify(part.input ?? {}, null, 2),
+    ];
+    if (part.status === 'completed' || part.resultText || part.resultRaw) {
+      chunks.push('', 'Result:', part.resultText || toolResultTextFromRaw(part.resultRaw) || summarizeRaw(part.resultRaw) || '');
+    }
+    return chunks.join('\n');
+  }
+  return part.displayText || part.text || summarizeRaw(part.raw) || '';
 }
 
 function toolNameForPart(part: JsonMap) {
@@ -1710,6 +1736,9 @@ function normalizeChatParts(parts: JsonMap[]): JsonMap[] {
 
 function displayTextForPart(part: JsonMap) {
   if (part.type === 'loading') return part.text || '运行中';
+  if (part.type === 'tool_call') {
+    return part.intend || `调用工具：${toolNameForPart(part)}`;
+  }
   if (part.type === 'tool_use') {
     const name = part.name || part.raw?.message?.content?.find?.((block: JsonMap) => block.type === 'tool_use')?.name || 'tool';
     const input = part.input || part.raw?.message?.content?.find?.((block: JsonMap) => block.type === 'tool_use')?.input;
