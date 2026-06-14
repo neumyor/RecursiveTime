@@ -44,12 +44,13 @@ Python code reads these files read-only and only handles parsing, validation, an
 
 | Node | Responsibility | Produces | Native tools |
 |---|---|---|---|
-| `problem-contract` | Use the user request and references to acquire/process data, explore it, clarify the real task, and write the workflow contract. | `user/problem-contract.md`, `user/data-spec.md` | `Read`, `LS`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Write`, `Edit`, `Bash` |
-| `iterative-solving` | Each round tries exactly one new method, or one explicit combination of previously persisted tools. The method must first be standardized under `tools/`, then executed and reviewed through data-first case analysis with numeric bad-case attribution. The node writes case review before iteration summary. | `tools/**`, `runs/iterations/<iteration-id>/**`, `reports/iterations/<iteration-id>-case-review.md`, `reports/iterations/<iteration-id>-summary.md`, `user/iteration-state.md` | `Read`, `LS`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Write`, `Edit`, `Bash` |
+| `problem-contract` | Use the user request and references to acquire/process data, explore it, clarify the real task, write the workflow contract, and prepare a domain brief for the independent literature knowledge builder. | `user/problem-contract.md`, `user/data-spec.md`, `knowledge_base/domain-brief.md` | `Read`, `LS`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Write`, `Edit`, `Bash` |
+| `iterative-solving` | Repeated iteration node. Each round first calls `mcp__ts_harness__get_runtime_settings` to read `iterativeCandidateCount`, proposes k candidates, assigns `Task` subagents to independently test/review candidates, synthesizes the evidence, standardizes retained methods or combinations under `tools/`, executes the selected solution, writes candidate review, case review, iteration summary, and updates iteration state. | `tools/**`, `runs/iterations/<iteration-id>/**`, `reports/iterations/<iteration-id>-candidate-review.md`, `reports/iterations/<iteration-id>-case-review.md`, `reports/iterations/<iteration-id>-summary.md`, `user/iteration-state.md` | `Read`, `LS`, `Glob`, `Grep`, `Task`, `WebFetch`, `WebSearch`, `Write`, `Edit`, `Bash` |
 | `final-summary` | If iteration is complete, summarize the full optimization trajectory, final tool-use solution, final results, limitations, and evidence. | `reports/final-summary.md`, `user/final-solution.md` | `Read`, `LS`, `Glob`, `Grep`, `Write`, `Edit` |
 
 Case review and summary have separate roles:
 
+- Candidate review records the k source, candidate hypotheses, subagent results, metrics, bad-case review summaries, relation to knowledge graph findings, and the unified retain/drop/compose decision.
 - Case review centers on bad cases. If there are fewer than 10 bad cases, every bad case must be analyzed. If there are many, the node must define a task-appropriate sampling strategy and deeply analyze 5-20 bad cases.
 - Every reviewed sample must include a visualization path, raw input evidence, current-method evidence, comparison to a good case/prototype/reference case, and an explicit explanation level.
 - Case review ends with statistical analysis over all bad cases or the largest computable bad-case set.
@@ -60,13 +61,15 @@ Iteration routing:
 - Node transitions are controlled through MCP, not by parsing markdown artifacts.
 - `iterative-solving` must call `mcp__ts_harness__finish_node` with `loopDecision: "continue"` and `nextNode: "iterative-solving"` to run another iteration.
 - `iterative-solving` must call `mcp__ts_harness__finish_node` with `loopDecision: "exit"` and `nextNode: "final-summary"` to stop iteration and summarize.
-- `user/iteration-state.md` still records `recommend_exit` for auditability, but the backend does not parse it for control.
+- `user/iteration-state.md` still records `recommend_exit` for auditability. It is not the control source, but the backend validates that it does not contradict the structured MCP `loopDecision`.
+- Successful `iterative-solving` completion must include output paths for candidate review, case review, iteration summary, and `user/iteration-state.md`; candidate-only reports are rejected.
 
 Global native-tool constraints:
 
-- `Task`, `TodoWrite`, notebook tools, worktree tools, cron tools, and broad automation tools are disallowed by default.
+- `Task` is allowed only where listed in the node native tools. `TodoWrite`, notebook tools, worktree tools, cron tools, and broad automation tools are disallowed by default.
 - `Write` and `Edit` are for expected artifact paths. Nodes must not modify `data/raw/**` unless the contract explicitly authorizes a derived copy operation.
 - Nodes should not read `backend/**`, `frontend/**`, `state/**`, or `_reference_project/**`. `final-summary` may read `logs/timeline.jsonl` because it is an explicit required input.
+- Ordinary domain knowledge should be queried through `mcp__ts_harness__query_knowledge`; nodes should not read `knowledge_base/tables/*.csv`, `knowledge_base/indexes/**`, or `knowledge_base/cache/**` unless explicitly debugging the knowledge base.
 
 ## Commands
 
@@ -135,6 +138,11 @@ Claude Code SDK turn budget defaults to `80`. Override it if a node still hits `
 TS_HARNESS_MAX_TURNS=120 uv run ts-harness-server
 ```
 
+Runtime iteration and knowledge extraction settings are stored in workspace state and can be changed from the UI:
+
+- `iterativeCandidateCount`: number of candidates proposed by each `iterative-solving` round, bounded from 1 to 8.
+- `knowledgeGraphExtractionDepth`: graph extraction depth used by the knowledge builder, bounded from 1 to 4.
+
 By default, runtime workspaces are separated from this source repository:
 
 ```text
@@ -174,6 +182,9 @@ The browser UI uses this split:
 - Left rail: process audit panel. It shows workspace status, node activation state, the node chain, selected-node artifacts, node sessions, node logs, and the timeline.
 - Center: main orchestrator chat. The transcript selector above the chat can show all sessions, only the main session, or one specific node session.
 - Center toolbar: `Interrupt` pauses the currently running main turn or active node. If a node is paused, you can add guidance and resume it from the composer.
+- Center toolbar: `Reset Chat` clears chat logs, node sessions, workflow state, generated tools, reports, runs, and processed data while preserving `data/raw/`, `references/`, and the built knowledge graph. `Reset Workspace` performs the full destructive reset and also removes raw data, references, and knowledge graph state.
+- Settings panels: configure main-session LLM settings, knowledge-graph LLM settings, `iterativeCandidateCount`, and `knowledgeGraphExtractionDepth`.
+- Knowledge workbench: build/pause/continue the independent literature knowledge graph, inspect knowledge/evidence/class/relation cards, and query the graph through natural language.
 - Right rail: current workspace file tree. This is where node artifacts, data files, generated tools, run outputs, logs, and state files appear.
 - Right rail upload: use `Reference Files` to upload PDFs, markdown, text, CSV, or other reference files into `references/`. The upload is recorded in `logs/timeline.jsonl`.
 - Right rail upload: use `Raw Data Zip` to upload a `.zip` archive and extract it into `data/raw/` as original data. The backend rejects unsafe archive paths such as `../...` and records the upload in `logs/timeline.jsonl`.
@@ -184,6 +195,8 @@ Default control mode is `auto`. Once a node finishes successfully, the harness a
 - DOCX references are automatically extracted to `<filename>.docx.txt`. Agents can also run `uv run python tools/read_docx.py references/<file>.docx artifacts/<file>.txt`.
 
 The backend records all accepted or parked control transitions in `logs/timeline.jsonl`. If a node omits `finish_node`, the harness marks the node failed and stops the pipeline.
+
+When `final-summary` has completed and no node is active, the backend treats the pipeline as complete. Further `enter_node` requests are rejected until the workspace is reset, which prevents delayed SDK tool results from re-entering an already completed node.
 
 ## LLM Configuration
 
@@ -290,18 +303,26 @@ The harness records process state inside the active runtime workspace, not insid
   tools/
   runs/
   reports/
+  knowledge_base/
+  training/
   state/workspace.json
   state/runtime.json
+  state/runtime-settings.json
+  state/knowledge-graph-build.json
+  state/knowledge-graph-llm.json
   state/nodes/<node-session-id>.json
   logs/main.jsonl
   logs/nodes/<node-session-id>.jsonl
   logs/timeline.jsonl
+  logs/knowledge-graph-builder.jsonl
+  logs/knowledge-reasoning.jsonl
 ```
 
 The most important records are:
 
 ```text
 state/workspace.json
+state/runtime-settings.json
 state/nodes/<node-session-id>.json
 logs/main.jsonl
 logs/nodes/<node-session-id>.jsonl

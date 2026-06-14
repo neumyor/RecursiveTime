@@ -6,7 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from harnessing_ts.agent.sdk_runner import SdkRunner, SdkRunnerConfig
-from harnessing_ts.agent.translate import system_text_part
+from harnessing_ts.agent.translate import system_text_part, user_text_part
 from harnessing_ts.knowledge_graph import (
     answer_knowledge_query,
     build_knowledge_graph,
@@ -61,12 +61,14 @@ class HarnessOrchestrator:
             raise RuntimeError(f"Main session is locked while node {self.state['activeNode']} is active.")
         self.store.append_timeline({"type": "user_message", "timestamp": now_iso(), "message": text[:500]})
         if self.dry_run:
+            user_part = user_text_part(text)
+            self.store.append_main_part(user_part)
             part = system_text_part("\n".join([
                 "Dry run mode: main session was not sent to Python Claude Code SDK.",
                 "Use `start-node <nodeType>` to exercise harness state transitions without SDK.",
             ]))
             self.store.append_main_part(part)
-            return [part]
+            return [user_part, part]
         self._ensure_main_runner()
         assert self.main_runner
         parts = await self.main_runner.send_with_user_echo(text)
@@ -659,13 +661,25 @@ class HarnessOrchestrator:
         self._ensure_initialized()
         return self.store.extract_raw_data_zip(filename, content)
 
-    def clear_debug_logs(self, scope: str = "main") -> None:
+    async def clear_debug_logs(self, scope: str = "main") -> None:
         self._ensure_initialized()
-        self.store.clear_debug_logs("all" if scope == "all" else "main")
-        if scope == "all":
+        reset_reason = "chat_reset" if scope == "chat" else "workspace_reset" if scope == "all" else "main_log_cleared"
+        await self._close_main_runner(
+            reason=reset_reason,
+            message=(
+                "Main runner closed for workspace reset; the next user message will start a fresh SDK session."
+                if scope == "all"
+                else "Main runner closed for chat reset; the next user message will start a fresh SDK session."
+                if scope == "chat"
+                else "Main runner closed after clearing main logs; the next user message will start a fresh SDK session."
+            ),
+        )
+        if scope in {"all", "chat"}:
+            await self._close_active_node_runner("workspace reset" if scope == "all" else "chat reset")
+        self.store.clear_debug_logs(scope if scope in {"all", "chat"} else "main")
+        if scope in {"all", "chat"}:
             self.state = self.store.read_state()
             self.active_node_session = None
-            self.active_node_runner = None
 
     def get_node_specs(self) -> list[dict[str, Any]]:
         return [
@@ -763,7 +777,11 @@ class HarnessOrchestrator:
             "outputPaths": [],
         })
 
-    async def _close_main_runner(self) -> None:
+    async def _close_main_runner(
+        self,
+        reason: str = "pipeline_complete",
+        message: str = "Main runner closed (pipeline complete); late tool_results from the main session will be discarded.",
+    ) -> None:
         """Terminate the long-lived main runner and its Claude Code CLI
         subprocess. Used to discard any pending, possibly hours-stale
         tool_results from the main session's earlier enter_node call so
@@ -787,8 +805,29 @@ class HarnessOrchestrator:
         self.store.append_timeline({
             "type": "main_runner_closed",
             "timestamp": now_iso(),
-            "message": "Main runner closed (pipeline complete); late tool_results from the main session will be discarded.",
-            "payload": {},
+            "message": message,
+            "payload": {"reason": reason},
+        })
+
+    async def _close_active_node_runner(self, reason: str) -> None:
+        runner = self.active_node_runner
+        if runner is None:
+            return
+        self.active_node_runner = None
+        if runner.is_running:
+            try:
+                await runner.interrupt()
+            except Exception:
+                pass
+        try:
+            await runner.close()
+        except Exception:
+            pass
+        self.store.append_timeline({
+            "type": "active_node_runner_closed",
+            "timestamp": now_iso(),
+            "message": f"Active node runner closed for {reason}.",
+            "payload": {"reason": reason},
         })
 
     async def _maybe_auto_enter_next_node(self, finished_node: NodeSession) -> None:

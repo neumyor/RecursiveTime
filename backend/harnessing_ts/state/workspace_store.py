@@ -566,9 +566,75 @@ if __name__ == "__main__":
 
     def clear_debug_logs(self, scope: str = "main") -> None:
         clear_file(self.main_log_path)
+        if scope == "chat":
+            self.reset_chat()
+            return
         if scope != "all":
             return
         self.reset_workspace()
+
+    def reset_chat(self) -> WorkspaceState:
+        existing = self.read_state() or {}
+        control_mode = "auto" if existing.get("controlMode") == "auto" else "manual"
+        runtime_settings = self.read_runtime_settings()
+
+        for rel in (
+            "user",
+            "data/processed",
+            "plots",
+            "tools",
+            "runs",
+            "reports",
+            "training",
+            "logs/nodes",
+            "state/nodes",
+        ):
+            _remove_path(self.root / rel)
+
+        for path in (self.state_path, self.main_log_path, self.timeline_path):
+            path.unlink(missing_ok=True)
+
+        artifacts_root = self.root / "artifacts"
+        if artifacts_root.exists():
+            for child in artifacts_root.iterdir():
+                if child.name == "knowledge-graph.json":
+                    continue
+                _remove_path(child)
+
+        self.ensure_layout()
+        ts = now_iso()
+        state = self._new_workspace_state(control_mode, runtime_settings, ts)
+        self.write_state(state)
+        self.append_timeline({
+            "type": "chat_reset",
+            "timestamp": ts,
+            "message": "Chat and agent workflow reset",
+            "payload": {
+                "preserved": [
+                    "data/raw",
+                    "references",
+                    "knowledge_base",
+                    "artifacts/knowledge-graph.json",
+                    "state/knowledge-graph-build.json",
+                    "logs/knowledge-graph-builder.jsonl",
+                    "logs/knowledge-reasoning.jsonl",
+                ],
+                "cleared": [
+                    "logs/main.jsonl",
+                    "logs/nodes",
+                    "state/nodes",
+                    "user",
+                    "data/processed",
+                    "artifacts/* except knowledge-graph.json",
+                    "plots",
+                    "tools",
+                    "runs",
+                    "reports",
+                    "training",
+                ],
+            },
+        })
+        return state
 
     def reset_workspace(self) -> WorkspaceState:
         existing = self.read_state() or {}
@@ -597,21 +663,7 @@ if __name__ == "__main__":
 
         self.ensure_layout()
         ts = now_iso()
-        state: WorkspaceState = {
-            "workspaceId": str(uuid4()),
-            "workspacePath": str(self.root),
-            "createdAt": ts,
-            "updatedAt": ts,
-            "mode": control_mode,
-            "controlMode": control_mode,
-            "pendingControl": None,
-            "activeNode": None,
-            "activeNodeSessionId": None,
-            "completedNodes": [],
-            "contractConfirmed": False,
-            "finalSummaryConfirmed": False,
-            "runtimeSettings": runtime_settings,
-        }
+        state = self._new_workspace_state(control_mode, runtime_settings, ts)
         self.write_state(state)
         self.append_timeline({
             "type": "workspace_reset",
@@ -633,6 +685,23 @@ if __name__ == "__main__":
             },
         })
         return state
+
+    def _new_workspace_state(self, control_mode: str, runtime_settings: RuntimeSettings, ts: str) -> WorkspaceState:
+        return {
+            "workspaceId": str(uuid4()),
+            "workspacePath": str(self.root),
+            "createdAt": ts,
+            "updatedAt": ts,
+            "mode": control_mode,
+            "controlMode": control_mode,
+            "pendingControl": None,
+            "activeNode": None,
+            "activeNodeSessionId": None,
+            "completedNodes": [],
+            "contractConfirmed": False,
+            "finalSummaryConfirmed": False,
+            "runtimeSettings": runtime_settings,
+        }
 
 
 def _remove_path(path: Path) -> None:

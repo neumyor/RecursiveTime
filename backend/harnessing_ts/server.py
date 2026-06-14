@@ -333,12 +333,14 @@ def create_app() -> FastAPI:
     async def clear_logs(request: ClearLogsRequest) -> dict[str, Any]:
         if not debug_enabled:
             raise HTTPException(status_code=403, detail="debug actions are disabled")
-        if request.scope == "all":
+        if request.scope not in {"main", "chat", "all"}:
+            raise HTTPException(status_code=400, detail="invalid clear scope")
+        if request.scope in {"chat", "all"}:
             if not request.confirmReset:
                 raise HTTPException(status_code=400, detail="reset confirmation required")
             if _task_running(app.state.run_task) or _task_running(app.state.knowledge_graph_task):
                 raise HTTPException(status_code=409, detail="cannot reset workspace while a run is active")
-        orchestrator.clear_debug_logs("all" if request.scope == "all" else "main")
+        await orchestrator.clear_debug_logs(request.scope)
         return {"ok": True, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
     if web_root.exists():

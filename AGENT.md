@@ -4,7 +4,7 @@
 
 ## 文档同步要求（强制）
 
-`AGENT.md` 是面向 agent / 后续维护者的入口规范，必须与代码、prompt、CLI、配置保持一致。任何一次涉及以下范围的改动，**都必须**在同一个 commit（或紧随其后的 commit）里检查并同步 `AGENT.md`：
+`AGENT.md` 和 `README.md` 是面向 agent、用户和后续维护者的入口规范，必须与代码、prompt、CLI、配置保持一致。任何一次涉及以下范围的改动，**都必须**在同一个 commit（或紧随其后的 commit）里检查并同步 `README.md` 和 `AGENT.md`：
 
 - Node chain 增删、节点 `phase/purpose/next` 变化、节点 spec / guidance 重大改写
 - CLI 子命令、参数、flag 增删（`backend/harnessing_ts/cli.py`）
@@ -16,7 +16,7 @@
 - 运行时记录 / 工作区布局 / `.gitignore` 变化
 - 新增/废弃的运行命令、启动入口、Web UI 端口
 
-提交前请用 `git diff -- AGENT.md README.md docs/` 复核一次；如果只改了代码而这两份规范没动，需要在 commit message 中显式说明 “no doc change required: …”，否则视为遗漏。
+任何 commit 前都必须执行文档一致性检查：用 `git diff -- README.md AGENT.md docs/` 复核用户文档和 agent 规范是否已经同步。只要改动影响行为、命令、配置、节点协议、运行产物、UI 操作或维护流程，就必须同步更新 `README.md` 和 `AGENT.md`；如果确认无需文档变更，需要在 commit message 中显式说明 `no doc change required: ...`，否则视为遗漏。
 
 ## 项目入口
 
@@ -152,6 +152,7 @@ uv run ts-harness training-template
 所有关键修改必须通过 git 妥善管理：
 
 - **每次完成一个逻辑完整的改动后立即提交**，不要积攒大量未提交的修改。
+- **任何 commit 前必须检查并同步 `README.md` 和 `AGENT.md`**。行为、命令、配置、节点协议、运行产物、UI 操作或维护流程发生变化时，两份入口文档必须随代码一起更新；无文档变更时必须在 commit message 写明 `no doc change required: ...`。
 - 提交信息（commit message）使用 [Conventional Commits](https://www.conventionalcommits.org/) 格式，清晰描述改动范围和内容。例如：
   - `feat(frontend): incremental live rendering to preserve scroll positions`
   - `fix(backend): correct loopDecision validation for iterative-solving`
@@ -191,6 +192,8 @@ runs/registry.jsonl
 ```
 
 这些目录是运行产物，默认在 `.gitignore` 中。
+
+前端 `Reset Chat` 只重置聊天记录和 agent 工作流记忆，必须保留 `data/raw/`、`references/`、`knowledge_base/`、`artifacts/knowledge-graph.json` 以及知识图谱构建状态；`Reset Workspace` 才执行完整清空。
 
 ## 禁止提交
 

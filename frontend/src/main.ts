@@ -282,6 +282,7 @@ app.innerHTML = `
       </div>
       <div class="toolbar-actions">
         <button id="interruptBtn" type="button" class="danger ghost"><span data-icon="Pause"></span><span>Pause</span></button>
+        <button id="resetChatBtn" type="button" class="ghost debug-only"><span data-icon="RefreshCw"></span><span>Reset Chat</span></button>
         <button id="clearAllLogsBtn" type="button" class="danger ghost debug-only"><span data-icon="Trash2"></span><span>Reset Workspace</span></button>
       </div>
     </header>
@@ -472,6 +473,7 @@ const els = {
   settingsView: query<HTMLElement>('#settingsView'),
   settingsContent: query<HTMLElement>('#settingsContent'),
   settingsDoneBtn: query<HTMLButtonElement>('#settingsDoneBtn'),
+  resetChatBtn: query<HTMLButtonElement>('#resetChatBtn'),
   clearAllLogsBtn: query<HTMLButtonElement>('#clearAllLogsBtn'),
   dialog: query<HTMLDialogElement>('#detailDialog'),
   dialogTitle: query('#dialogTitle'),
@@ -612,6 +614,17 @@ els.interruptBtn.addEventListener('click', async () => {
   const reason = els.messageInput.value.trim();
   await interruptCurrent(reason || 'User interrupted from web UI.');
 });
+els.resetChatBtn.addEventListener('click', async () => {
+  if (!confirm('这将重置聊天记录和 agent 工作流记忆，但保留 data/raw、references 和已构建的知识图谱。是否继续？')) return;
+  await runAction(async () => {
+    const result = await postJson('/api/debug/clear-logs', { scope: 'chat', confirmReset: true });
+    state.bootstrap = result.bootstrap;
+    state.pendingParts = [];
+    state.loadingMessage = null;
+    state.transcriptScope = 'main';
+    render();
+  });
+});
 els.clearAllLogsBtn.addEventListener('click', async () => {
   if (!confirm('这将重置整个工作区，删除 references、knowledge graph、日志、运行产物、报告和临时工具。设置中的 API key、endpoint、model 与 k 会保留。是否继续？')) return;
   const typed = prompt('二次确认：请输入 RESET 来确认重置工作区。');
@@ -619,6 +632,8 @@ els.clearAllLogsBtn.addEventListener('click', async () => {
   await runAction(async () => {
     const result = await postJson('/api/debug/clear-logs', { scope: 'all', confirmReset: true });
     state.bootstrap = result.bootstrap;
+    state.pendingParts = [];
+    state.loadingMessage = null;
     state.transcriptScope = 'main';
     render();
   });
@@ -647,7 +662,7 @@ els.sendForm.addEventListener('submit', async (event) => {
   await runStreamingAction(async () => {
     const result = await postSend(text);
     state.bootstrap = result.bootstrap;
-    state.pendingParts = state.pendingParts.filter((part) => part.id !== pendingId);
+    state.pendingParts = reconcilePendingParts(result.bootstrap);
     render();
   });
 });
@@ -691,9 +706,9 @@ async function refresh() {
   state.bootstrap = data;
   state.busy = Boolean(data.runtime?.running);
   state.lastRefreshAt = new Date();
+  state.pendingParts = reconcilePendingParts(data);
   if (!data.runtime?.running) {
     state.loadingMessage = null;
-    state.pendingParts = [];
   } else if (!state.loadingMessage) {
     state.loadingMessage = loadingPart('后端运行中，正在自动同步最新消息');
   }
@@ -705,9 +720,9 @@ async function livePoll() {
   state.bootstrap = data;
   state.busy = Boolean(data.runtime?.running);
   state.lastRefreshAt = new Date();
+  state.pendingParts = reconcilePendingParts(data);
   if (!data.runtime?.running) {
     state.loadingMessage = null;
-    state.pendingParts = [];
   } else if (!state.loadingMessage) {
     state.loadingMessage = loadingPart('后端运行中，正在自动同步最新消息');
   }
@@ -1667,7 +1682,7 @@ function collectTranscriptParts(data: Bootstrap): JsonMap[] {
     }
   }
   const pendingParts = state.pendingParts
-    .filter((part) => !(part.role === 'user' && loggedUserTexts.has(part.text)))
+    .filter((part) => !isPendingPartLogged(part, loggedUserTexts))
     .map((part) => ({ ...part, sortKey: `${part.timestamp || ''}:pending:${part.id || ''}` }));
   const loadingParts = state.loadingMessage ? [{
     ...state.loadingMessage,
@@ -1679,6 +1694,23 @@ function collectTranscriptParts(data: Bootstrap): JsonMap[] {
     return nodeParts.filter((part) => part.nodeSessionId === nodeId || part.sortKey.includes(`:node:${nodeId}:`)).sort(sortByKey);
   }
   return [...mainParts, ...nodeParts, ...pendingParts, ...loadingParts].sort(sortByKey);
+}
+
+function reconcilePendingParts(data: Bootstrap | null): JsonMap[] {
+  if (!data) return state.pendingParts;
+  const loggedUserTexts = new Set((data.mainParts || [])
+    .filter((part: JsonMap) => part.role === 'user' && part.text)
+    .map((part: JsonMap) => normalizePendingText(part.text)));
+  const unresolved = state.pendingParts.filter((part) => !isPendingPartLogged(part, loggedUserTexts));
+  return data.runtime?.running ? unresolved : [];
+}
+
+function isPendingPartLogged(part: JsonMap, loggedUserTexts: Set<string>): boolean {
+  return Boolean(part.role === 'user' && part.text && loggedUserTexts.has(normalizePendingText(part.text)));
+}
+
+function normalizePendingText(text: string): string {
+  return String(text).trim();
 }
 
 function normalizeChatParts(parts: JsonMap[]): JsonMap[] {
@@ -1861,10 +1893,12 @@ async function runStreamingAction(fn: () => Promise<void>) {
     try {
       const data = await fetchJson<Bootstrap>('/api/bootstrap');
       state.bootstrap = data;
-      state.busy = false;
+      state.busy = Boolean(data.runtime?.running);
+      state.pendingParts = reconcilePendingParts(data);
       if (!data.runtime?.running) {
         state.loadingMessage = null;
-        state.pendingParts = [];
+      } else if (!state.loadingMessage) {
+        state.loadingMessage = loadingPart('后端运行中，正在自动同步最新消息');
       }
     } catch {
       state.busy = false;
