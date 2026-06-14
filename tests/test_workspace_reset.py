@@ -146,6 +146,34 @@ def test_reset_chat_preserves_raw_references_and_knowledge_graph(tmp_path):
     assert store.read_timeline()[-1]["type"] == "chat_reset"
 
 
+def test_reset_chat_handles_processed_dir_refilled_during_delete(tmp_path, monkeypatch):
+    from harnessing_ts.state import workspace_store
+
+    store = WorkspaceStore(tmp_path)
+    store.ensure_layout()
+    processed = tmp_path / "data" / "processed"
+    (processed / "ecg_norm").mkdir(parents=True)
+    (processed / "ecg_norm" / "1.npy").write_text("old", encoding="utf-8")
+
+    real_rmtree = workspace_store.shutil.rmtree
+    calls = {"count": 0}
+
+    def refill_once_then_rmtree(path):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            (processed / "ecg_norm").mkdir(parents=True, exist_ok=True)
+            (processed / "ecg_norm" / "2.npy").write_text("new", encoding="utf-8")
+        return real_rmtree(path)
+
+    monkeypatch.setattr(workspace_store.shutil, "rmtree", refill_once_then_rmtree)
+
+    store.reset_chat()
+
+    assert processed.exists()
+    assert not (processed / "ecg_norm").exists()
+    assert calls["count"] >= 2
+
+
 def test_clear_main_logs_closes_cached_main_runner(tmp_path):
     import asyncio
 

@@ -4,6 +4,7 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 import shutil
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -708,7 +709,47 @@ def _remove_path(path: Path) -> None:
     if path.is_symlink() or path.is_file():
         path.unlink(missing_ok=True)
     elif path.is_dir():
-        shutil.rmtree(path)
+        _remove_dir_with_retries(path)
+
+
+def _remove_dir_with_retries(path: Path, attempts: int = 5) -> None:
+    last_error: OSError | None = None
+    target = path
+    for attempt in range(attempts):
+        if target == path:
+            if not path.exists():
+                return
+            try:
+                delete_target = path.with_name(f".{path.name}.deleting-{uuid4().hex[:8]}")
+                path.rename(delete_target)
+                target = delete_target
+            except FileNotFoundError:
+                return
+            except OSError:
+                # Fall back to deleting in place if another process has the
+                # directory busy. The retry loop handles transient refills.
+                target = path
+        elif not target.exists():
+            if path.exists():
+                target = path
+                continue
+            return
+        try:
+            shutil.rmtree(target)
+            if not path.exists():
+                return
+            target = path
+        except FileNotFoundError:
+            if not path.exists():
+                return
+            target = path
+        except OSError as exc:
+            last_error = exc
+            if attempt == attempts - 1:
+                raise
+        time.sleep(0.1 * (attempt + 1))
+    if last_error:
+        raise last_error
 
 
 def _safe_filename(filename: str) -> str:
