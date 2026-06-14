@@ -12,9 +12,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from harnessing_ts.api.payloads import build_bootstrap_payload, build_live_payload, masked_llm_config
 from harnessing_ts.orchestrator import HarnessOrchestrator
 from harnessing_ts.paths import default_workspace_path, frontend_root
-from harnessing_ts.settings.llm import build_sdk_invocation_config, mask_llm_config, mask_sdk_invocation_config, read_effective_llm_config
 
 
 class SendRequest(BaseModel):
@@ -362,51 +362,17 @@ def create_app() -> FastAPI:
 
 
 def _bootstrap(orchestrator: HarnessOrchestrator, workspace_path: Path, dry_run: bool, debug_enabled: bool) -> dict[str, Any]:
-    payload = {
-        "state": orchestrator.get_state(),
-        "timeline": orchestrator.get_timeline(),
-        "mainParts": orchestrator.get_main_parts(),
-        "nodes": orchestrator.get_node_sessions(),
-        "nodePartsById": orchestrator.get_node_parts_by_id(),
-        "nodeSpecs": orchestrator.get_node_specs(),
-        "fileTree": orchestrator.get_file_tree(),
-        "llmConfig": _masked_llm_config(workspace_path),
-        "runtimeSettings": orchestrator.get_runtime_settings(),
-        "knowledgeGraph": orchestrator.get_knowledge_graph(),
-        "knowledgeBaseSummary": orchestrator.get_knowledge_base_summary(),
-        "knowledgeGraphParts": orchestrator.get_knowledge_graph_parts(),
-        "knowledgeGraphBuild": orchestrator.get_knowledge_graph_build_status(),
-        "knowledgeGraphLlmConfig": orchestrator.get_knowledge_graph_llm_config(),
-        "dryRun": dry_run,
-        "debugEnabled": debug_enabled,
-        "runtime": {
-            "running": _task_running(getattr(orchestrator, "_server_run_task", None)),
-            "knowledgeGraphRunning": _task_running(getattr(orchestrator, "_server_knowledge_graph_task", None)),
-            "workspaceUv": orchestrator.get_runtime_status(),
-        },
-    }
-    return payload
+    return build_bootstrap_payload(
+        orchestrator=orchestrator,
+        workspace_path=workspace_path,
+        dry_run=dry_run,
+        debug_enabled=debug_enabled,
+        task_running=_task_running,
+    )
 
 
 def _live(orchestrator: HarnessOrchestrator) -> dict[str, Any]:
-    return {
-        "state": orchestrator.get_state(),
-        "timeline": orchestrator.get_timeline(),
-        "mainParts": orchestrator.get_main_parts(),
-        "nodes": orchestrator.get_node_sessions(),
-        "nodePartsById": orchestrator.get_node_parts_by_id(),
-        "runtimeSettings": orchestrator.get_runtime_settings(),
-        "knowledgeGraph": orchestrator.get_knowledge_graph(),
-        "knowledgeBaseSummary": orchestrator.get_knowledge_base_summary(),
-        "knowledgeGraphParts": orchestrator.get_knowledge_graph_parts(),
-        "knowledgeGraphBuild": orchestrator.get_knowledge_graph_build_status(),
-        "knowledgeGraphLlmConfig": orchestrator.get_knowledge_graph_llm_config(),
-        "runtime": {
-            "running": _task_running(getattr(orchestrator, "_server_run_task", None)),
-            "knowledgeGraphRunning": _task_running(getattr(orchestrator, "_server_knowledge_graph_task", None)),
-            "workspaceUv": orchestrator.get_runtime_status(),
-        },
-    }
+    return build_live_payload(orchestrator=orchestrator, task_running=_task_running)
 
 
 async def _run_main_turn(orchestrator: HarnessOrchestrator, text: str) -> None:
@@ -490,9 +456,7 @@ def system_error_part_for_server(message: str) -> dict[str, Any]:
 
 
 def _masked_llm_config(workspace_path: Path) -> dict[str, Any]:
-    cfg = read_effective_llm_config(workspace_path)
-    sdk = build_sdk_invocation_config(cfg)
-    return {"config": mask_llm_config(cfg), "sdk": mask_sdk_invocation_config(sdk)}
+    return masked_llm_config(workspace_path)
 
 
 def _format_exception(exc: Exception) -> str:

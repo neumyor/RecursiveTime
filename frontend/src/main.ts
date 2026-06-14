@@ -1,4 +1,5 @@
 import './styles.css';
+import { fetchJson, postForm, postJson } from './api';
 import DOMPurify from 'dompurify';
 import {
   Activity,
@@ -37,40 +38,7 @@ import {
   type IconNode,
 } from 'lucide';
 import { marked } from 'marked';
-
-type JsonMap = Record<string, any>;
-
-type FileTreeNode = {
-  kind: 'dir' | 'file';
-  name: string;
-  path: string;
-  size?: number;
-  children?: FileTreeNode[];
-};
-
-type Bootstrap = {
-  state: JsonMap;
-  timeline: JsonMap[];
-  mainParts: JsonMap[];
-  nodes: JsonMap[];
-  nodePartsById: Record<string, JsonMap[]>;
-  nodeSpecs: JsonMap[];
-  fileTree: { root?: string; tree?: FileTreeNode; truncated?: boolean } | null;
-  llmConfig?: JsonMap;
-  runtimeSettings?: JsonMap;
-  knowledgeGraph?: JsonMap;
-  knowledgeBaseSummary?: JsonMap;
-  knowledgeGraphParts?: JsonMap[];
-  dryRun?: boolean;
-  debugEnabled?: boolean;
-  runtime?: {
-    running?: boolean;
-    knowledgeGraphRunning?: boolean;
-    workspaceUv?: JsonMap | null;
-  };
-  knowledgeGraphBuild?: JsonMap;
-  knowledgeGraphLlmConfig?: JsonMap;
-};
+import type { Bootstrap, FileTreeNode, JsonMap } from './types';
 
 const state = {
   bootstrap: null as Bootstrap | null,
@@ -2086,48 +2054,6 @@ function isActiveNodePaused(data: Bootstrap | null): boolean {
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-async function fetchJson<T = any>(url: string): Promise<T> {
-  const response = await fetch(url);
-  const payload = await readJsonResponse(response);
-  if (!response.ok) throw new Error(errorMessage(payload, response));
-  return payload;
-}
-
-async function postJson<T = any>(url: string, body: JsonMap): Promise<T> {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const payload = await readJsonResponse(response);
-  if (!response.ok) throw new Error(errorMessage(payload, response));
-  return payload;
-}
-
-async function postForm<T = any>(url: string, body: FormData): Promise<T> {
-  const response = await fetch(url, { method: 'POST', body });
-  const payload = await readJsonResponse(response);
-  if (!response.ok) throw new Error(errorMessage(payload, response));
-  return payload;
-}
-
-async function readJsonResponse(response: Response) {
-  const text = await response.text();
-  if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { error: text };
-  }
-}
-
-function errorMessage(payload: any, response: Response) {
-  if (payload?.error) return payload.error;
-  if (payload?.detail) return typeof payload.detail === 'string' ? payload.detail : JSON.stringify(payload.detail);
-  if (payload?.message) return payload.message;
-  return response.statusText || `HTTP ${response.status}`;
 }
 
 function showDetail(title: string, value: any) {

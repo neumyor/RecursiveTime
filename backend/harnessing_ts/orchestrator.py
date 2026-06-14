@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-import re
 from typing import Any
 from uuid import uuid4
 
-from harnessing_ts.agent.sdk_runner import SdkRunner, SdkRunnerConfig
+from harnessing_ts.agent.sdk_runner import SdkRunner
+from harnessing_ts.agent.session_factory import build_main_runner, build_node_runner
 from harnessing_ts.agent.translate import system_text_part, user_text_part
 from harnessing_ts.knowledge_graph import (
     answer_knowledge_query,
@@ -17,22 +17,11 @@ from harnessing_ts.knowledge_graph import (
     search_knowledge_notes,
     suggest_next_checks,
 )
-from harnessing_ts.mcp.server import create_harness_mcp_server
-from harnessing_ts.prompts.compose import (
-    PromptContext,
-    build_main_attachment,
-    build_main_system_prompt,
-    build_node_attachment,
-    build_node_system_prompt,
-)
-from harnessing_ts.schema import NODE_SPECS, ControlRequest, NodeSession, NodeType, Part, RunRecord, WorkspaceState, get_next_node
-from harnessing_ts.settings.llm import LlmConfig, build_sdk_invocation_config, mask_llm_config, read_effective_llm_config
-from harnessing_ts.state.message_log import MessageLog
+from harnessing_ts.node_state import NodeStateMachine
+from harnessing_ts.schema import NODE_SPECS, ControlRequest, NodeSession, NodeType, Part, RunRecord, WorkspaceState
+from harnessing_ts.settings.llm import LlmConfig, mask_llm_config, read_effective_llm_config
 from harnessing_ts.state.workspace_store import WorkspaceStore, now_iso
-from harnessing_ts.tools.compose_tools import build_main_allowed_tools, build_node_allowed_tools, build_node_native_tools
-
-
-NODE_SPECS_BY_TYPE = {spec.type: spec for spec in NODE_SPECS}
+from harnessing_ts.tools.compose_tools import build_node_native_tools
 
 
 class HarnessOrchestrator:
@@ -42,6 +31,7 @@ class HarnessOrchestrator:
         self.mode = mode
         self.dry_run = dry_run
         self.store = WorkspaceStore(workspace_path)
+        self.node_state = NodeStateMachine(workspace_path)
         self.state: WorkspaceState | None = None
         self.main_runner: SdkRunner | None = None
         self.active_node_runner: SdkRunner | None = None
@@ -856,57 +846,21 @@ class HarnessOrchestrator:
         })
 
     def _is_pipeline_complete(self) -> bool:
-        """The node chain is fully complete: final-summary is in
-        completedNodes AND there is no active node. Used to refuse
-        re-entering completed nodes after the SDK delivers a delayed
-        tool_result for the main session's first enter_node call.
+        """Return true when the persisted node chain has fully completed.
 
-        Always re-reads state from disk so callers who just wrote the
-        state file (e.g. tests, or finish_node's own write) see the
-        fresh value."""
-        state = self.store.read_state()
-        if not state:
-            return False
-        return (
-            "final-summary" in state.get("completedNodes", [])
-            and not state.get("activeNode")
-            and not state.get("activeNodeSessionId")
-        )
+        This wrapper preserves the historical private orchestrator API while
+        keeping the actual rule in NodeStateMachine.
+        """
+        return self.node_state.is_pipeline_complete(self.store.read_state())
 
     def _next_node_after_completion(self, latest: NodeSession) -> NodeType | None:
-        if latest["nodeType"] == "iterative-solving":
-            if latest.get("loopDecision") == "continue":
-                return "iterative-solving"
-            if latest.get("loopDecision") == "exit":
-                return "final-summary"
-            if latest.get("nextNode"):
-                return latest.get("nextNode")
-            if latest.get("goalMet") is True:
-                return get_next_node(latest["nodeType"])
-            return None
-        if latest.get("nextNode"):
-            return latest.get("nextNode")
-        return get_next_node(latest["nodeType"])
+        return self.node_state.next_node_after_completion(latest)
 
     def _normalize_next_node(self, value: Any) -> NodeType | None:
-        if value is None:
-            return None
-        node = str(value).strip()
-        if not node or node == "none":
-            return None
-        if node not in NODE_SPECS_BY_TYPE:
-            raise RuntimeError(f"Invalid nextNode from MCP finish_node: {node}")
-        return node
+        return self.node_state.normalize_next_node(value)
 
     def _normalize_loop_decision(self, value: Any) -> str | None:
-        if value is None:
-            return None
-        decision = str(value).strip().lower()
-        if not decision or decision == "none":
-            return None
-        if decision not in {"continue", "exit"}:
-            raise RuntimeError(f"Invalid loopDecision from MCP finish_node: {decision}")
-        return decision
+        return self.node_state.normalize_loop_decision(value)
 
     def _validate_finish_control(
         self,
@@ -917,82 +871,23 @@ class HarnessOrchestrator:
         output_paths: list[str] | None = None,
         goal_met: bool | None = None,
     ) -> None:
-        if node_type != "iterative-solving":
-            return
-        if success and not loop_decision:
-            raise RuntimeError("iterative-solving finish_node requires explicit loopDecision.")
-        if loop_decision == "continue" and next_node not in {None, "iterative-solving"}:
-            raise RuntimeError("iterative-solving loopDecision=continue requires nextNode=iterative-solving.")
-        if loop_decision == "exit" and next_node not in {None, "final-summary"}:
-            raise RuntimeError("iterative-solving loopDecision=exit requires nextNode=final-summary.")
-        route_decision = self._iterative_route_decision(next_node, loop_decision)
-        if success and route_decision == "continue" and goal_met is True:
-            raise RuntimeError("iterative-solving cannot set goalMet=true while loopDecision=continue.")
-        if success:
-            self._validate_iterative_output_paths(output_paths or [])
-        recommend_exit = self._read_iteration_state_recommend_exit()
-        if recommend_exit is False and route_decision == "exit":
-            raise RuntimeError(
-                "iterative-solving finish_node requested final-summary, but user/iteration-state.md "
-                "has recommend_exit: false. Use loopDecision=continue with nextNode=iterative-solving, "
-                "or update iteration-state.md only if the contract stop criteria are actually met."
-            )
-        if recommend_exit is True and route_decision == "continue":
-            raise RuntimeError(
-                "iterative-solving finish_node requested another iteration, but user/iteration-state.md "
-                "has recommend_exit: true. Use loopDecision=exit with nextNode=final-summary, "
-                "or update iteration-state.md if the work should continue."
-            )
+        self.node_state.validate_finish_control(
+            node_type,
+            success,
+            next_node,
+            loop_decision,
+            output_paths,
+            goal_met,
+        )
 
     def _validate_iterative_output_paths(self, output_paths: list[str]) -> None:
-        normalized = [_workspace_relative_path(path, self.workspace_path) for path in output_paths]
-        requirements = {
-            "candidate review": r"^reports/iterations/.+-candidate-review\.md$",
-            "case review": r"^reports/iterations/.+-case-review\.md$",
-            "iteration summary": r"^reports/iterations/.+-summary\.md$",
-            "iteration state": r"^user/iteration-state\.md$",
-        }
-        missing = [
-            label
-            for label, pattern in requirements.items()
-            if not any(re.match(pattern, path) for path in normalized)
-        ]
-        if missing:
-            raise RuntimeError(
-                "iterative-solving finish_node is missing required outputPaths: "
-                + ", ".join(missing)
-                + ". Complete the full node artifacts before calling finish_node."
-            )
+        self.node_state.validate_iterative_output_paths(output_paths)
 
     def _iterative_route_decision(self, next_node: NodeType | None, loop_decision: str | None) -> str | None:
-        if loop_decision in {"continue", "exit"}:
-            return loop_decision
-        if next_node == "iterative-solving":
-            return "continue"
-        if next_node == "final-summary":
-            return "exit"
-        return None
+        return self.node_state.iterative_route_decision(next_node, loop_decision)
 
     def _read_iteration_state_recommend_exit(self) -> bool | None:
-        path = self.workspace_path / "user" / "iteration-state.md"
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except FileNotFoundError:
-            return None
-        for line in text.splitlines()[:80]:
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#") or stripped.startswith("```"):
-                continue
-            if not stripped.startswith("recommend_exit"):
-                continue
-            _, _, raw = stripped.partition(":")
-            value = raw.strip().strip("\"'").lower()
-            if value == "true":
-                return True
-            if value == "false":
-                return False
-            return None
-        return None
+        return self.node_state.read_iteration_state_recommend_exit()
 
     def _ensure_initialized(self) -> None:
         if not self.state:
@@ -1033,68 +928,31 @@ class HarnessOrchestrator:
     def _ensure_main_runner(self) -> None:
         if self.main_runner:
             return
-        ctx = PromptContext(str(self.workspace_path), self.locale)
-        llm_config = read_effective_llm_config(self.workspace_path)
-        sdk_config = build_sdk_invocation_config(llm_config)
-        mcp_server = create_harness_mcp_server(
-            session_role="main",
+        self.main_runner = build_main_runner(
+            workspace_path=self.workspace_path,
+            locale=self.locale,
+            log_path=self.store.main_log_path,
             enter_node=self.request_enter_node,
             query_knowledge=self.request_query_knowledge,
         )
-        if mcp_server is None:
-            raise RuntimeError("Claude Code SDK MCP server is required for node control but could not be created.")
-        self.main_runner = SdkRunner(SdkRunnerConfig(
-            cwd=self.workspace_path,
-            system_prompt=build_main_system_prompt(ctx),
-            attachment_text=build_main_attachment(ctx),
-            allowed_tools=build_main_allowed_tools(),
-            model=sdk_config.model,
-            env=sdk_config.env,
-            extra_args=sdk_config.extra_args,
-            mcp_server=mcp_server,
-            log=MessageLog(self.store.main_log_path),
-        ))
 
     def _spawn_node_runner(self, node: NodeSession) -> None:
-        ctx = PromptContext(str(self.workspace_path), self.locale)
-        llm_config = read_effective_llm_config(self.workspace_path)
-        sdk_config = build_sdk_invocation_config(llm_config)
         node_id = node["id"]
         node_type = node["nodeType"]
-        mcp_server = create_harness_mcp_server(
-            session_role="node",
-            finish_node=lambda args: self.request_finish_node_for_node(args, node_id),
-            query_knowledge=self.request_query_knowledge,
-            record_artifact=lambda args: self.record_artifact_for_node(args, node_id, node_type),
-            record_run=lambda args: self.record_run_for_node(args, node_id, node_type),
-            get_runtime_settings=self.get_runtime_settings,
-        )
-        if mcp_server is None:
-            raise RuntimeError("Claude Code SDK MCP server is required for node control but could not be created.")
 
         def on_session_id(sdk_session_id: str) -> None:
             node["sdkSessionId"] = sdk_session_id
             self.store.write_node_session(node)
 
-        self.active_node_runner = SdkRunner(SdkRunnerConfig(
-            cwd=self.workspace_path,
-            system_prompt=build_node_system_prompt(node["nodeType"], ctx),
-            attachment_text=build_node_attachment(node["nodeType"], node.get("inputSummary")),
-            allowed_tools=build_node_allowed_tools(node["nodeType"]),
-            model=sdk_config.model,
-            env=sdk_config.env,
-            extra_args=sdk_config.extra_args,
-            mcp_server=mcp_server,
-            log=MessageLog(self.store.node_log_path(node["id"])),
+        self.active_node_runner = build_node_runner(
+            workspace_path=self.workspace_path,
+            locale=self.locale,
+            node=node,
+            log_path=self.store.node_log_path(node_id),
+            finish_node=lambda args: self.request_finish_node_for_node(args, node_id),
+            query_knowledge=self.request_query_knowledge,
+            record_artifact=lambda args: self.record_artifact_for_node(args, node_id, node_type),
+            record_run=lambda args: self.record_run_for_node(args, node_id, node_type),
+            get_runtime_settings=self.get_runtime_settings,
             on_session_id=on_session_id,
-        ))
-
-
-def _workspace_relative_path(path: str, workspace_path: Path) -> str:
-    candidate = Path(path)
-    if candidate.is_absolute():
-        try:
-            return candidate.resolve().relative_to(workspace_path.resolve()).as_posix()
-        except ValueError:
-            return candidate.as_posix().lstrip("/")
-    return candidate.as_posix().lstrip("./")
+        )

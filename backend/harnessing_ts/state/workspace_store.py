@@ -10,6 +10,12 @@ from uuid import uuid4
 
 from harnessing_ts.schema import CONTROL_MODES, NODE_TYPES, ControlRequest, NodeSession, NodeType, Part, RunRecord, RuntimeSettings, TimelineEvent, WorkspaceState
 from harnessing_ts.state.jsonl import append_jsonl, clear_file, read_json, read_jsonl, write_json
+from harnessing_ts.state.workspace_layout import (
+    ensure_builtin_tools,
+    ensure_reference_text_derivatives,
+    ensure_workspace_layout,
+    write_reference_text_derivative,
+)
 from harnessing_ts.workspace_runtime import ensure_workspace_uv_environment
 
 
@@ -128,29 +134,7 @@ class WorkspaceStore:
         return request
 
     def ensure_layout(self) -> None:
-        for rel in (
-            "user",
-            "user/loop-memory",
-            "data/raw",
-            "data/processed",
-            "references",
-            "knowledge_base",
-            "knowledge_base/tables",
-            "knowledge_base/indexes",
-            "artifacts",
-            "plots",
-            "tools",
-            "tools/generated",
-            "runs/iterations",
-            "reports",
-            "reports/iterations",
-            "logs/nodes",
-            "state/nodes",
-            "training",
-        ):
-            (self.root / rel).mkdir(parents=True, exist_ok=True)
-        self.ensure_builtin_tools()
-        self.ensure_reference_text_derivatives()
+        ensure_workspace_layout(self.root)
 
     def read_state(self) -> WorkspaceState | None:
         return read_json(self.state_path)
@@ -497,73 +481,13 @@ class WorkspaceStore:
         }
 
     def ensure_reference_text_derivatives(self) -> None:
-        references = self.root / "references"
-        if not references.exists():
-            return
-        for path in references.iterdir():
-            if path.is_file() and path.suffix.lower() == ".docx":
-                self._write_reference_text_derivative(path)
+        ensure_reference_text_derivatives(self.root)
 
     def _write_reference_text_derivative(self, path: Path) -> str | None:
-        if path.suffix.lower() != ".docx":
-            return None
-        target = path.with_suffix(path.suffix + ".txt")
-        if target.exists() and target.stat().st_mtime >= path.stat().st_mtime:
-            return str(target.relative_to(self.root))
-        try:
-            text = _extract_docx_text(path)
-        except Exception:
-            return None
-        if not text.strip():
-            return None
-        target.write_text(text, encoding="utf-8")
-        return str(target.relative_to(self.root))
+        return write_reference_text_derivative(self.root, path)
 
     def ensure_builtin_tools(self) -> None:
-        script = self.root / "tools" / "read_docx.py"
-        if script.exists():
-            return
-        script.write_text('''from __future__ import annotations
-
-import sys
-from pathlib import Path
-
-from docx import Document
-
-
-def extract_docx(path: Path) -> str:
-    document = Document(str(path))
-    chunks: list[str] = []
-    for paragraph in document.paragraphs:
-        text = paragraph.text.strip()
-        if text:
-            chunks.append(text)
-    for table_index, table in enumerate(document.tables, start=1):
-        chunks.append(f"\\n[Table {table_index}]")
-        for row in table.rows:
-            cells = [cell.text.strip().replace("\\n", " ") for cell in row.cells]
-            if any(cells):
-                chunks.append(" | ".join(cells))
-    return "\\n\\n".join(chunks)
-
-
-def main() -> None:
-    if len(sys.argv) not in {2, 3}:
-        raise SystemExit("Usage: uv run python tools/read_docx.py <path-to-docx> [output.txt]")
-    path = Path(sys.argv[1])
-    text = extract_docx(path)
-    if len(sys.argv) == 3:
-        out = Path(sys.argv[2])
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(text + "\\n", encoding="utf-8")
-        print(str(out))
-    else:
-        print(text)
-
-
-if __name__ == "__main__":
-    main()
-''', encoding="utf-8")
+        ensure_builtin_tools(self.root)
 
     def clear_debug_logs(self, scope: str = "main") -> None:
         clear_file(self.main_log_path)
@@ -757,24 +681,6 @@ def _safe_filename(filename: str) -> str:
     safe = "".join(ch if ch.isalnum() or ch in {".", "-", "_", " "} else "_" for ch in name)
     safe = safe.strip(" .")
     return safe or f"reference-{uuid4().hex[:8]}"
-
-
-def _extract_docx_text(path: Path) -> str:
-    from docx import Document
-
-    document = Document(str(path))
-    chunks: list[str] = []
-    for paragraph in document.paragraphs:
-        text = paragraph.text.strip()
-        if text:
-            chunks.append(text)
-    for table_index, table in enumerate(document.tables, start=1):
-        chunks.append(f"\n[Table {table_index}]")
-        for row in table.rows:
-            cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
-            if any(cells):
-                chunks.append(" | ".join(cells))
-    return "\n\n".join(chunks).strip() + "\n"
 
 
 def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
