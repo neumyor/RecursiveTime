@@ -30,11 +30,14 @@ def test_bootstrap_contract_includes_full_static_payload(tmp_path, monkeypatch) 
         "knowledgeGraphParts",
         "knowledgeGraphBuild",
         "knowledgeGraphLlmConfig",
+        "chainSummary",
+        "chainSummaryBuild",
+        "chainSummaryParts",
         "dryRun",
         "debugEnabled",
         "runtime",
     }.issubset(payload)
-    assert {"running", "knowledgeGraphRunning", "workspaceUv"}.issubset(payload["runtime"])
+    assert {"running", "knowledgeGraphRunning", "chainSummaryRunning", "workspaceUv"}.issubset(payload["runtime"])
 
 
 def test_live_contract_is_incremental_subset(tmp_path, monkeypatch) -> None:
@@ -61,5 +64,8 @@ def test_live_contract_is_incremental_subset(tmp_path, monkeypatch) -> None:
         "knowledgeGraphParts",
         "knowledgeGraphBuild",
         "knowledgeGraphLlmConfig",
+        "chainSummary",
+        "chainSummaryBuild",
+        "chainSummaryParts",
         "runtime",
     }.issubset(payload)

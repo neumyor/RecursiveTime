@@ -87,6 +87,7 @@ def create_app() -> FastAPI:
     app.state.debug_enabled = debug_enabled
     app.state.run_task = None
     app.state.knowledge_graph_task = None
+    app.state.chain_summary_task = None
 
     @app.middleware("http")
     async def no_store_cache(request: Any, call_next: Any) -> Any:
@@ -238,6 +239,28 @@ def create_app() -> FastAPI:
         config = orchestrator.update_knowledge_graph_llm_config(request.model_dump(exclude_none=True))
         return {"config": config, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
+    @app.get("/api/chain-summary")
+    async def chain_summary() -> dict[str, Any]:
+        return orchestrator.get_chain_summary()
+
+    @app.get("/api/chain-summary/status")
+    async def chain_summary_status() -> dict[str, Any]:
+        return orchestrator.get_chain_summary_status()
+
+    @app.get("/api/chain-summary/log")
+    async def chain_summary_log() -> list[dict[str, Any]]:
+        return orchestrator.get_chain_summary_parts()
+
+    @app.post("/api/chain-summary/build")
+    async def trigger_chain_summary_build() -> dict[str, Any]:
+        accepted = _start_chain_summary_build(app, orchestrator, "manual")
+        return {"accepted": accepted, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
+
+    @app.post("/api/chain-summary/pause")
+    async def pause_chain_summary_build(request: InterruptRequest) -> dict[str, Any]:
+        await orchestrator.pause_chain_summary_build(request.reason)
+        return {"bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
+
     @app.post("/api/llm-config")
     async def update_main_llm_config(request: MainLlmConfigRequest) -> dict[str, Any]:
         config = orchestrator.update_main_llm_config(request.model_dump(exclude_none=True))
@@ -255,6 +278,23 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="file not found") from None
         except ValueError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from None
+
+    @app.get("/api/files/preview")
+    async def file_preview(path: str) -> FileResponse:
+        rel_path = unquote(path).strip().lstrip("/")
+        target = (workspace_path / rel_path).resolve()
+        workspace_root = workspace_path.resolve()
+        if target != workspace_root and workspace_root not in target.parents:
+            raise HTTPException(status_code=403, detail="preview is limited to workspace files")
+        if not target.exists() or not target.is_file():
+            raise HTTPException(status_code=404, detail="file not found")
+        media_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        if not (media_type.startswith("image/") or media_type == "application/pdf"):
+            raise HTTPException(status_code=415, detail="preview only supports images and PDFs")
+        response = FileResponse(target, media_type=media_type, filename=target.name)
+        response.headers["Content-Disposition"] = f'inline; filename="{target.name}"'
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     @app.get("/api/references/preview")
     async def reference_preview(path: str) -> FileResponse:
@@ -338,7 +378,7 @@ def create_app() -> FastAPI:
         if request.scope in {"chat", "all"}:
             if not request.confirmReset:
                 raise HTTPException(status_code=400, detail="reset confirmation required")
-            if _task_running(app.state.run_task) or _task_running(app.state.knowledge_graph_task):
+            if _task_running(app.state.run_task) or _task_running(app.state.knowledge_graph_task) or _task_running(app.state.chain_summary_task):
                 raise HTTPException(status_code=409, detail="cannot reset workspace while a run is active")
         await orchestrator.clear_debug_logs(request.scope)
         return {"ok": True, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
@@ -425,6 +465,32 @@ async def _run_knowledge_graph_build(orchestrator: HarnessOrchestrator, trigger:
         pass
     finally:
         setattr(orchestrator, "_server_knowledge_graph_task", None)
+
+
+def _start_chain_summary_build(app: FastAPI, orchestrator: HarnessOrchestrator, trigger: str) -> bool:
+    current = getattr(app.state, "chain_summary_task", None)
+    if current is not None and not current.done():
+        orchestrator.store.append_timeline({
+            "type": "chain_summary_build_skipped",
+            "timestamp": now_iso_for_server(),
+            "message": "Chain builder is already running.",
+            "payload": {"trigger": trigger},
+        })
+        return False
+    app.state.chain_summary_task = asyncio.create_task(_run_chain_summary_build(orchestrator, trigger))
+    setattr(orchestrator, "_server_chain_summary_task", app.state.chain_summary_task)
+    return True
+
+
+async def _run_chain_summary_build(orchestrator: HarnessOrchestrator, trigger: str) -> None:
+    setattr(orchestrator, "_server_chain_summary_task", asyncio.current_task())
+    try:
+        await orchestrator.build_chain_summary(trigger)
+    except Exception:
+        # The orchestrator records failure status and timeline details.
+        pass
+    finally:
+        setattr(orchestrator, "_server_chain_summary_task", None)
 
 
 def _task_running(task: Any) -> bool:

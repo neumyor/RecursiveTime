@@ -33,6 +33,9 @@ def build_bootstrap_payload(
         "knowledgeGraphParts": orchestrator.get_knowledge_graph_parts(),
         "knowledgeGraphBuild": orchestrator.get_knowledge_graph_build_status(),
         "knowledgeGraphLlmConfig": orchestrator.get_knowledge_graph_llm_config(),
+        "chainSummary": orchestrator.get_chain_summary(),
+        "chainSummaryBuild": orchestrator.get_chain_summary_status(),
+        "chainSummaryParts": orchestrator.get_chain_summary_parts(),
         "dryRun": dry_run,
         "debugEnabled": debug_enabled,
         "runtime": _runtime_payload(orchestrator, task_running),
@@ -56,6 +59,9 @@ def build_live_payload(
         "knowledgeGraphParts": orchestrator.get_knowledge_graph_parts(),
         "knowledgeGraphBuild": orchestrator.get_knowledge_graph_build_status(),
         "knowledgeGraphLlmConfig": orchestrator.get_knowledge_graph_llm_config(),
+        "chainSummary": orchestrator.get_chain_summary(),
+        "chainSummaryBuild": orchestrator.get_chain_summary_status(),
+        "chainSummaryParts": orchestrator.get_chain_summary_parts(),
         "runtime": _runtime_payload(orchestrator, task_running),
     }
 
@@ -70,5 +76,6 @@ def _runtime_payload(orchestrator: HarnessOrchestrator, task_running: TaskRunnin
     return {
         "running": task_running(getattr(orchestrator, "_server_run_task", None)),
         "knowledgeGraphRunning": task_running(getattr(orchestrator, "_server_knowledge_graph_task", None)),
+        "chainSummaryRunning": task_running(getattr(orchestrator, "_server_chain_summary_task", None)),
         "workspaceUv": orchestrator.get_runtime_status(),
     }

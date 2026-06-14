@@ -52,9 +52,11 @@ const state = {
   rightCollapsed: window.innerWidth <= 1180,
   view: ((window.location.pathname === '/knowledge-graph'
     ? 'knowledgeGraph'
+    : window.location.pathname === '/chain-summary'
+    ? 'chainSummary'
     : window.location.pathname === '/settings'
     ? 'settings'
-    : 'chat') as 'chat' | 'knowledgeGraph' | 'settings'),
+    : 'chat') as 'chat' | 'knowledgeGraph' | 'chainSummary' | 'settings'),
   selectedGraphNodeId: null as string | null,
   selectedKnowledgeBaseKind: null as string | null,
   knowledgeBaseCards: null as JsonMap | null,
@@ -292,6 +294,19 @@ app.innerHTML = `
       </div>
     </section>
 
+    <section id="chainSummaryView" class="chain-summary-view" hidden>
+      <header class="chain-header">
+        <div class="chain-title-block">
+          <div class="eyebrow"><span data-icon="Activity"></span><span>Chain Summary</span></div>
+          <h2>思维链总结</h2>
+        </div>
+        <button id="buildChainSummaryBtn" type="button" class="chain-generate-btn"><span data-icon="RefreshCw"></span><span>生成思维链总结</span></button>
+      </header>
+      <section id="chainBuildStatus" class="chain-build-status"></section>
+      <section id="chainMetricChart" class="chain-chart-panel"></section>
+      <section id="chainSummaryContent" class="chain-content-panel"></section>
+    </section>
+
     <form id="sendForm" class="composer">
       <div class="composer-shell">
         <textarea id="messageInput" rows="1" placeholder="向 orchestrator 发送消息"></textarea>
@@ -309,6 +324,18 @@ app.innerHTML = `
         <div class="kg-cta-meta">
           <span class="kg-cta-pill" id="kgCtaPill">Idle</span>
           <span class="kg-cta-stats" id="kgCtaStats">not built</span>
+        </div>
+      </div>
+      <div class="kg-cta-arrow"><span data-icon="ChevronRight"></span></div>
+    </button>
+    <button id="chainCta" class="kg-cta chain-cta" type="button" data-state="idle" aria-label="Open Chain Summary">
+      <div class="kg-cta-icon"><span data-icon="Activity"></span></div>
+      <div class="kg-cta-body">
+        <div class="kg-cta-eyebrow">Agent Trajectory</div>
+        <div class="kg-cta-title">思维链总结</div>
+        <div class="kg-cta-meta">
+          <span class="kg-cta-pill" id="chainCtaPill">Idle</span>
+          <span class="kg-cta-stats" id="chainCtaStats">not generated</span>
         </div>
       </div>
       <div class="kg-cta-arrow"><span data-icon="ChevronRight"></span></div>
@@ -400,6 +427,11 @@ const els = {
   nodeDetail: query('#nodeDetail'),
   chatStream: query<HTMLElement>('#chatStream'),
   knowledgeGraphView: query<HTMLElement>('#knowledgeGraphView'),
+  chainSummaryView: query<HTMLElement>('#chainSummaryView'),
+  buildChainSummaryBtn: query<HTMLButtonElement>('#buildChainSummaryBtn'),
+  chainBuildStatus: query<HTMLElement>('#chainBuildStatus'),
+  chainMetricChart: query<HTMLElement>('#chainMetricChart'),
+  chainSummaryContent: query<HTMLElement>('#chainSummaryContent'),
   graphTitle: query('#graphTitle'),
   graphCanvas: query('#graphCanvas'),
   graphInspector: query('#graphInspector'),
@@ -435,6 +467,9 @@ const els = {
   kgCta: query<HTMLButtonElement>('#kgCta'),
   kgCtaPill: query<HTMLElement>('#kgCtaPill'),
   kgCtaStats: query<HTMLElement>('#kgCtaStats'),
+  chainCta: query<HTMLButtonElement>('#chainCta'),
+  chainCtaPill: query<HTMLElement>('#chainCtaPill'),
+  chainCtaStats: query<HTMLElement>('#chainCtaStats'),
   stateBtn: query<HTMLButtonElement>('#stateBtn'),
   llmBtn: query<HTMLButtonElement>('#llmBtn'),
   settingsBtn: query<HTMLButtonElement>('#settingsBtn'),
@@ -550,9 +585,20 @@ els.kgCta.addEventListener('click', async () => {
   if (state.bootstrap) state.bootstrap.knowledgeGraph = graph;
   render();
 });
+els.chainCta.addEventListener('click', async () => {
+  state.view = 'chainSummary';
+  history.pushState({}, '', '/chain-summary');
+  const summary = await fetchJson<JsonMap>('/api/chain-summary');
+  if (state.bootstrap) state.bootstrap.chainSummary = summary;
+  render();
+});
+els.buildChainSummaryBtn.addEventListener('click', async () => {
+  await postJson('/api/chain-summary/build', {});
+  await refresh();
+});
 window.addEventListener('popstate', () => {
   const path = window.location.pathname;
-  state.view = path === '/knowledge-graph' ? 'knowledgeGraph' : path === '/settings' ? 'settings' : 'chat';
+  state.view = path === '/knowledge-graph' ? 'knowledgeGraph' : path === '/chain-summary' ? 'chainSummary' : path === '/settings' ? 'settings' : 'chat';
   render();
 });
 els.graphExtractionDepthInput.addEventListener('change', async () => {
@@ -724,8 +770,12 @@ function liveRender(data: Bootstrap) {
     renderKnowledgeGraphBuilder(data);
     renderBuilderTrace(data.knowledgeGraphParts || []);
   }
+  if (state.view === 'chainSummary') {
+    renderChainSummary(data);
+  }
 
   renderKgCta(data);
+  renderChainCta(data);
   renderShellState();
   renderViewState();
   hydrateIcons();
@@ -758,12 +808,14 @@ function render() {
   renderKnowledgeGraphBuilder(data);
   renderKnowledgeWorkbench(data);
   renderBuilderTrace(data.knowledgeGraphParts || []);
+  renderChainSummary(data);
   renderSettings(data);
   renderViewState();
   renderTimeline(data.timeline);
   renderFileTree(data.fileTree);
   renderRuntimeSettings(data.runtimeSettings || ws.runtimeSettings);
   renderKgCta(data);
+  renderChainCta(data);
   renderDebugActions(Boolean(data.debugEnabled));
   updateControls(data);
   renderShellState();
@@ -947,6 +999,31 @@ function renderKgCta(data: Bootstrap) {
   els.kgCtaStats.textContent = classes > 0 || relations > 0
     ? `${classes} classes · ${relations} relations`
     : 'not built';
+}
+
+function renderChainCta(data: Bootstrap) {
+  if (!data) return;
+  const build = data.chainSummaryBuild || {};
+  const summary = data.chainSummary || {};
+  const running = Boolean(data.runtime?.chainSummaryRunning || build.running);
+  const iterations = Array.isArray(summary.iterations) ? summary.iterations.length : 0;
+  const metrics = Array.isArray(summary.metricSeries) ? summary.metricSeries.length : 0;
+  let ctaState: 'idle' | 'building' | 'built' | 'failed' = 'idle';
+  let label = 'Idle';
+  if (build.status === 'failed') {
+    ctaState = 'failed';
+    label = 'Failed';
+  } else if (running) {
+    ctaState = 'building';
+    label = 'Building';
+  } else if (build.status === 'completed' || iterations > 0 || metrics > 0) {
+    ctaState = 'built';
+    label = 'Ready';
+  }
+  els.chainCta.dataset.state = ctaState;
+  els.chainCtaPill.textContent = label;
+  els.chainCtaPill.className = `kg-cta-pill ${ctaState}`;
+  els.chainCtaStats.textContent = iterations || metrics ? `${iterations} iterations · ${metrics} metrics` : 'not generated';
 }
 
 function syncSettingsFromBootstrap(data: Bootstrap) {
@@ -1259,15 +1336,185 @@ async function resetMainLlmConfig() {
 
 function renderViewState() {
   const graphMode = state.view === 'knowledgeGraph';
+  const chainMode = state.view === 'chainSummary';
   const settingsMode = state.view === 'settings';
-  els.chatStream.hidden = graphMode || settingsMode;
+  els.chatStream.hidden = graphMode || chainMode || settingsMode;
   els.knowledgeGraphView.hidden = !graphMode;
+  els.chainSummaryView.hidden = !chainMode;
   els.settingsView.hidden = !settingsMode;
-  els.sendForm.hidden = graphMode || settingsMode;
-  els.transcriptScope.disabled = graphMode;
-  query('#mainTitle').textContent = graphMode ? 'Knowledge Graph' : settingsMode ? 'Settings' : 'Orchestrator';
+  els.sendForm.hidden = graphMode || chainMode || settingsMode;
+  els.transcriptScope.disabled = graphMode || chainMode;
+  query('#mainTitle').textContent = graphMode ? 'Knowledge Graph' : chainMode ? '思维链总结' : settingsMode ? 'Settings' : 'Orchestrator';
   document.body.classList.toggle('knowledge-page', graphMode);
+  document.body.classList.toggle('chain-page', chainMode);
   document.body.classList.toggle('settings-page', settingsMode);
+}
+
+function renderChainSummary(data: Bootstrap) {
+  if (state.view !== 'chainSummary') return;
+  const build = data.chainSummaryBuild || {};
+  const summary = data.chainSummary || {};
+  const running = Boolean(data.runtime?.chainSummaryRunning || build.running);
+  els.buildChainSummaryBtn.disabled = running;
+  els.chainBuildStatus.innerHTML = `
+    <span class="mini-pill ${build.status === 'failed' ? 'failed' : running ? 'active' : build.status === 'completed' ? 'ready' : 'pending'}">
+      ${running ? '<span data-icon="Loader2"></span>' : ''}
+      ${escapeHtml(running ? 'running' : build.status || 'idle')}
+    </span>
+    <span class="meta">${escapeHtml(build.message || '')}</span>
+  `;
+  renderChainMetricChart(summary.metricSeries || []);
+  renderChainContent(summary, build);
+}
+
+function renderChainMetricChart(series: JsonMap[]) {
+  const cleaned = (series || []).filter((item) =>
+    Array.isArray(item.values) && item.values.some((value: JsonMap) => Number.isFinite(Number(value.value)))
+  );
+  if (!cleaned.length) {
+    els.chainMetricChart.innerHTML = emptyState('生成后将在这里展示多个关键指标随 iteration 的变化。', 'Activity');
+    return;
+  }
+  els.chainMetricChart.innerHTML = `
+    <div class="panel-heading"><span data-icon="Activity"></span><span>指标 x Iterations</span></div>
+    <div class="metric-chart-grid">
+      ${cleaned.map(metricChartHtml).join('')}
+    </div>
+  `;
+}
+
+function metricChartHtml(series: JsonMap) {
+  const values: JsonMap[] = (series.values || []).filter((item: JsonMap) => Number.isFinite(Number(item.value)));
+  const numeric = values.map((item) => Number(item.value)).filter((value) => Number.isFinite(value));
+  const min = Math.min(...numeric);
+  const max = Math.max(...numeric);
+  const spread = max - min || 1;
+  const width = 360;
+  const height = 150;
+  const padX = 28;
+  const padY = 22;
+  const points = values.map((item, index) => {
+    const value = Number(item.value);
+    const x = values.length === 1 ? width / 2 : padX + (index * (width - padX * 2)) / (values.length - 1);
+    const y = height - padY - ((value - min) / spread) * (height - padY * 2);
+    return { x, y, value, label: item.label || item.iteration || String(index + 1) };
+  });
+  const polyline = points.map((point) => `${point.x},${point.y}`).join(' ');
+  return `
+    <article class="metric-chart-card">
+      <div class="metric-chart-title">
+        <span>${escapeHtml(series.name || 'metric')}</span>
+        <span class="meta">${escapeHtml(series.unit || series.direction || '')}</span>
+      </div>
+      <svg class="metric-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(series.name || 'metric')}">
+        <line class="metric-axis" x1="${padX}" y1="${height - padY}" x2="${width - padX}" y2="${height - padY}"></line>
+        <polyline class="metric-line" points="${polyline}"></polyline>
+        ${points.map((point) => `
+          <g class="metric-point" transform="translate(${point.x} ${point.y})">
+            <circle r="4"></circle>
+            <text y="-8">${escapeHtml(formatMetricValue(point.value))}</text>
+          </g>
+        `).join('')}
+      </svg>
+      <div class="metric-labels">${points.map((point) => `<span>${escapeHtml(point.label)}</span>`).join('')}</div>
+    </article>
+  `;
+}
+
+function renderChainContent(summary: JsonMap, build: JsonMap = {}) {
+  const iterations: JsonMap[] = summary.iterations || [];
+  const generated = build.status === 'completed';
+  if (!generated) {
+    els.chainSummaryContent.innerHTML = `
+      <div class="chain-placeholder">
+        <span data-icon="Activity"></span>
+        <h3>等待生成思维链总结</h3>
+        <p>${escapeHtml(build.status === 'failed' ? build.message || '生成失败，请检查 chain builder 日志。' : '点击上方按钮后，chain builder 会读取当前 workspace 的 logs、reports、runs 和样本可视化，生成完整决策链。')}</p>
+      </div>
+    `;
+    return;
+  }
+  if (!iterations.length && !summary.overview) {
+    els.chainSummaryContent.innerHTML = emptyState('chain builder 已完成，但没有可展示的总结内容。', 'Info');
+    return;
+  }
+  els.chainSummaryContent.innerHTML = `
+    <article class="chain-overview">
+      <div class="panel-heading"><span data-icon="Sparkles"></span><span>${escapeHtml(summary.title || '思维链总结')}</span></div>
+      ${summary.generatedAt ? `<div class="meta">Generated ${escapeHtml(formatTime(summary.generatedAt))}</div>` : ''}
+      <div class="markdown-body">${renderMarkdown(summary.overview || '')}</div>
+      ${Array.isArray(summary.uncertainty) && summary.uncertainty.length ? `
+        <div class="chain-uncertainty">
+          ${summary.uncertainty.map((item: any) => `<span><span data-icon="AlertTriangle"></span>${escapeHtml(item)}</span>`).join('')}
+        </div>
+      ` : ''}
+    </article>
+    <div class="chain-iterations">
+      ${iterations.map(chainIterationHtml).join('')}
+    </div>
+  `;
+  for (const item of els.chainSummaryContent.querySelectorAll<HTMLElement>('[data-chain-path]')) {
+    item.addEventListener('click', async () => showWorkspaceFile(item.dataset.chainPath || ''));
+  }
+}
+
+function chainIterationHtml(iteration: JsonMap) {
+  const methods: JsonMap[] = iteration.methods || [];
+  const results: JsonMap[] = iteration.testResults || [];
+  const samples: JsonMap[] = iteration.sampleInspirations || [];
+  return `
+    <article class="chain-iteration-card">
+      <header class="chain-iteration-head">
+        <div>
+          <div class="chain-iteration-id">${escapeHtml(iteration.iterationId || 'iteration')}</div>
+          <div class="meta">${escapeHtml(iteration.nextStep || '')}</div>
+        </div>
+      </header>
+      ${iteration.summary ? `<p class="chain-summary-text">${escapeHtml(iteration.summary)}</p>` : ''}
+      <div class="chain-columns">
+        <section>
+          <div class="detail-section-title">提出的方法</div>
+          ${methods.length ? methods.map((method) => `
+            <div class="chain-mini-card">
+              <strong>${escapeHtml(method.name || 'method')}</strong>
+              <p>${escapeHtml(method.hypothesis || '')}</p>
+              ${method.artifactPath ? `<button type="button" class="artifact-item" data-chain-path="${escapeHtml(method.artifactPath)}"><span data-icon="File"></span><span>${escapeHtml(method.artifactPath)}</span></button>` : ''}
+            </div>
+          `).join('') : emptyState('没有可审计的方法记录。', 'Info')}
+        </section>
+        <section>
+          <div class="detail-section-title">测试结果</div>
+          ${results.length ? results.map((result) => `
+            <div class="chain-mini-card">
+              <strong>${escapeHtml(result.metric || 'result')}: ${escapeHtml(result.value || '')}</strong>
+              <p>${escapeHtml(result.interpretation || '')}</p>
+              ${result.evidencePath ? `<button type="button" class="artifact-item" data-chain-path="${escapeHtml(result.evidencePath)}"><span data-icon="File"></span><span>${escapeHtml(result.evidencePath)}</span></button>` : ''}
+            </div>
+          `).join('') : emptyState('没有可审计的测试结果。', 'Info')}
+        </section>
+      </div>
+      <div class="detail-section-title">样本启发</div>
+      ${samples.length ? `<div class="chain-samples">${samples.map(chainSampleHtml).join('')}</div>` : emptyState('没有记录样本级启发。', 'Info')}
+    </article>
+  `;
+}
+
+function chainSampleHtml(sample: JsonMap) {
+  const path = String(sample.visualizationPath || '').trim();
+  const image = isPreviewableImage(path)
+    ? `<img src="/api/files/preview?path=${encodeURIComponent(path)}" alt="${escapeHtml(sample.sampleId || 'sample visualization')}" loading="lazy" />`
+    : '';
+  return `
+    <article class="chain-sample-card">
+      ${image || `<div class="sample-image-placeholder"><span data-icon="File"></span></div>`}
+      <div>
+        <div class="chain-sample-title">${escapeHtml(sample.sampleId || 'sample')}</div>
+        ${path ? `<button type="button" class="artifact-item" data-chain-path="${escapeHtml(path)}"><span data-icon="File"></span><span>${escapeHtml(path)}</span></button>` : ''}
+        <p>${escapeHtml(sample.interpretation || '')}</p>
+        <p class="meta">${escapeHtml(sample.nextIterationImpact || '')}</p>
+      </div>
+    </article>
+  `;
 }
 
 function renderKnowledgeGraphBuilder(data: Bootstrap) {
@@ -2131,6 +2378,18 @@ function extractToolResultText(value: any): string {
   return parts.join('\n');
 }
 
+function formatMetricValue(value: number) {
+  if (!Number.isFinite(value)) return '';
+  const abs = Math.abs(value);
+  if (abs >= 100) return value.toFixed(0);
+  if (abs >= 10) return value.toFixed(1);
+  return value.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function isPreviewableImage(path: string) {
+  return /\.(png|jpe?g|webp|gif|svg)$/i.test(path);
+}
+
 function formatTime(value: string) {
   if (!value) return '';
   const date = new Date(value);
@@ -2197,7 +2456,7 @@ function createIcon(iconNode: IconNode) {
 }
 
 setInterval(() => {
-  if (state.bootstrap?.runtime?.running || state.bootstrap?.runtime?.knowledgeGraphRunning || state.busy) {
+  if (state.bootstrap?.runtime?.running || state.bootstrap?.runtime?.knowledgeGraphRunning || state.bootstrap?.runtime?.chainSummaryRunning || state.busy) {
     livePoll().catch(() => undefined);
   }
 }, 10000);

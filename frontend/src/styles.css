@@ -387,6 +387,29 @@ body.left-collapsed .main-pane {
   animation: kg-blink 0.9s ease-in-out infinite;
 }
 
+.chain-cta::before {
+  background: linear-gradient(135deg,
+    rgba(145, 88, 31, 0.12),
+    rgba(199, 85, 52, 0.12),
+    rgba(145, 88, 31, 0.06),
+    rgba(199, 85, 52, 0.10));
+  background-size: 280% 280%;
+}
+
+.chain-cta:hover {
+  box-shadow: 0 14px 32px rgba(145, 88, 31, 0.18);
+  border-color: #b66b34;
+}
+
+.chain-cta .kg-cta-icon {
+  background: linear-gradient(135deg, #b66b34, #cf513b);
+  box-shadow: 0 6px 16px rgba(145, 88, 31, 0.28);
+}
+
+.chain-cta .kg-cta-eyebrow {
+  color: #9a572d;
+}
+
 .kg-cta-pill.failed {
   background: var(--red-soft);
   color: var(--red);
@@ -517,6 +540,12 @@ body.knowledge-page .toolbar {
   display: none;
 }
 
+body.chain-page .right-rail,
+body.chain-page .right-toggle,
+body.chain-page .toolbar {
+  display: none;
+}
+
 body.knowledge-page .main-pane {
   margin-left: 320px;
   margin-right: 0;
@@ -524,6 +553,16 @@ body.knowledge-page .main-pane {
 }
 
 body.knowledge-page.left-collapsed .main-pane {
+  margin-left: 0;
+}
+
+body.chain-page .main-pane {
+  margin-left: 320px;
+  margin-right: 0;
+  grid-template-rows: 1fr;
+}
+
+body.chain-page.left-collapsed .main-pane {
   margin-left: 0;
 }
 
@@ -944,6 +983,284 @@ details[open] > summary.panel-heading::after {
   display: grid;
   grid-template-rows: auto minmax(180px, 36vh) minmax(0, 1fr);
   gap: 14px;
+}
+
+.chain-summary-view {
+  height: 100vh;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 14px;
+}
+
+.chain-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.chain-title-block {
+  min-width: 0;
+}
+
+.chain-title-block h2 {
+  font-size: 28px;
+  line-height: 1.15;
+  margin: 3px 0 0;
+}
+
+.chain-generate-btn {
+  min-height: 40px;
+  padding: 0 15px;
+  border-radius: 8px;
+  background: #b66b34;
+  color: white;
+  border-color: #b66b34;
+  box-shadow: 0 10px 22px rgba(145, 88, 31, 0.20);
+}
+
+.chain-generate-btn:hover:not(:disabled) {
+  background: #9f592f;
+  border-color: #9f592f;
+}
+
+.chain-build-status,
+.chain-chart-panel,
+.chain-content-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.chain-build-status {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 13px;
+}
+
+.chain-chart-panel {
+  min-height: 190px;
+  padding: 13px;
+}
+
+.metric-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.metric-chart-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--surface) 92%, #b66b34 8%);
+}
+
+.metric-chart-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+
+.metric-chart-svg {
+  width: 100%;
+  height: 150px;
+  display: block;
+}
+
+.metric-axis {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.metric-line {
+  fill: none;
+  stroke: #b66b34;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.metric-point circle {
+  fill: #cf513b;
+  stroke: white;
+  stroke-width: 2;
+}
+
+.metric-point text {
+  text-anchor: middle;
+  font-size: 11px;
+  font-weight: 800;
+  fill: var(--text);
+}
+
+.metric-labels {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+}
+
+.metric-labels span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chain-content-panel {
+  min-height: 320px;
+  padding: 14px;
+}
+
+.chain-placeholder {
+  min-height: 300px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.chain-placeholder [data-icon] svg {
+  width: 42px;
+  height: 42px;
+  color: #b66b34;
+}
+
+.chain-placeholder h3 {
+  margin: 0;
+  color: var(--ink);
+}
+
+.chain-placeholder p {
+  max-width: 620px;
+  margin: 0;
+}
+
+.chain-overview {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+}
+
+.chain-uncertainty {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.chain-uncertainty span {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  color: #9f592f;
+  font-size: 12px;
+}
+
+.chain-iterations {
+  display: grid;
+  gap: 14px;
+}
+
+.chain-iteration-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--surface);
+}
+
+.chain-iteration-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chain-iteration-id {
+  font-size: 15px;
+  font-weight: 850;
+  color: var(--ink);
+}
+
+.chain-summary-text {
+  margin: 10px 0;
+  color: var(--text);
+}
+
+.chain-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.chain-mini-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 8px;
+  background: var(--bg);
+}
+
+.chain-mini-card p {
+  margin: 6px 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.chain-samples {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.chain-sample-card {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--bg);
+}
+
+.chain-sample-card img,
+.sample-image-placeholder {
+  width: 130px;
+  aspect-ratio: 4 / 3;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  object-fit: contain;
+}
+
+.sample-image-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.chain-sample-title {
+  font-weight: 800;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+
+.chain-sample-card p {
+  margin: 6px 0;
+  font-size: 13px;
 }
 
 .graph-header {

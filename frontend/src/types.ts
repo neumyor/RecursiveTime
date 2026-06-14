@@ -21,11 +21,15 @@ export type Bootstrap = {
   knowledgeGraph?: JsonMap;
   knowledgeBaseSummary?: JsonMap;
   knowledgeGraphParts?: JsonMap[];
+  chainSummary?: JsonMap;
+  chainSummaryBuild?: JsonMap;
+  chainSummaryParts?: JsonMap[];
   dryRun?: boolean;
   debugEnabled?: boolean;
   runtime?: {
     running?: boolean;
     knowledgeGraphRunning?: boolean;
+    chainSummaryRunning?: boolean;
     workspaceUv?: JsonMap | null;
   };
   knowledgeGraphBuild?: JsonMap;

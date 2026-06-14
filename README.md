@@ -80,6 +80,9 @@ backend/harnessing_ts/knowledge_graph.py
 backend/harnessing_ts/knowledge_prompts.py
   Literature Knowledge Builder and Knowledge Reasoning Agent prompts.
 
+backend/harnessing_ts/chain_summary.py
+  Independent chain builder agent for reading runtime logs/reports/runs and producing a structured, frontend-renderable decision-chain summary.
+
 frontend/src/main.ts
   Static UI rendering and event binding.
 
@@ -235,6 +238,7 @@ The browser UI uses this split:
 - Center toolbar: `Reset Chat` clears chat logs, node sessions, workflow state, generated tools, reports, runs, and processed data while preserving `data/raw/`, `references/`, and the built knowledge graph. `Reset Workspace` performs the full destructive reset and also removes raw data, references, and knowledge graph state.
 - Settings panels: configure main-session LLM settings, knowledge-graph LLM settings, `iterativeCandidateCount`, and `knowledgeGraphExtractionDepth`.
 - Knowledge workbench: build/pause/continue the independent literature knowledge graph, inspect knowledge/evidence/class/relation cards, and query the graph through natural language.
+- Chain summary page: open from the right rail CTA under Knowledge Graph, run the independent chain builder, inspect metric-over-iteration charts, and read the evidence-based decision chain with sample visualizations.
 - Right rail: current workspace file tree. This is where node artifacts, data files, generated tools, run outputs, logs, and state files appear.
 - Right rail upload: use `Reference Files` to upload PDFs, markdown, text, CSV, or other reference files into `references/`. The upload is recorded in `logs/timeline.jsonl`.
 - Right rail upload: use `Raw Data Zip` to upload a `.zip` archive and extract it into `data/raw/` as original data. The backend rejects unsafe archive paths such as `../...` and records the upload in `logs/timeline.jsonl`.
@@ -359,6 +363,7 @@ The harness records process state inside the active runtime workspace, not insid
   state/runtime.json
   state/runtime-settings.json
   state/knowledge-graph-build.json
+  state/chain-summary-build.json
   state/knowledge-graph-llm.json
   state/nodes/<node-session-id>.json
   logs/main.jsonl
@@ -366,6 +371,8 @@ The harness records process state inside the active runtime workspace, not insid
   logs/timeline.jsonl
   logs/knowledge-graph-builder.jsonl
   logs/knowledge-reasoning.jsonl
+  logs/chain-builder.jsonl
+  artifacts/chain-summary.json
 ```
 
 The most important records are:
@@ -378,6 +385,7 @@ logs/main.jsonl
 logs/nodes/<node-session-id>.jsonl
 logs/timeline.jsonl
 runs/registry.jsonl
+artifacts/chain-summary.json
 ```
 
 These files are intentionally frontend-neutral so a later UI can render the same process timeline.

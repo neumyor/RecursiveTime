@@ -32,11 +32,14 @@ class WorkspaceStore:
         self.main_log_path = root / "logs" / "main.jsonl"
         self.knowledge_graph_log_path = root / "logs" / "knowledge-graph-builder.jsonl"
         self.knowledge_reasoning_log_path = root / "logs" / "knowledge-reasoning.jsonl"
+        self.chain_summary_log_path = root / "logs" / "chain-builder.jsonl"
         self.runtime_path = root / "state" / "runtime.json"
         self.runtime_settings_path = root / "state" / "runtime-settings.json"
         self.knowledge_graph_llm_path = root / "state" / "knowledge-graph-llm.json"
         self.knowledge_graph_status_path = root / "state" / "knowledge-graph-build.json"
         self.knowledge_graph_path = root / "artifacts" / "knowledge-graph.json"
+        self.chain_summary_status_path = root / "state" / "chain-summary-build.json"
+        self.chain_summary_path = root / "artifacts" / "chain-summary.json"
         self.node_log_dir = root / "logs" / "nodes"
         self.node_meta_dir = root / "state" / "nodes"
 
@@ -159,6 +162,22 @@ class WorkspaceStore:
         write_json(self.knowledge_graph_status_path, current)
         return current
 
+    def read_chain_summary_status(self) -> dict[str, Any]:
+        return read_json(self.chain_summary_status_path) or {
+            "running": False,
+            "status": "idle",
+            "startedAt": None,
+            "finishedAt": None,
+            "trigger": None,
+            "message": "Chain builder has not run yet.",
+        }
+
+    def write_chain_summary_status(self, status: dict[str, Any]) -> dict[str, Any]:
+        current = self.read_chain_summary_status()
+        current.update(status)
+        write_json(self.chain_summary_status_path, current)
+        return current
+
     @property
     def main_llm_path(self) -> Path:
         return self.root / "config.llm.json"
@@ -255,6 +274,20 @@ class WorkspaceStore:
 
     def read_knowledge_graph_parts(self) -> list[Part]:
         return read_jsonl(self.knowledge_graph_log_path)
+
+    def read_chain_summary(self) -> dict[str, Any]:
+        from harnessing_ts.chain_summary import chain_summary_from_logs, read_chain_summary
+
+        if self.chain_summary_path.exists():
+            return read_chain_summary(self.chain_summary_path)
+        return chain_summary_from_logs(self.root)
+
+    def write_chain_summary(self, summary: dict[str, Any]) -> dict[str, Any]:
+        write_json(self.chain_summary_path, summary)
+        return summary
+
+    def read_chain_summary_parts(self) -> list[Part]:
+        return read_jsonl(self.chain_summary_log_path)
 
     def write_state(self, state: WorkspaceState) -> None:
         state["updatedAt"] = now_iso()
@@ -541,9 +574,12 @@ class WorkspaceStore:
                     "references",
                     "knowledge_base",
                     "artifacts/knowledge-graph.json",
+                    "artifacts/chain-summary.json",
                     "state/knowledge-graph-build.json",
+                    "state/chain-summary-build.json",
                     "logs/knowledge-graph-builder.jsonl",
                     "logs/knowledge-reasoning.jsonl",
+                    "logs/chain-builder.jsonl",
                 ],
                 "cleared": [
                     "logs/main.jsonl",
@@ -585,6 +621,8 @@ class WorkspaceStore:
             _remove_path(self.root / rel)
 
         for path in (self.state_path, self.knowledge_graph_status_path, self.knowledge_graph_path):
+            path.unlink(missing_ok=True)
+        for path in (self.chain_summary_status_path, self.chain_summary_path):
             path.unlink(missing_ok=True)
 
         self.ensure_layout()

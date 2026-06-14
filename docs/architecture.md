@@ -29,6 +29,7 @@ The current implementation keeps runtime orchestration, domain routing rules, fi
 - `backend/harnessing_ts/state/workspace_layout.py`: runtime workspace directory layout, built-in `tools/read_docx.py`, and DOCX reference text derivatives.
 - `backend/harnessing_ts/knowledge_graph.py`: file-backed knowledge-base tables, deterministic tools, graph view/search/cards, and builder/reasoner execution.
 - `backend/harnessing_ts/knowledge_prompts.py`: prompt text for the Literature Knowledge Builder and Knowledge Reasoning Agent.
+- `backend/harnessing_ts/chain_summary.py`: independent chain builder agent that reads runtime logs, reports, runs, tools, and user artifacts, then writes structured decision-chain JSON for frontend charts and sample evidence cards.
 - `frontend/src/main.ts`: static UI rendering and event binding.
 - `frontend/src/api.ts`: frontend HTTP helpers and error-message normalization.
 - `frontend/src/types.ts`: shared frontend DTO types.
@@ -74,10 +75,12 @@ state/nodes/<node-session-id>.json
 logs/main.jsonl
 logs/nodes/<node-session-id>.jsonl
 logs/timeline.jsonl
+logs/chain-builder.jsonl
 user/problem-contract.md
 user/data-spec.md
 user/iteration-state.md
 user/final-solution.md
+artifacts/chain-summary.json
 artifacts/
 data/processed/
 tools/
@@ -88,6 +91,12 @@ reports/final-summary.md
 ```
 
 The frontend is intentionally thin: it renders the same JSONL logs, node metadata, timeline, and runtime state that the Python backend persists on disk.
+
+## Chain Summary
+
+The chain summary page is opened from the right rail under the Knowledge Graph entry. Its `Generate` action starts an independent chain builder agent, separate from the main session, node sessions, and knowledge graph builder. The agent reads only runtime workspace logs and artifacts, then writes `artifacts/chain-summary.json` and its trace to `logs/chain-builder.jsonl`.
+
+The JSON output contains metric series over iterations and iteration-level decision-chain cards: proposed methods, test results, sample inspirations, optional visualization paths, next-iteration impact, artifacts, and uncertainty. The frontend renders metric series as charts and sample visualization paths through the workspace file preview endpoint.
 
 ## Tool Message Protocol
 

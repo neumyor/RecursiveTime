@@ -7,6 +7,7 @@ from uuid import uuid4
 from harnessing_ts.agent.sdk_runner import SdkRunner
 from harnessing_ts.agent.session_factory import build_main_runner, build_node_runner
 from harnessing_ts.agent.translate import system_text_part, user_text_part
+from harnessing_ts.chain_summary import build_chain_summary
 from harnessing_ts.knowledge_graph import (
     answer_knowledge_query,
     build_knowledge_graph,
@@ -453,6 +454,18 @@ class HarnessOrchestrator:
         self._ensure_initialized()
         return self.store.read_knowledge_graph_parts()
 
+    def get_chain_summary(self) -> dict[str, Any]:
+        self._ensure_initialized()
+        return self.store.read_chain_summary()
+
+    def get_chain_summary_status(self) -> dict[str, Any]:
+        self._ensure_initialized()
+        return self.store.read_chain_summary_status()
+
+    def get_chain_summary_parts(self) -> list[Part]:
+        self._ensure_initialized()
+        return self.store.read_chain_summary_parts()
+
     def get_knowledge_graph_llm_config(self) -> dict[str, Any]:
         self._ensure_initialized()
         cfg = self._knowledge_graph_llm_config()
@@ -634,6 +647,116 @@ class HarnessOrchestrator:
         })
         self.store.append_timeline({
             "type": "knowledge_graph_build_paused",
+            "timestamp": status["finishedAt"],
+            "message": message,
+        })
+        return {"paused": True, "status": status}
+
+    async def build_chain_summary(self, trigger: str = "manual") -> dict[str, Any]:
+        self._ensure_initialized()
+        setattr(self, "_chain_summary_pause_requested", False)
+        status = self.store.write_chain_summary_status({
+            "running": True,
+            "status": "running",
+            "startedAt": now_iso(),
+            "finishedAt": None,
+            "trigger": trigger,
+            "message": "Chain builder is running.",
+        })
+        self.store.append_timeline({
+            "type": "chain_summary_build_started",
+            "timestamp": status["startedAt"],
+            "message": trigger,
+        })
+        try:
+            summary = await build_chain_summary(
+                workspace_path=self.workspace_path,
+                store=self.store,
+                llm_config=self._knowledge_graph_llm_config(),
+                on_runner=lambda runner: setattr(self, "_chain_summary_runner", runner),
+            )
+        except Exception as exc:
+            finished = now_iso()
+            if getattr(self, "_chain_summary_pause_requested", False):
+                self.store.write_chain_summary_status({
+                    "running": False,
+                    "status": "paused",
+                    "finishedAt": finished,
+                    "message": "Chain builder paused.",
+                })
+                self.store.append_timeline({
+                    "type": "chain_summary_build_paused",
+                    "timestamp": finished,
+                    "message": "paused",
+                    "payload": {"trigger": trigger},
+                })
+                return {"ok": False, "paused": True, "chainSummary": self.get_chain_summary(), "status": self.get_chain_summary_status()}
+            self.store.write_chain_summary_status({
+                "running": False,
+                "status": "failed",
+                "finishedAt": finished,
+                "message": str(exc),
+            })
+            self.store.append_timeline({
+                "type": "chain_summary_build_failed",
+                "timestamp": finished,
+                "message": str(exc),
+                "payload": {"trigger": trigger},
+            })
+            raise
+        finished = now_iso()
+        if getattr(self, "_chain_summary_pause_requested", False):
+            self.store.write_chain_summary_status({
+                "running": False,
+                "status": "paused",
+                "finishedAt": finished,
+                "message": "Chain builder paused.",
+            })
+            self.store.append_timeline({
+                "type": "chain_summary_build_paused",
+                "timestamp": finished,
+                "message": "paused",
+                "payload": {"trigger": trigger},
+            })
+            return {"ok": False, "paused": True, "chainSummary": self.get_chain_summary(), "status": self.get_chain_summary_status()}
+        self.store.write_chain_summary_status({
+            "running": False,
+            "status": "completed",
+            "finishedAt": finished,
+            "message": "Chain summary updated.",
+        })
+        self.store.append_timeline({
+            "type": "chain_summary_build_completed",
+            "timestamp": finished,
+            "message": "artifacts/chain-summary.json",
+            "payload": {"trigger": trigger},
+        })
+        return {"ok": True, "chainSummary": summary, "status": self.get_chain_summary_status()}
+
+    async def pause_chain_summary_build(self, reason: str | None = None) -> dict[str, Any]:
+        message = reason or "Paused from chain summary UI."
+        setattr(self, "_chain_summary_pause_requested", True)
+        runner = getattr(self, "_chain_summary_runner", None)
+        if runner is not None:
+            await runner.interrupt()
+            status = self.store.write_chain_summary_status({
+                "status": "pausing",
+                "message": message,
+            })
+            self.store.append_timeline({
+                "type": "chain_summary_build_pausing",
+                "timestamp": now_iso(),
+                "message": message,
+            })
+            return {"paused": True, "status": status}
+        status = self.store.write_chain_summary_status({
+            "running": False,
+            "status": "paused",
+            "finishedAt": now_iso(),
+            "message": message,
+        })
+        self.store.append_timeline({
+            "type": "chain_summary_build_paused",
             "timestamp": status["finishedAt"],
             "message": message,
         })

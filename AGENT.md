@@ -162,6 +162,7 @@ uv run ts-harness training-template
 - `backend/harnessing_ts/state/workspace_layout.py`：workspace 目录布局、内置 `tools/read_docx.py`、DOCX reference 文本派生。
 - `backend/harnessing_ts/knowledge_graph.py`：文件型知识库表、确定性工具、graph view/search/cards、builder/reasoner 调用逻辑。
 - `backend/harnessing_ts/knowledge_prompts.py`：Knowledge Builder / Reasoning Agent prompt 文本与知识图谱构建请求文本。
+- `backend/harnessing_ts/chain_summary.py`：独立 chain builder agent，读取 runtime workspace 的 logs/reports/runs/tools/user 工件，输出结构化思维链总结和 metric series。
 - `backend/harnessing_ts/config/`：Markdown prompt、node spec、guidance、native-tools 配置，Python 只读取、解析和校验。
 - `frontend/src/main.ts`：当前仍是主要 UI 渲染和事件绑定入口。
 - `frontend/src/api.ts`：前端 JSON/Form API client 和错误消息规范。
@@ -212,12 +213,15 @@ state/nodes/<node-session-id>.json
 logs/main.jsonl
 logs/nodes/<node-session-id>.jsonl
 logs/timeline.jsonl
+logs/chain-builder.jsonl
 runs/registry.jsonl
+artifacts/chain-summary.json
+state/chain-summary-build.json
 ```
 
 这些目录是运行产物，默认在 `.gitignore` 中。
 
-前端 `Reset Chat` 只重置聊天记录和 agent 工作流记忆，必须保留 `data/raw/`、`references/`、`knowledge_base/`、`artifacts/knowledge-graph.json` 以及知识图谱构建状态；`Reset Workspace` 才执行完整清空。
+前端 `Reset Chat` 只重置聊天记录和 agent 工作流记忆，必须保留 `data/raw/`、`references/`、`knowledge_base/`、`artifacts/knowledge-graph.json` 以及知识图谱构建状态；会清理 `artifacts/chain-summary.json`、`logs/chain-builder.jsonl` 和 `state/chain-summary-build.json`，因为思维链总结依赖当前日志。`Reset Workspace` 才执行完整清空。
 
 ## 禁止提交
 
