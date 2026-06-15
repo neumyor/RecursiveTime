@@ -97,6 +97,9 @@ const state = {
   knowledgeQuestion: '',
   knowledgeAnswer: null as JsonMap | null,
   knowledgeQueryBusy: false,
+  chainStatusSignature: '',
+  chainChartSignature: '',
+  chainContentSignature: '',
 };
 
 marked.setOptions({
@@ -595,6 +598,7 @@ els.chainCta.addEventListener('click', async () => {
   history.pushState({}, '', '/chain-summary');
   const summary = await fetchJson<JsonMap>('/api/chain-summary');
   if (state.bootstrap) state.bootstrap.chainSummary = summary;
+  resetChainRenderSignatures();
   render();
 });
 els.backToChatFromChainBtn.addEventListener('click', () => {
@@ -603,6 +607,7 @@ els.backToChatFromChainBtn.addEventListener('click', () => {
   render();
 });
 els.buildChainSummaryBtn.addEventListener('click', async () => {
+  resetChainRenderSignatures();
   await postJson('/api/chain-summary/build', {});
   await refresh();
 });
@@ -1371,7 +1376,17 @@ function renderChainSummary(data: Bootstrap) {
     ? summary.iterations.reduce((count: number, iteration: JsonMap) => count + (Array.isArray(iteration.sampleInspirations) ? iteration.sampleInspirations.length : 0), 0)
     : 0;
   els.buildChainSummaryBtn.disabled = running;
-  els.chainBuildStatus.innerHTML = `
+  const statusSignature = stableStringify({
+    status: build.status || 'idle',
+    running,
+    message: build.message || '',
+    iterations,
+    metrics,
+    samples,
+  });
+  if (statusSignature !== state.chainStatusSignature) {
+    state.chainStatusSignature = statusSignature;
+    els.chainBuildStatus.innerHTML = `
     <div class="chain-status-main">
       <span class="mini-pill ${build.status === 'failed' ? 'failed' : running ? 'active' : build.status === 'completed' ? 'ready' : 'pending'}">
         ${running ? '<span data-icon="Loader2"></span>' : ''}
@@ -1385,8 +1400,25 @@ function renderChainSummary(data: Bootstrap) {
       <span><strong>${escapeHtml(samples)}</strong><small>Samples</small></span>
     </div>
   `;
-  renderChainMetricChart(summary.metricSeries || []);
-  renderChainContent(summary, build);
+  }
+  const chartSignature = stableStringify(summary.metricSeries || []);
+  if (chartSignature !== state.chainChartSignature) {
+    state.chainChartSignature = chartSignature;
+    renderChainMetricChart(summary.metricSeries || []);
+  }
+  const contentSignature = stableStringify({
+    status: build.status || '',
+    message: build.status === 'failed' ? build.message || '' : '',
+    title: summary.title || '',
+    generatedAt: summary.generatedAt || '',
+    overview: summary.overview || '',
+    uncertainty: summary.uncertainty || [],
+    iterations: summary.iterations || [],
+  });
+  if (contentSignature !== state.chainContentSignature) {
+    state.chainContentSignature = contentSignature;
+    renderChainContent(summary, build);
+  }
 }
 
 function renderChainMetricChart(series: JsonMap[]) {
@@ -1406,12 +1438,12 @@ function renderChainMetricChart(series: JsonMap[]) {
 }
 
 function metricChartHtml(series: JsonMap) {
-  const values: JsonMap[] = (series.values || []).filter((item: JsonMap) => Number.isFinite(Number(item.value)));
+  const values = bestMetricValuesByIteration(series);
   const numeric = values.map((item) => Number(item.value)).filter((value) => Number.isFinite(value));
   const min = Math.min(...numeric);
   const max = Math.max(...numeric);
   const spread = max - min || 1;
-  const width = 360;
+  const width = 320;
   const height = 150;
   const padX = 28;
   const padY = 22;
@@ -1419,7 +1451,13 @@ function metricChartHtml(series: JsonMap) {
     const value = Number(item.value);
     const x = values.length === 1 ? width / 2 : padX + (index * (width - padX * 2)) / (values.length - 1);
     const y = height - padY - ((value - min) / spread) * (height - padY * 2);
-    return { x, y, value, label: item.label || item.iteration || String(index + 1) };
+    return {
+      x,
+      y,
+      value,
+      label: iterationAxisLabel(item.iteration, index),
+      note: item.label && item.label !== item.iteration ? String(item.label) : '',
+    };
   });
   const polyline = points.map((point) => `${point.x},${point.y}`).join(' ');
   return `
@@ -1438,9 +1476,41 @@ function metricChartHtml(series: JsonMap) {
           </g>
         `).join('')}
       </svg>
-      <div class="metric-labels">${points.map((point) => `<span>${escapeHtml(point.label)}</span>`).join('')}</div>
+      <div class="metric-labels">${points.map((point) => `<span title="${escapeHtml(point.note || point.label)}">${escapeHtml(point.label)}</span>`).join('')}</div>
     </article>
   `;
+}
+
+function bestMetricValuesByIteration(series: JsonMap): JsonMap[] {
+  const direction = String(series.direction || 'neutral');
+  const values: JsonMap[] = (series.values || []).filter((item: JsonMap) => Number.isFinite(Number(item.value)));
+  const grouped = new Map<string, JsonMap>();
+  for (const item of values) {
+    const key = String(item.iteration || item.label || grouped.size + 1);
+    const current = grouped.get(key);
+    if (!current || isBetterMetricValue(Number(item.value), Number(current.value), direction)) {
+      grouped.set(key, { ...item, iteration: key });
+    }
+  }
+  return [...grouped.values()].sort((a, b) => iterationSortKey(a.iteration) - iterationSortKey(b.iteration));
+}
+
+function isBetterMetricValue(next: number, current: number, direction: string) {
+  if (direction === 'lower') return next < current;
+  if (direction === 'neutral') return Math.abs(next) > Math.abs(current);
+  return next > current;
+}
+
+function iterationAxisLabel(value: any, index: number) {
+  const text = String(value || '').trim();
+  const match = text.match(/(?:iteration|iter|it)[^\d]*(\d+)/i) || text.match(/(\d+)/);
+  if (match) return `it-${match[1].padStart(Math.max(3, match[1].length), '0')}`;
+  return `it-${String(index + 1).padStart(3, '0')}`;
+}
+
+function iterationSortKey(value: any) {
+  const match = String(value || '').match(/(\d+)/);
+  return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
 }
 
 function renderChainContent(summary: JsonMap, build: JsonMap = {}) {
@@ -1482,8 +1552,9 @@ function renderChainContent(summary: JsonMap, build: JsonMap = {}) {
 
 function chainIterationHtml(iteration: JsonMap) {
   const methods: JsonMap[] = iteration.methods || [];
-  const results: JsonMap[] = iteration.testResults || [];
+  const results: JsonMap[] = Array.isArray(iteration.methodResults) && iteration.methodResults.length ? iteration.methodResults : iteration.testResults || [];
   const samples: JsonMap[] = iteration.sampleInspirations || [];
+  const methodRows = pairMethodResults(methods, results);
   return `
     <article class="chain-iteration-card">
       <header class="chain-iteration-head">
@@ -1493,31 +1564,50 @@ function chainIterationHtml(iteration: JsonMap) {
         </div>
       </header>
       ${iteration.summary ? `<p class="chain-summary-text">${escapeHtml(iteration.summary)}</p>` : ''}
-      <div class="chain-columns">
-        <section>
-          <div class="detail-section-title">提出的方法</div>
-          ${methods.length ? methods.map((method) => `
-            <div class="chain-mini-card">
-              <strong>${escapeHtml(method.name || 'method')}</strong>
-              <p>${escapeHtml(method.hypothesis || '')}</p>
-              ${method.artifactPath ? `<button type="button" class="artifact-item" data-chain-path="${escapeHtml(method.artifactPath)}"><span data-icon="File"></span><span>${escapeHtml(method.artifactPath)}</span></button>` : ''}
-            </div>
-          `).join('') : emptyState('没有可审计的方法记录。', 'Info')}
-        </section>
-        <section>
-          <div class="detail-section-title">测试结果</div>
-          ${results.length ? results.map((result) => `
-            <div class="chain-mini-card">
-              <strong>${escapeHtml(result.metric || 'result')}: ${escapeHtml(result.value || '')}</strong>
-              <p>${escapeHtml(result.interpretation || '')}</p>
-              ${result.evidencePath ? `<button type="button" class="artifact-item" data-chain-path="${escapeHtml(result.evidencePath)}"><span data-icon="File"></span><span>${escapeHtml(result.evidencePath)}</span></button>` : ''}
-            </div>
-          `).join('') : emptyState('没有可审计的测试结果。', 'Info')}
-        </section>
-      </div>
+      <div class="detail-section-title">提出的方法 / 测试结果</div>
+      ${methodRows.length ? `<div class="chain-method-result-list">${methodRows.map(methodResultRowHtml).join('')}</div>` : emptyState('没有可审计的方法与测试结果记录。', 'Info')}
       <div class="detail-section-title">样本启发</div>
       ${samples.length ? `<div class="chain-samples">${samples.map(chainSampleHtml).join('')}</div>` : emptyState('没有记录样本级启发。', 'Info')}
     </article>
+  `;
+}
+
+function pairMethodResults(methods: JsonMap[], results: JsonMap[]) {
+  const count = Math.max(methods.length, results.length);
+  const resultByMethod = new Map<string, JsonMap>();
+  for (const result of results) {
+    const key = String(result.methodName || result.method || result.name || '').trim().toLowerCase();
+    if (key) resultByMethod.set(key, result);
+  }
+  return Array.from({ length: count }, (_, index) => {
+    const method = methods[index] || {};
+    const key = String(method.name || '').trim().toLowerCase();
+    const result = (key && resultByMethod.get(key)) || results[index] || {};
+    return { method, result, index };
+  });
+}
+
+function methodResultRowHtml(row: { method: JsonMap; result: JsonMap; index: number }) {
+  const method = row.method || {};
+  const result = row.result || {};
+  const fallbackName = `Candidate ${row.index + 1}`;
+  const methodName = method.name || result.methodName || result.method || fallbackName;
+  const metric = result.metric || 'result';
+  return `
+    <div class="chain-method-result-row">
+      <section class="chain-mini-card chain-method-card">
+        <div class="chain-card-eyebrow">方法</div>
+        <strong>${escapeHtml(methodName)}</strong>
+        <p>${escapeHtml(method.hypothesis || '')}</p>
+        ${method.artifactPath ? `<button type="button" class="artifact-item" data-chain-path="${escapeHtml(method.artifactPath)}"><span data-icon="File"></span><span>${escapeHtml(method.artifactPath)}</span></button>` : ''}
+      </section>
+      <section class="chain-mini-card chain-result-card">
+        <div class="chain-card-eyebrow">测试结果</div>
+        <strong>${escapeHtml(metric)}${result.value ? `: ${escapeHtml(result.value)}` : ''}</strong>
+        <p>${escapeHtml(result.interpretation || '')}</p>
+        ${result.evidencePath ? `<button type="button" class="artifact-item" data-chain-path="${escapeHtml(result.evidencePath)}"><span data-icon="File"></span><span>${escapeHtml(result.evidencePath)}</span></button>` : ''}
+      </section>
+    </div>
   `;
 }
 
@@ -2429,6 +2519,16 @@ function formatBytes(value: number) {
 
 function unique(values: any[]) {
   return [...new Set(values.filter(Boolean))];
+}
+
+function resetChainRenderSignatures() {
+  state.chainStatusSignature = '';
+  state.chainChartSignature = '';
+  state.chainContentSignature = '';
+}
+
+function stableStringify(value: any) {
+  return JSON.stringify(value ?? null);
 }
 
 function sortByKey(a: JsonMap, b: JsonMap) {

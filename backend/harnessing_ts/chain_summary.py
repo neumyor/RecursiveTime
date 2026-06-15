@@ -30,7 +30,7 @@ CHAIN_SYSTEM_PROMPT = """你是 HarnessingTS 的独立 chain builder agent。
       "name": "metric name",
       "unit": "optional unit",
       "direction": "higher|lower|neutral",
-      "values": [{"iteration": "iteration id", "label": "short label", "value": number}]
+      "values": [{"iteration": "iteration number or id", "label": "best candidate/method label for this iteration", "value": number}]
     }
   ],
   "iterations": [
@@ -39,6 +39,15 @@ CHAIN_SYSTEM_PROMPT = """你是 HarnessingTS 的独立 chain builder agent。
       "summary": "string",
       "methods": [{"name": "string", "hypothesis": "string", "artifactPath": "optional path"}],
       "testResults": [{"metric": "string", "value": "string", "evidencePath": "optional path", "interpretation": "string"}],
+      "methodResults": [
+        {
+          "methodName": "must match the paired methods[].name",
+          "metric": "primary/core metric for this method",
+          "value": "string",
+          "evidencePath": "optional path",
+          "interpretation": "string"
+        }
+      ],
       "sampleInspirations": [
         {
           "sampleId": "string",
@@ -55,7 +64,9 @@ CHAIN_SYSTEM_PROMPT = """你是 HarnessingTS 的独立 chain builder agent。
 }
 
 要求：
-- metricSeries 必须尽量从 iteration summaries、runs registry、metrics 文件中抽取多个“指标 x iterations”的序列。
+- metricSeries 必须尽量从 iteration summaries、runs registry、metrics 文件中抽取多个“指标 x iterations”的序列。每个 metric 的每个 iteration 只能保留该 iteration 的最佳结果；横轴语义必须是 iteration 编号或 id，不要把 candidate 名称当作横轴。
+- overview 只写核心决策链摘要，不要把日志读取限制、warning、缺失文件清单写进 overview。此类信息放入 uncertainty，且每条 uncertainty 必须简短。
+- 每个 iteration 的 methods 和 methodResults 必须严格一一对应：顺序相同、数量相同，methodResults[i] 解释 methods[i] 的测试结果和核心指标。如果只能产出旧字段 testResults，也必须保证 testResults 的顺序和 methods 一致。
 - sampleInspirations 必须优先使用 case review 中的样本、可视化路径和解读；没有图片路径时 visualizationPath 留空并说明缺失。
 - 所有 path 必须是 workspace 相对路径。
 - 如果日志不足，仍输出 JSON，并把缺口写入 uncertainty。
@@ -114,6 +125,11 @@ def chain_summary_prompt(workspace_path: Path) -> str:
         "2. 每轮测试结果如何，哪些指标提升或退化。",
         "3. 哪些样本、bad case 或可视化启发了下一轮 iteration。",
         "4. 最终目标是如何通过一轮轮外显决策和证据实现的。",
+        "",
+        "输出约束：",
+        "- metricSeries.values 的 iteration 字段必须是 iteration 编号/id；label 只能用于备注本轮最佳候选。",
+        "- 对每个 iteration，methods 与 methodResults 必须按 candidate/method 一一配对，数量和顺序一致。",
+        "- 不要在 overview 中写 warning 列表；日志缺口只放到 uncertainty，最多 6 条，每条一句。",
         "",
         "只输出符合 system prompt schema 的 JSON。",
     ])
@@ -204,6 +220,7 @@ def chain_summary_from_logs(workspace_path: Path) -> dict[str, Any]:
             "summary": str(event.get("message") or ""),
             "methods": [],
             "testResults": [],
+            "methodResults": [],
             "sampleInspirations": [],
             "nextStep": str(payload.get("nextNode") or payload.get("loopDecision") or ""),
             "artifacts": [{"path": str(path), "role": "output"} for path in output_paths],
@@ -248,6 +265,7 @@ def _normalize_iteration(item: dict[str, Any]) -> dict[str, Any]:
         "summary": str(item.get("summary") or ""),
         "methods": _normalize_list_of_dicts(item.get("methods"), ("name", "hypothesis", "artifactPath")),
         "testResults": _normalize_list_of_dicts(item.get("testResults"), ("metric", "value", "evidencePath", "interpretation")),
+        "methodResults": _normalize_list_of_dicts(item.get("methodResults"), ("methodName", "metric", "value", "evidencePath", "interpretation")),
         "sampleInspirations": _normalize_list_of_dicts(item.get("sampleInspirations"), ("sampleId", "visualizationPath", "interpretation", "nextIterationImpact")),
         "nextStep": str(item.get("nextStep") or ""),
         "artifacts": [_normalize_artifact(artifact) for artifact in item.get("artifacts", []) if isinstance(artifact, dict)],

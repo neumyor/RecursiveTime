@@ -21,6 +21,14 @@ def test_normalize_chain_summary_keeps_metric_series_and_samples() -> None:
         "iterations": [
             {
                 "iterationId": "iter-1",
+                "methods": [{"name": "Candidate 1", "hypothesis": "use morphology"}],
+                "methodResults": [{
+                    "methodName": "Candidate 1",
+                    "metric": "Macro AUC",
+                    "value": "0.91",
+                    "evidencePath": "reports/iterations/iter-1-candidate-review.md",
+                    "interpretation": "best candidate in this iteration",
+                }],
                 "sampleInspirations": [
                     {
                         "sampleId": "42",
@@ -34,6 +42,8 @@ def test_normalize_chain_summary_keeps_metric_series_and_samples() -> None:
     })
 
     assert summary["metricSeries"][0]["values"][0]["value"] == 0.71
+    assert summary["iterations"][0]["methodResults"][0]["methodName"] == "Candidate 1"
+    assert summary["iterations"][0]["methodResults"][0]["metric"] == "Macro AUC"
     assert summary["iterations"][0]["sampleInspirations"][0]["visualizationPath"].endswith("case-42.png")
 
 
