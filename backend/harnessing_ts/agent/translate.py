@@ -105,6 +105,43 @@ def collapse_tool_parts(parts: list[Part]) -> list[Part]:
     return out
 
 
+def filter_display_parts(parts: list[Part]) -> list[Part]:
+    return [part for part in parts if not is_ignorable_display_part(part)]
+
+
+def is_ignorable_display_part(part: Part) -> bool:
+    if part.get("role") == "system" and part.get("type") == "raw":
+        subtype = _raw_subtype(part)
+        return subtype in {
+            "init",
+            "task_started",
+            "task_progress",
+            "task_updated",
+            "task_notification",
+            "task_completed",
+            "task_failed",
+            "task_stopped",
+            "task_output",
+            "system",
+            "thinking_tokens",
+        } or subtype.endswith("_tokens")
+    if part.get("role") == "system" and part.get("type") == "result":
+        raw = part.get("raw")
+        return not (isinstance(raw, dict) and raw.get("is_error") is True)
+    return False
+
+
+def _raw_subtype(part: Part) -> str:
+    raw = part.get("raw")
+    if isinstance(raw, dict) and isinstance(raw.get("subtype"), str):
+        return raw["subtype"].strip()
+    for key in ("text", "displayText"):
+        value = part.get(key)
+        if isinstance(value, str):
+            return value.strip()
+    return ""
+
+
 def _class_type(message: Any) -> str:
     name = message.__class__.__name__
     if name.endswith("Message"):

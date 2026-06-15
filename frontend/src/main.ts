@@ -1990,6 +1990,7 @@ function normalizeChatParts(parts: JsonMap[]): JsonMap[] {
     'task_stopped',
     'task_output',
     'system',
+    'thinking_tokens',
   ]);
   return parts
     .map((part: JsonMap) => ({ ...part, displayText: displayTextForPart(part) }))
@@ -1998,7 +1999,8 @@ function normalizeChatParts(parts: JsonMap[]): JsonMap[] {
       if (!part.displayText.trim()) return false;
       if (part.role === 'system' && part.type === 'raw') {
         const subtype = part.raw?.subtype || part.text || part.displayText || '';
-        if (SUPPRESS_SYSTEM_SUBTYPES.has(subtype.trim())) return false;
+        const normalizedSubtype = subtype.trim();
+        if (SUPPRESS_SYSTEM_SUBTYPES.has(normalizedSubtype) || normalizedSubtype.endsWith('_tokens')) return false;
       }
       if (part.role === 'system' && part.type === 'result' && part.raw?.is_error !== true) return false;
       return true;

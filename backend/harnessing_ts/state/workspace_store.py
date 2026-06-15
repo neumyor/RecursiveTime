@@ -8,7 +8,7 @@ import time
 from typing import Any
 from uuid import uuid4
 
-from harnessing_ts.agent.translate import collapse_tool_parts
+from harnessing_ts.agent.translate import collapse_tool_parts, filter_display_parts
 from harnessing_ts.schema import CONTROL_MODES, NODE_TYPES, ControlRequest, NodeSession, NodeType, Part, RunRecord, RuntimeSettings, TimelineEvent, WorkspaceState
 from harnessing_ts.state.jsonl import append_jsonl, clear_file, read_json, read_jsonl, write_json
 from harnessing_ts.state.workspace_layout import (
@@ -273,7 +273,7 @@ class WorkspaceStore:
         return read_knowledge_base_cards(self.root, kind, limit)
 
     def read_knowledge_graph_parts(self) -> list[Part]:
-        return read_jsonl(self.knowledge_graph_log_path)
+        return filter_display_parts(collapse_tool_parts(read_jsonl(self.knowledge_graph_log_path)))
 
     def read_chain_summary(self) -> dict[str, Any]:
         from harnessing_ts.chain_summary import chain_summary_from_logs, read_chain_summary
@@ -287,7 +287,7 @@ class WorkspaceStore:
         return summary
 
     def read_chain_summary_parts(self) -> list[Part]:
-        return read_jsonl(self.chain_summary_log_path)
+        return filter_display_parts(collapse_tool_parts(read_jsonl(self.chain_summary_log_path)))
 
     def write_state(self, state: WorkspaceState) -> None:
         state["updatedAt"] = now_iso()
@@ -364,10 +364,10 @@ class WorkspaceStore:
         return read_jsonl(self.timeline_path)
 
     def read_main_parts(self) -> list[Part]:
-        return collapse_tool_parts(read_jsonl(self.main_log_path))
+        return filter_display_parts(collapse_tool_parts(read_jsonl(self.main_log_path)))
 
     def read_node_parts(self, node_session_id: str) -> list[Part]:
-        return collapse_tool_parts(read_jsonl(self.node_log_path(node_session_id)))
+        return filter_display_parts(collapse_tool_parts(read_jsonl(self.node_log_path(node_session_id))))
 
     def list_file_tree(self, max_entries: int = 800) -> dict[str, Any]:
         self.ensure_layout()

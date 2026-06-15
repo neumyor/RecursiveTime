@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from harnessing_ts.agent.translate import collapse_tool_parts, sdk_message_to_part
+from harnessing_ts.agent.translate import collapse_tool_parts, filter_display_parts, sdk_message_to_part
 from harnessing_ts.state.jsonl import read_jsonl
 from harnessing_ts.state.message_log import MessageLog
 
@@ -112,3 +112,24 @@ def test_message_log_merges_tool_result_into_prior_tool_call(tmp_path) -> None:
     assert parts[0]["type"] == "tool_call"
     assert parts[0]["status"] == "completed"
     assert parts[0]["resultText"] == "# HarnessingTS"
+
+
+def test_display_filter_hides_sdk_token_telemetry() -> None:
+    useful_retry = {
+        "role": "system",
+        "type": "raw",
+        "text": "api_retry",
+        "raw": {"subtype": "api_retry", "attempt": 1, "max_retries": 3},
+    }
+    visible_text = {"role": "assistant", "type": "text", "text": "Builder trace output"}
+
+    parts = filter_display_parts([
+        {"role": "system", "type": "raw", "text": "thinking_tokens", "raw": {"subtype": "thinking_tokens"}},
+        {"role": "system", "type": "raw", "text": "cache_creation_input_tokens", "raw": {"subtype": "cache_creation_input_tokens"}},
+        {"role": "system", "type": "raw", "text": "init", "raw": {"subtype": "init"}},
+        useful_retry,
+        visible_text,
+        {"role": "system", "type": "result", "text": "success", "raw": {"is_error": False}},
+    ])
+
+    assert parts == [useful_retry, visible_text]
