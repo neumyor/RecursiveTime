@@ -19,11 +19,41 @@ from harnessing_ts.knowledge_graph import (
     suggest_next_checks,
 )
 from harnessing_ts.node_state import NodeStateMachine
+from harnessing_ts.prompts.compose import PromptContext, build_main_attachment
 from harnessing_ts.schema import NODE_SPECS, ControlRequest, NodeSession, NodeType, Part, RunRecord, WorkspaceState
 from harnessing_ts.settings.llm import LlmConfig, mask_llm_config, read_effective_llm_config
 from harnessing_ts.state.jsonl import clear_file
 from harnessing_ts.state.workspace_store import WorkspaceStore, now_iso
 from harnessing_ts.tools.compose_tools import build_node_native_tools
+
+
+def _main_node_snapshot(node: NodeSession | None) -> dict[str, Any] | None:
+    if not node:
+        return None
+    return {
+        "id": node.get("id"),
+        "nodeType": node.get("nodeType"),
+        "status": node.get("status"),
+        "success": node.get("success"),
+        "goalMet": node.get("goalMet"),
+        "nextNode": node.get("nextNode"),
+        "nextNodeSpecified": bool(node.get("nextNodeSpecified", False)),
+        "loopDecision": node.get("loopDecision"),
+        "summary": node.get("summary"),
+        "outputPaths": list(node.get("outputPaths", [])),
+    }
+
+
+def _main_control_snapshot(control: ControlRequest | None) -> dict[str, Any] | None:
+    if not control:
+        return None
+    return {
+        "id": control.get("id"),
+        "kind": control.get("kind"),
+        "status": control.get("status"),
+        "nodeType": control.get("nodeType"),
+        "nodeSessionId": control.get("nodeSessionId"),
+    }
 
 
 class HarnessOrchestrator:
@@ -63,7 +93,13 @@ class HarnessOrchestrator:
             return [user_part, part]
         self._ensure_main_runner()
         assert self.main_runner
-        parts = await self.main_runner.send_with_user_echo(text)
+        parts = await self.main_runner.send_with_user_echo(
+            text,
+            context_text=build_main_attachment(
+                PromptContext(str(self.workspace_path), self.locale),
+                self._main_progress_snapshot(),
+            ),
+        )
         return parts
 
     async def request_enter_node(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -158,10 +194,19 @@ class HarnessOrchestrator:
         node = self.active_node_session
         success = args.get("success", True)
         goal_met = args.get("goalMet")
+        next_node_specified = "nextNode" in args
         next_node = self._normalize_next_node(args.get("nextNode"))
         loop_decision = self._normalize_loop_decision(args.get("loopDecision"))
         output_paths = list(args.get("outputPaths") or [])
-        self._validate_finish_control(node["nodeType"], success, next_node, loop_decision, output_paths, goal_met)
+        self._validate_finish_control(
+            node["nodeType"],
+            success,
+            next_node,
+            loop_decision,
+            output_paths,
+            goal_met,
+            next_node_specified,
+        )
 
         node["status"] = "completed" if success else "failed"
         node["completedAt"] = now_iso()
@@ -169,6 +214,7 @@ class HarnessOrchestrator:
         node["success"] = success
         node["goalMet"] = goal_met
         node["nextNode"] = next_node
+        node["nextNodeSpecified"] = next_node_specified
         node["loopDecision"] = loop_decision
         node["outputPaths"] = output_paths
         self.store.write_node_session(node)
@@ -995,6 +1041,7 @@ class HarnessOrchestrator:
         loop_decision: str | None,
         output_paths: list[str] | None = None,
         goal_met: bool | None = None,
+        next_node_specified: bool = False,
     ) -> None:
         self.node_state.validate_finish_control(
             node_type,
@@ -1003,6 +1050,7 @@ class HarnessOrchestrator:
             loop_decision,
             output_paths,
             goal_met,
+            next_node_specified,
         )
 
     def _validate_iterative_output_paths(self, output_paths: list[str]) -> None:
@@ -1049,6 +1097,68 @@ class HarnessOrchestrator:
         if not self.state or not self.state.get("activeNodeSessionId"):
             return None
         return self.store.read_node_session(self.state["activeNodeSessionId"])
+
+    def _main_progress_snapshot(self) -> dict[str, Any]:
+        """Build the authoritative, read-only routing context for the main agent."""
+        self._ensure_initialized()
+        state = self.store.read_state() or self.state
+        assert state
+        sessions = self.store.list_node_sessions()
+        latest = sessions[-1] if sessions else None
+        active = self.store.read_node_session(state["activeNodeSessionId"]) if state.get("activeNodeSessionId") else None
+
+        recommended_action = "enter_node"
+        recommended_node: NodeType | None = "problem-contract"
+        reason = "No node has completed; start by establishing the problem contract."
+        if active:
+            recommended_action = "active_node_in_progress"
+            recommended_node = None
+            reason = f"Node {active['nodeType']} is currently {active.get('status', 'active')}; do not start another node."
+        elif "final-summary" in state.get("completedNodes", []):
+            recommended_action = "pipeline_complete"
+            recommended_node = None
+            reason = "The final-summary node has completed."
+        elif state.get("pendingControl"):
+            recommended_action = "await_control_approval"
+            recommended_node = None
+            reason = f"A {state['pendingControl'].get('kind', 'control')} request is waiting for human approval."
+        elif latest and latest.get("status") == "completed" and latest.get("success") is True:
+            recommended_node = self._next_node_after_completion(latest)
+            if recommended_node:
+                recommended_action = "enter_node"
+                reason = f"The latest completed node routes to {recommended_node}."
+            else:
+                recommended_action = "pipeline_stopped"
+                reason = "The latest completed node explicitly stopped the pipeline or has no successor."
+        elif latest and latest.get("status") in {"failed", "exited"}:
+            recommended_action = "retry_failed_node"
+            recommended_node = latest["nodeType"]
+            reason = f"The latest {latest['nodeType']} node ended with status {latest.get('status')}. Retry only on explicit user request."
+        elif "problem-contract" in state.get("completedNodes", []):
+            recommended_node = "iterative-solving"
+            reason = "The problem contract is complete and no later completed node determines a different route."
+
+        anchor_paths = (
+            "user/problem-contract.md",
+            "user/data-spec.md",
+            "user/iteration-state.md",
+            "reports/final-summary.md",
+            "user/final-solution.md",
+        )
+        return {
+            "workspaceId": state.get("workspaceId"),
+            "controlMode": state.get("controlMode"),
+            "pendingControl": _main_control_snapshot(state.get("pendingControl")),
+            "activeNode": state.get("activeNode"),
+            "activeNodeSession": _main_node_snapshot(active),
+            "completedNodes": list(state.get("completedNodes", [])),
+            "pipelineComplete": self.node_state.is_pipeline_complete(state),
+            "latestNodeSession": _main_node_snapshot(latest),
+            "anchorArtifacts": {path: (self.workspace_path / path).exists() for path in anchor_paths},
+            "recommendedAction": recommended_action,
+            "recommendedNode": recommended_node,
+            "routingReason": reason,
+        }
 
     def _ensure_main_runner(self) -> None:
         if self.main_runner:

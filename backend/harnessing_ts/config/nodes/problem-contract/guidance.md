@@ -12,11 +12,12 @@
   - TXT/MD：可直接读取，但需要将关键领域知识整理到结构化摘要中。
   - 对每个 reference 记录读取方式、抽取产物路径、覆盖范围和抽取失败/缺失风险。
 - 从 references/** 中提取任务相关领域知识：术语定义、类别/状态含义、可观察特征、不可观察特征、判断边界、评价口径、风险和不确定性。输出到 `artifacts/reference-knowledge.md` 工件。
-- 为独立 Literature Knowledge Builder 提供迁移主题所需的 Domain Brief，写入或更新 `knowledge_base/domain-brief.md`。Domain Brief 用自然语言描述当前领域、下游 time-series agent 的服务对象、需要重点抽取的信号特征、异常/故障模式、阈值、通道/导联/传感器条件、混淆项、证据要求和下一步检查建议。不要在本节点中强制构建复杂 JSON 图谱；独立 builder 会根据 Domain Brief 与 references 产出 `knowledge_base/tables/evidence.csv`、`knowledge_base/tables/knowledge.csv`、`knowledge_base/tables/classes.csv` 和 `knowledge_base/tables/relations.csv`。
+- 如果当前任务需要为独立 Literature Knowledge Builder 补充迁移主题，可以写入或更新推荐工件 `knowledge_base/domain-brief.md`。Domain Brief 用自然语言描述当前领域、下游 time-series agent 的服务对象、需要重点抽取的信号特征、异常/故障模式、阈值、通道/导联/传感器条件、混淆项、证据要求和下一步检查建议。它不是本 node 的完成硬契约；独立 builder 可以根据已有 Domain Brief 与 references 产出内部知识库表。
 - 获取或定位数据。
-  - 原始数据可能已经存在或需要下载。原始数据必须存储在 data/raw 中。
-  - 若用户要求通过库下载原始数据，使用 Bash 和 `uv run --with ...` 在 workspace 的 data/raw 下完成下载、缓存和转换。
-  - 根据任务需求和下载后的具体数据格式，将数据转换为后续工具可高效读取的统一格式，写入 data/processed/**。
+  - 如果原始数据已存在于 `data/raw/**`，只读使用，不得覆盖、改写或就地清洗。
+  - 如果任务缺少必需原始数据，本 node 可在 `data/raw/**` 中创建新的原始数据文件；写入前先检查目标路径不存在，并记录数据来源、版本和获取方式。
+  - 若用户要求通过 Python 库下载原始数据，使用 `uv run --with ...` 执行下载。解压、格式转换、清洗、缓存副本和特征工件一律写入 `data/processed/**`，不得回写 `data/raw/**`。
+  - 后续 node 只能读取 `data/raw/**`；所有训练、推理、评估和 case review 的派生数据路径必须在 `user/data-spec.md` 中明确定义。
 - `data/processed/**`、`artifacts/reference-knowledge.md`、`knowledge_base/domain-brief.md`、`artifacts/data-exploration-report.md`、`artifacts/problem-framing.md` 和 `plots/**` 是推荐路径；独立 knowledge builder 会将 reference 知识写入内部 `knowledge_base/**` 存储，前端和主会话通过自然语言知识接口查询，不应把 CSV 表作为普通领域知识入口。
 - 必须产出一份数据规范 `user/data-spec.md`，作为后续所有数据处理的锚点。后续流程中的工具构建、训练、推理、评估和 case review 都必须遵守这份数据规范。
 - 数据规范必须精确定义：数据文件路径、记录粒度、样本 ID、时间轴/索引、特征列、目标列、标签映射、split 定义、缺失值规则、单位/归一化状态、允许读取的字段、禁止作为输入的泄漏字段、输出格式和评估所需字段等必要信息。

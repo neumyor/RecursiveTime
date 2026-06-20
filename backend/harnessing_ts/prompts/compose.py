@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from typing import Any
 
 from harnessing_ts.config.markdown import node_document, read_prompt_text
 from harnessing_ts.schema import NODE_SPECS, NodeType, get_node_spec
@@ -48,9 +50,10 @@ def build_main_system_prompt(ctx: PromptContext) -> str:
     ])
 
 
-def build_main_attachment(ctx: PromptContext) -> str:
+def build_main_attachment(ctx: PromptContext, progress: dict[str, Any] | None = None) -> str:
     return _render_template(read_prompt_text("main/attachment.md"), {
         "workspace_path": ctx.workspace_path,
+        "progress_json": json.dumps(progress or {}, ensure_ascii=False, indent=2, sort_keys=True),
     })
 
 

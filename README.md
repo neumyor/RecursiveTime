@@ -22,7 +22,7 @@ problem-contract
 
 ## Node Responsibilities And Native Tools
 
-The main session is an orchestrator. It should stay read-only and use `Read`, `LS`, `Glob`, and `Grep` to inspect workspace state before requesting a node transition through the MCP governance tool `mcp__ts_harness__enter_node`. Node sessions receive native tool sets based on their responsibility and finish through `mcp__ts_harness__finish_node`.
+The main session is an orchestrator. Before every main-session user turn, the backend injects an authoritative structured progress snapshot containing the active/latest node, completed nodes, anchor-artifact presence, pipeline completion, and a recommended routing action. The main agent should use that snapshot instead of freely scanning the workspace before requesting a transition through `mcp__ts_harness__enter_node`. Node sessions receive native tool sets based on their responsibility and finish through `mcp__ts_harness__finish_node`.
 
 Node control has exactly two modes:
 
@@ -97,7 +97,7 @@ Keep new behavior inside these boundaries. Routing rules belong in `node_state.p
 
 | Node | Responsibility | Produces | Native tools |
 |---|---|---|---|
-| `problem-contract` | Use the user request and references to acquire/process data, explore it, clarify the real task, write the workflow contract, and prepare a domain brief for the independent literature knowledge builder. | `user/problem-contract.md`, `user/data-spec.md`, `knowledge_base/domain-brief.md` | `Read`, `LS`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Write`, `Edit`, `Bash` |
+| `problem-contract` | Use the user request and references to acquire/process data, explore it, and clarify the real task. It may optionally prepare a domain brief for the independent literature knowledge builder. | `user/problem-contract.md`, `user/data-spec.md` | `Read`, `LS`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Write`, `Edit`, `Bash` |
 | `iterative-solving` | Repeated iteration node. Each round first calls `mcp__ts_harness__get_runtime_settings` to read `iterativeCandidateCount`, proposes k candidates, assigns `Task` subagents to independently test/review candidates, synthesizes the evidence, standardizes retained methods or combinations under `tools/`, executes the selected solution, writes candidate review, case review, iteration summary, and updates iteration state. | `tools/**`, `runs/iterations/<iteration-id>/**`, `reports/iterations/<iteration-id>-candidate-review.md`, `reports/iterations/<iteration-id>-case-review.md`, `reports/iterations/<iteration-id>-summary.md`, `user/iteration-state.md` | `Read`, `LS`, `Glob`, `Grep`, `Task`, `WebFetch`, `WebSearch`, `Write`, `Edit`, `Bash` |
 | `final-summary` | If iteration is complete, summarize the full optimization trajectory, final tool-use solution, final results, limitations, and evidence. | `reports/final-summary.md`, `user/final-solution.md` | `Read`, `LS`, `Glob`, `Grep`, `Write`, `Edit` |
 
@@ -120,7 +120,7 @@ Iteration routing:
 Global native-tool constraints:
 
 - `Task` is allowed only where listed in the node native tools. `TodoWrite`, notebook tools, worktree tools, cron tools, and broad automation tools are disallowed by default.
-- `Write` and `Edit` are for expected artifact paths. Nodes must not modify `data/raw/**` unless the contract explicitly authorizes a derived copy operation.
+- `Write` and `Edit` are for expected artifact paths. `problem-contract` may create missing raw inputs without overwriting existing files; derived, cleaned, converted, or extracted data belongs under `data/processed/**`. All later nodes treat `data/raw/**` as read-only.
 - Nodes should not read `backend/**`, `frontend/**`, `state/**`, or `_reference_project/**`. `final-summary` may read `logs/timeline.jsonl` because it is an explicit required input.
 - Ordinary domain knowledge should be queried through `mcp__ts_harness__query_knowledge`; nodes should not read `knowledge_base/tables/*.csv`, `knowledge_base/indexes/**`, or `knowledge_base/cache/**` unless explicitly debugging the knowledge base.
 

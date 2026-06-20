@@ -72,6 +72,7 @@ class NodeSession(TypedDict, total=False):
     success: bool
     goalMet: bool | None
     nextNode: NodeType | None
+    nextNodeSpecified: bool
     loopDecision: Literal["continue", "exit", "none"] | None
     outputPaths: list[str]
 

@@ -10,4 +10,3 @@ requires:
 produces:
 - user/problem-contract.md
 - user/data-spec.md
-- knowledge_base/domain-brief.md

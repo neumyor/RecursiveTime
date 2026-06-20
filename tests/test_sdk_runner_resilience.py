@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from harnessing_ts.agent.sdk_runner import SdkRunner, SdkRunnerConfig
+from harnessing_ts.state.jsonl import read_jsonl
 from harnessing_ts.state.message_log import MessageLog
 
 
@@ -63,6 +64,22 @@ def test_extra_args_for_200k_context_window_is_empty(tmp_path) -> None:
     )
     sdk = build_sdk_invocation_config(cfg)
     assert sdk.extra_args in (None, {})
+
+
+def test_send_with_user_echo_injects_fresh_context_without_polluting_user_log(tmp_path) -> None:
+    runner = _make_runner(tmp_path)
+    runner.send = AsyncMock(return_value=[])
+
+    parts = asyncio.run(runner.send_with_user_echo(
+        "continue the task",
+        context_text='{"recommendedAction":"enter_node"}',
+    ))
+
+    runner.send.assert_awaited_once_with(
+        '{"recommendedAction":"enter_node"}\n\n## Current User Message\ncontinue the task'
+    )
+    assert parts[0]["text"] == "continue the task"
+    assert read_jsonl(runner.config.log.path)[0]["text"] == "continue the task"
 
 
 def test_runner_resets_client_on_connect_failure(tmp_path) -> None:

@@ -36,12 +36,13 @@ class SdkRunner:
         self._running = False
         self._interrupted = False
 
-    async def send_with_user_echo(self, text: str) -> list[Part]:
+    async def send_with_user_echo(self, text: str, context_text: str | None = None) -> list[Part]:
         user_part = user_text_part(text)
         self.config.log.append(user_part)
         if self.config.on_part:
             self.config.on_part(user_part)
-        assistant_parts = await self.send(text)
+        query_text = f"{context_text}\n\n## Current User Message\n{text}" if context_text else text
+        assistant_parts = await self.send(query_text)
         return [user_part, *assistant_parts]
 
     async def send(self, text: str) -> list[Part]:

@@ -29,10 +29,14 @@ class NodeStateMachine:
                 return "iterative-solving"
             if latest.get("loopDecision") == "exit":
                 return "final-summary"
+            if latest.get("nextNodeSpecified") and latest.get("nextNode") is None:
+                return None
             if latest.get("nextNode"):
                 return latest.get("nextNode")
             if latest.get("goalMet") is True:
                 return get_next_node(latest["nodeType"])
+            return None
+        if latest.get("nextNodeSpecified") and latest.get("nextNode") is None:
             return None
         if latest.get("nextNode"):
             return latest.get("nextNode")
@@ -66,11 +70,18 @@ class NodeStateMachine:
         loop_decision: str | None,
         output_paths: list[str] | None = None,
         goal_met: bool | None = None,
+        next_node_specified: bool = False,
     ) -> None:
         if node_type != "iterative-solving":
             return
         if success and not loop_decision:
             raise RuntimeError("iterative-solving finish_node requires explicit loopDecision.")
+        if success and next_node_specified and next_node is None:
+            raise RuntimeError(
+                "iterative-solving cannot explicitly set nextNode=none; "
+                "use nextNode=iterative-solving with loopDecision=continue or "
+                "nextNode=final-summary with loopDecision=exit."
+            )
         if loop_decision == "continue" and next_node not in {None, "iterative-solving"}:
             raise RuntimeError("iterative-solving loopDecision=continue requires nextNode=iterative-solving.")
         if loop_decision == "exit" and next_node not in {None, "final-summary"}:

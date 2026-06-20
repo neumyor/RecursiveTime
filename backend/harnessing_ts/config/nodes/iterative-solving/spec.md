@@ -12,6 +12,7 @@ requires:
 produces:
 - tools/**
 - runs/iterations/<iteration-id>/**
+- reports/iterations/<iteration-id>-candidate-review.md
 - reports/iterations/<iteration-id>-case-review.md
 - reports/iterations/<iteration-id>-summary.md
 - user/iteration-state.md

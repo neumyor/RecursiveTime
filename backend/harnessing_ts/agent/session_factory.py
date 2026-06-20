@@ -7,7 +7,6 @@ from harnessing_ts.agent.sdk_runner import SdkRunner, SdkRunnerConfig
 from harnessing_ts.mcp.server import create_harness_mcp_server
 from harnessing_ts.prompts.compose import (
     PromptContext,
-    build_main_attachment,
     build_main_system_prompt,
     build_node_attachment,
     build_node_system_prompt,
@@ -38,7 +37,7 @@ def build_main_runner(
     return SdkRunner(SdkRunnerConfig(
         cwd=workspace_path,
         system_prompt=build_main_system_prompt(ctx),
-        attachment_text=build_main_attachment(ctx),
+        attachment_text=None,
         allowed_tools=build_main_allowed_tools(),
         model=sdk_config.model,
         env=sdk_config.env,

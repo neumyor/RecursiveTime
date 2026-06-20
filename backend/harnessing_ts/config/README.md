@@ -50,8 +50,8 @@ This is model-facing text.
 
 ### `prompts/main/attachment.md`
 
-Initial main-session attachment template.
-It describes expected workspace layout and supports `{workspace_path}`.
+Per-turn main-session attachment template.
+It describes expected workspace layout and embeds the backend-generated structured progress snapshot. It supports `{workspace_path}` and `{progress_json}`.
 This is model-facing text.
 
 ### `prompts/node/execution-rules.md`

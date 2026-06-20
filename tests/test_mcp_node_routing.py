@@ -122,6 +122,25 @@ def test_iterative_solving_rejects_next_node_only_routing(tmp_path):
         raise AssertionError("Expected nextNode-only iterative routing to be rejected.")
 
 
+def test_iterative_solving_rejects_explicit_none_next_node(tmp_path):
+    orchestrator = HarnessOrchestrator(tmp_path)
+
+    try:
+        orchestrator._validate_finish_control(
+            "iterative-solving",
+            True,
+            None,
+            "continue",
+            ITERATIVE_OUTPUTS,
+            False,
+            True,
+        )
+    except RuntimeError as exc:
+        assert "nextNode=none" in str(exc)
+    else:
+        raise AssertionError("Expected explicit nextNode=none to be rejected for iterative-solving.")
+
+
 def test_iterative_solving_rejects_missing_anchor_artifacts(tmp_path):
     orchestrator = HarnessOrchestrator(tmp_path)
 
