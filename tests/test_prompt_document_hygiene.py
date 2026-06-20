@@ -93,6 +93,20 @@ def test_final_summary_prompt_does_not_request_impossible_failure_reroute() -> N
     assert "要求回到 `iterative-solving`" not in guidance
 
 
+def test_iterative_case_review_visualization_contract_is_explicit() -> None:
+    guidance = node_document("iterative-solving")["guidance"]
+
+    assert "runs/iterations/<iteration-id>/case-review/visualizations/" in guidance
+    assert "所有选定 bad case 的逐样本分析和上述统计综合完成后执行" in guidance
+    assert "撰写绘图代码" in guidance
+    assert "按 `user/data-spec.md` 读取" in guidance
+    assert "`summary_` 前缀" in guidance
+    assert "保存为 PNG" in guidance
+    assert "DPI 不得低于 30" in guidance
+    assert "宽高比必须为 16:9" in guidance
+    assert "蓝、橙、绿、红" in guidance
+
+
 def test_chain_summary_prompts_are_markdown_backed() -> None:
     chain_summary_source = (
         REPO_ROOT / "backend" / "harnessing_ts" / "chain_summary.py"

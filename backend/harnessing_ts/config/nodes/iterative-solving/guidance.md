@@ -44,7 +44,7 @@
     - 报告中必须写清楚 bad case 总数、采样数量、采样维度、每个样本被选中的原因。
   - **Per-case visualization**：
     - 每个被分析样本都必须有样本可视化结果。若数据形态不支持，必须提供等价可解释视图并说明原因。时间序列任务应展示原始序列局部窗口、目标点/片段、预测结果、真实标签/参考答案、关键工具特征或 score；分类任务应展示原始样本或可解释视图、预测类别、真实类别和关键证据。
-    - 可视化文件应保存到 `runs/iterations/<iteration-id>/case-review/` 或同等明确路径，并在报告中使用正确的markdown格式逐一引用，确保case review中能正确显示。
+    - 所有可视化图片必须保存到 `runs/iterations/<iteration-id>/case-review/visualizations/`，并在报告中使用正确的 Markdown 图片格式逐一引用，确保 case review 中能正确显示。
   - **Per-case analysis**：每个样本必须单独成节，包含：
     - 样本 ID、错误类型、真实结果、预测结果、score/confidence/rank 或其他当前方法输出。
     - 原始输入证据：从 `user/data-spec.md` 定义的原始字段读取并展示，不允许只看模型 score。
@@ -57,6 +57,12 @@
     - 在逐样本分析之后，必须对全部 bad case 或可计算的 bad case 集合做统计分析，而不是只总结抽样样本。
     - 至少统计 bad case 数量、错误类型分布、关键特征分布、score/confidence/rank 分布、与 good case 的差异、各分层指标、可解释/不可解释比例。
     - 最后总结当前方法的主要失败机制、证据强度、无法解释的范围、对下一轮工具或方案的具体影响。
+  - **Summary insight visualization**：
+    - 该步骤必须在所有选定 bad case 的逐样本分析和上述统计综合完成后执行。此时 agent 应先总结自己从样本证据中获得的“样本启发”，再思考哪种图形设计最能解释该启发；不要在逐 case 分析完成前预先绘制结论图，也不要生成与样本证据无关的装饰性图表。
+    - agent 必须亲自完成可复现的可视化流程：确定要表达的启发与证据映射，设计图形结构，撰写绘图代码，按 `user/data-spec.md` 读取所需原始数据和方法输出，执行代码并检查生成结果。绘图代码、执行命令、输入路径和输出路径必须在本轮 run 工件或 case review 中可追溯。
+    - summary 可视化可以是一张或多张，但每张都必须保存为 PNG，并写入 `runs/iterations/<iteration-id>/case-review/visualizations/`。文件名必须使用 `summary_` 前缀，后续语义名称使用下划线 `_` 分隔，例如 `summary_failure_patterns.png`；不得使用空格或连字符作为分隔符。
+    - 每张 summary PNG 的 DPI 不得低于 30，画布宽高比必须为 16:9。强调色优先依次采用蓝、橙、绿、红；其他颜色只能作为中性背景、坐标、辅助线或确有必要的补充编码，并应保证图例和语义一致。
+    - summary 可视化必须直接支撑 case review 中的样本启发、主要失败机制或下一轮方向。报告应逐图引用，并说明图片表达的启发、使用的数据范围、关键视觉编码以及不能从图中推出的结论。
 - case review 的数值归因链路必须完整：
   - 先从 `user/data-spec.md` 找到原始输入字段，读取 bad case 的原始时间序列。
   - 观察per-case的时序变化特征，具体特征应结合任务和领域知识选择。

@@ -106,6 +106,7 @@ Case review and summary have separate roles:
 - Candidate review records the k source, candidate hypotheses, subagent results, metrics, bad-case review summaries, relation to knowledge graph findings, and the unified retain/drop/compose decision.
 - Case review centers on bad cases. If there are fewer than 10 bad cases, every bad case must be analyzed. If there are many, the node must define a task-appropriate sampling strategy and deeply analyze 5-20 bad cases.
 - Every reviewed sample must include a visualization path, raw input evidence, current-method evidence, comparison to a good case/prototype/reference case, and an explicit explanation level.
+- All case-review images live under `runs/iterations/<iteration-id>/case-review/visualizations/`. After per-case analysis and statistical synthesis, the node must create one or more sample-inspired summary PNGs named with the `summary_` prefix, using a 16:9 canvas, at least 30 DPI, and blue/orange/green/red as the preferred emphasis palette.
 - Case review ends with statistical analysis over all bad cases or the largest computable bad-case set.
 - Iteration summary should not duplicate per-case analysis. It should describe the tool/method change, execution command, aggregate metrics, target gap, 3-5 high-level case-review findings, and next-node decision.
 
