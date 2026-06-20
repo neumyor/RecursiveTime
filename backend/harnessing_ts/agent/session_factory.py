@@ -23,7 +23,7 @@ def build_main_runner(
     locale: str,
     log_path: Path,
     enter_node: Callable[[dict[str, Any]], Any],
-    query_knowledge: Callable[[dict[str, Any]], Any],
+    query_knowledge: Callable[[dict[str, Any]], Any] | None,
 ) -> SdkRunner:
     ctx = PromptContext(str(workspace_path), locale)
     sdk_config = build_sdk_invocation_config(read_effective_llm_config(workspace_path))
@@ -38,7 +38,7 @@ def build_main_runner(
         cwd=workspace_path,
         system_prompt=build_main_system_prompt(ctx),
         attachment_text=None,
-        allowed_tools=build_main_allowed_tools(),
+        allowed_tools=build_main_allowed_tools(knowledge_graph_ready=query_knowledge is not None),
         model=sdk_config.model,
         env=sdk_config.env,
         extra_args=sdk_config.extra_args,

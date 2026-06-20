@@ -66,6 +66,7 @@ class HarnessOrchestrator:
         self.node_state = NodeStateMachine(workspace_path)
         self.state: WorkspaceState | None = None
         self.main_runner: SdkRunner | None = None
+        self._main_runner_knowledge_graph_ready: bool | None = None
         self.active_node_runner: SdkRunner | None = None
         self.active_node_session: NodeSession | None = None
 
@@ -91,6 +92,7 @@ class HarnessOrchestrator:
             ]))
             self.store.append_main_part(part)
             return [user_part, part]
+        await self._refresh_main_runner_for_knowledge_graph()
         self._ensure_main_runner()
         assert self.main_runner
         parts = await self.main_runner.send_with_user_echo(
@@ -283,6 +285,8 @@ class HarnessOrchestrator:
         return {"ok": True}
 
     async def request_query_knowledge(self, args: dict[str, Any]) -> dict[str, Any]:
+        if not self.store.is_knowledge_graph_ready():
+            raise RuntimeError("Knowledge graph is not ready. Build it successfully before calling query_knowledge.")
         return await self.query_knowledge(
             question=str(args.get("question", "")),
             domain=args.get("domain"),
@@ -527,6 +531,8 @@ class HarnessOrchestrator:
         include_evidence: bool = False,
     ) -> dict[str, Any]:
         self._ensure_initialized()
+        if not self.store.is_knowledge_graph_ready():
+            raise RuntimeError("Knowledge graph is not ready. Build it successfully before querying knowledge.")
         result = await answer_knowledge_query(
             workspace_path=self.workspace_path,
             store=self.store,
@@ -954,6 +960,7 @@ class HarnessOrchestrator:
         if runner is None:
             return
         self.main_runner = None
+        self._main_runner_knowledge_graph_ready = None
         if runner.is_running:
             try:
                 await runner.interrupt()
@@ -1155,6 +1162,7 @@ class HarnessOrchestrator:
             "pipelineComplete": self.node_state.is_pipeline_complete(state),
             "latestNodeSession": _main_node_snapshot(latest),
             "anchorArtifacts": {path: (self.workspace_path / path).exists() for path in anchor_paths},
+            "knowledgeGraphReady": self.store.is_knowledge_graph_ready(),
             "recommendedAction": recommended_action,
             "recommendedNode": recommended_node,
             "routingReason": reason,
@@ -1163,12 +1171,25 @@ class HarnessOrchestrator:
     def _ensure_main_runner(self) -> None:
         if self.main_runner:
             return
+        knowledge_graph_ready = self.store.is_knowledge_graph_ready()
         self.main_runner = build_main_runner(
             workspace_path=self.workspace_path,
             locale=self.locale,
             log_path=self.store.main_log_path,
             enter_node=self.request_enter_node,
-            query_knowledge=self.request_query_knowledge,
+            query_knowledge=self.request_query_knowledge if knowledge_graph_ready else None,
+        )
+        self._main_runner_knowledge_graph_ready = knowledge_graph_ready
+
+    async def _refresh_main_runner_for_knowledge_graph(self) -> None:
+        if not self.main_runner:
+            return
+        current = self.store.is_knowledge_graph_ready()
+        if self._main_runner_knowledge_graph_ready == current:
+            return
+        await self._close_main_runner(
+            reason="knowledge_graph_availability_changed",
+            message="Main runner closed because query_knowledge availability changed; the next turn will use a fresh tool set.",
         )
 
     def _spawn_node_runner(self, node: NodeSession) -> None:

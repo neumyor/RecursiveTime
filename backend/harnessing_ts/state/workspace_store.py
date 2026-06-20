@@ -156,6 +156,18 @@ class WorkspaceStore:
             "message": "Knowledge graph builder has not run yet.",
         }
 
+    def is_knowledge_graph_ready(self) -> bool:
+        status = self.read_knowledge_graph_build_status()
+        if status.get("status") != "completed":
+            return False
+        manifest = read_json(self.root / "knowledge_base" / "manifest.json") or {}
+        validation = manifest.get("validation")
+        return bool(
+            manifest.get("schemaVersion")
+            and isinstance(validation, dict)
+            and validation.get("ok") is True
+        )
+
     def write_knowledge_graph_build_status(self, status: dict[str, Any]) -> dict[str, Any]:
         current = self.read_knowledge_graph_build_status()
         current.update(status)

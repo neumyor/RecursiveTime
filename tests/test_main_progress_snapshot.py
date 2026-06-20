@@ -43,6 +43,7 @@ def test_initial_progress_recommends_problem_contract(tmp_path) -> None:
     assert snapshot["recommendedAction"] == "enter_node"
     assert snapshot["recommendedNode"] == "problem-contract"
     assert snapshot["pipelineComplete"] is False
+    assert snapshot["knowledgeGraphReady"] is False
 
 
 def test_completed_problem_contract_recommends_iterative_solving(tmp_path) -> None:
