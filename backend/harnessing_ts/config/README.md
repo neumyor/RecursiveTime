@@ -70,6 +70,18 @@ Node startup attachment template.
 Supports `{node_type}` and `{input_summary_block}`.
 This is model-facing text.
 
+### `prompts/chain-summary/`
+
+Chain builder prompt fragments assembled by `backend/harnessing_ts/prompts/compose.py`:
+
+- `system.md`: builder role, evidence rules, Chinese output requirement, and draft-write protocol.
+- `schema.md`: the required chain-summary JSON structure.
+- `generate.md`: generation task template with `{manifest_json}` and `{draft_path}`.
+- `repair-system.md`: constrained local-repair agent rules.
+- `repair.md`: validation-repair template with attempt, path, and error variables.
+
+Generation and repair prompts must be changed in these Markdown files rather than embedded in `chain_summary.py`.
+
 ## `nodes/<node-type>/`
 
 Each node has its own directory. A node directory must contain exactly these content files:
@@ -132,6 +144,7 @@ This file is used by `backend/harnessing_ts/tools/compose_tools.py`.
 - Keep shared behavior in `prompts/shared/`.
 - Keep main-only behavior in `prompts/main/`.
 - Keep node-runner common behavior in `prompts/node/`.
+- Keep chain builder generation, schema, and repair behavior in `prompts/chain-summary/`.
 - Keep node-specific responsibility, guidance, and tool access in that node's own directory.
 - When adding a node, create a new `nodes/<node-type>/` directory and connect it through the `next` field in `spec.md`.
 - Avoid putting multiple unrelated configuration domains into one Markdown file.

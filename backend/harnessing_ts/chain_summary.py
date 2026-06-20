@@ -6,72 +6,24 @@ from pathlib import Path
 from typing import Any
 
 from harnessing_ts.agent.sdk_runner import SdkRunner, SdkRunnerConfig
+from harnessing_ts.prompts.compose import (
+    build_chain_summary_generate_prompt,
+    build_chain_summary_repair_prompt,
+    build_chain_summary_repair_system_prompt,
+    build_chain_summary_system_prompt,
+)
 from harnessing_ts.schema import Part
 from harnessing_ts.settings.llm import LlmConfig, build_sdk_invocation_config
-from harnessing_ts.state.jsonl import read_jsonl, write_json
+from harnessing_ts.state.jsonl import read_json, read_jsonl, write_json
 from harnessing_ts.state.message_log import MessageLog
 from harnessing_ts.state.workspace_store import WorkspaceStore, now_iso
 
 
-CHAIN_ALLOWED_TOOLS = ["Read", "LS", "Glob", "Grep"]
-
-CHAIN_SYSTEM_PROMPT = """你是 HarnessingTS 的独立 chain builder agent。
-
-你的职责是读取当前 runtime workspace 的 logs、runs、reports、tools 和 user 工件，生成一份可审计的“思维链总结”。
-这里的“思维链”只能指可观察的决策链和证据链：主会话或 node agent 在日志和报告中明确提出了什么方法、执行了什么测试、产生了什么指标、从哪些 bad case 或样本可视化获得了下一轮启发。不要编造隐藏推理，不要输出模型私有思考过程。
-
-必须输出合法 JSON，不能使用 Markdown fence。JSON schema:
-{
-  "title": "string",
-  "generatedAt": "ISO timestamp or empty",
-  "overview": "string",
-  "metricSeries": [
-    {
-      "name": "metric name",
-      "unit": "optional unit",
-      "direction": "higher|lower|neutral",
-      "values": [{"iteration": "iteration number or id", "label": "best candidate/method label for this iteration", "value": number}]
-    }
-  ],
-  "iterations": [
-    {
-      "iterationId": "string",
-      "summary": "string",
-      "methods": [{"name": "string", "hypothesis": "string", "artifactPath": "optional path"}],
-      "testResults": [{"metric": "string", "value": "string", "evidencePath": "optional path", "interpretation": "string"}],
-      "methodResults": [
-        {
-          "methodName": "must match the paired methods[].name",
-          "metric": "primary/core metric for this method",
-          "value": "string",
-          "evidencePath": "optional path",
-          "interpretation": "string"
-        }
-      ],
-      "sampleInspirations": [
-        {
-          "sampleId": "string",
-          "visualizationPath": "workspace relative image path if available",
-          "interpretation": "string",
-          "nextIterationImpact": "string"
-        }
-      ],
-      "nextStep": "string"
-    }
-  ],
-  "artifacts": [{"path": "workspace relative path", "role": "string"}],
-  "uncertainty": ["string"]
-}
-
-要求：
-- metricSeries 必须尽量从 iteration summaries、runs registry、metrics 文件中抽取多个“指标 x iterations”的序列。每个 metric 的每个 iteration 只能保留该 iteration 的最佳结果；横轴语义必须是 iteration 编号或 id，不要把 candidate 名称当作横轴。
-- overview 只写核心决策链摘要，不要把日志读取限制、warning、缺失文件清单写进 overview。此类信息放入 uncertainty，且每条 uncertainty 必须简短。
-- 每个 iteration 的 methods 和 methodResults 必须严格一一对应：顺序相同、数量相同，methodResults[i] 解释 methods[i] 的测试结果和核心指标。如果只能产出旧字段 testResults，也必须保证 testResults 的顺序和 methods 一致。
-- sampleInspirations 必须优先使用 case review 中的样本、可视化路径和解读；没有图片路径时 visualizationPath 留空并说明缺失。
-- 所有 path 必须是 workspace 相对路径。
-- 如果日志不足，仍输出 JSON，并把缺口写入 uncertainty。
-"""
-
+CHAIN_READ_TOOLS = ["Read", "LS", "Glob", "Grep"]
+CHAIN_GENERATE_TOOLS = [*CHAIN_READ_TOOLS, "Write"]
+CHAIN_REPAIR_TOOLS = ["Read", "Edit"]
+CHAIN_DRAFT_PATH = "artifacts/chain-summary.draft.json"
+CHAIN_MAX_REPAIR_ATTEMPTS = 6
 
 async def build_chain_summary(
     *,
@@ -85,11 +37,14 @@ async def build_chain_summary(
     if llm_config.authMode == "manual" and not llm_config.apiKey:
         raise RuntimeError("Chain builder LLM config requires apiKey when authMode=manual.")
 
+    draft_path = workspace_path / CHAIN_DRAFT_PATH
+    draft_path.unlink(missing_ok=True)
+
     runner = SdkRunner(SdkRunnerConfig(
         cwd=workspace_path,
-        system_prompt=CHAIN_SYSTEM_PROMPT,
+        system_prompt=build_chain_summary_system_prompt(),
         attachment_text=None,
-        allowed_tools=CHAIN_ALLOWED_TOOLS,
+        allowed_tools=CHAIN_GENERATE_TOOLS,
         model=sdk_config.model,
         env=sdk_config.env,
         extra_args=sdk_config.extra_args,
@@ -100,39 +55,78 @@ async def build_chain_summary(
         on_runner(runner)
     try:
         prompt = chain_summary_prompt(workspace_path)
-        parts = await runner.send_with_user_echo(prompt)
+        await runner.send_with_user_echo(prompt)
     finally:
         if on_runner:
             on_runner(None)
         await runner.close()
 
-    payload = parse_chain_summary(parts)
-    payload = normalize_chain_summary(payload)
+    repair_runner: SdkRunner | None = None
+    payload: dict[str, Any] | None = None
+    if not draft_path.exists():
+        raise RuntimeError(f"Chain builder did not create {CHAIN_DRAFT_PATH}.")
+    try:
+        for attempt in range(CHAIN_MAX_REPAIR_ATTEMPTS + 1):
+            try:
+                candidate = read_and_validate_chain_draft(draft_path, workspace_path)
+                payload = candidate
+                break
+            except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
+                if attempt >= CHAIN_MAX_REPAIR_ATTEMPTS:
+                    raise
+                if repair_runner is None:
+                    repair_runner = SdkRunner(SdkRunnerConfig(
+                        cwd=workspace_path,
+                        system_prompt=build_chain_summary_repair_system_prompt(),
+                        attachment_text=None,
+                        allowed_tools=CHAIN_REPAIR_TOOLS,
+                        model=sdk_config.model,
+                        env=sdk_config.env,
+                        extra_args=sdk_config.extra_args,
+                        log=MessageLog(store.chain_summary_log_path),
+                        on_part=on_part,
+                    ))
+                if on_runner:
+                    on_runner(repair_runner)
+                await repair_runner.send_with_user_echo(chain_summary_repair_prompt(str(exc), attempt + 1))
+    finally:
+        if on_runner:
+            on_runner(None)
+        if repair_runner is not None:
+            await repair_runner.close()
+
+    if payload is None:
+        raise RuntimeError("Chain builder did not produce a valid summary after repair.")
     store.write_chain_summary(payload)
     return payload
 
 
 def chain_summary_prompt(workspace_path: Path) -> str:
     manifest = collect_workspace_manifest(workspace_path)
-    return "\n".join([
-        "请生成 HarnessingTS 当前 workspace 的思维链总结。",
-        "",
-        "请读取以下 runtime workspace 日志和工件，必要时用 Glob/Grep/Read 深入查看相关文件：",
-        json.dumps(manifest, ensure_ascii=False, indent=2),
-        "",
-        "重点回答：",
-        "1. 每个 iteration 中提出了哪些方法或候选，保留/放弃原因是什么。",
-        "2. 每轮测试结果如何，哪些指标提升或退化。",
-        "3. 哪些样本、bad case 或可视化启发了下一轮 iteration。",
-        "4. 最终目标是如何通过一轮轮外显决策和证据实现的。",
-        "",
-        "输出约束：",
-        "- metricSeries.values 的 iteration 字段必须是 iteration 编号/id；label 只能用于备注本轮最佳候选。",
-        "- 对每个 iteration，methods 与 methodResults 必须按 candidate/method 一一配对，数量和顺序一致。",
-        "- 不要在 overview 中写 warning 列表；日志缺口只放到 uncertainty，最多 6 条，每条一句。",
-        "",
-        "只输出符合 system prompt schema 的 JSON。",
-    ])
+    return build_chain_summary_generate_prompt(
+        manifest_json=json.dumps(manifest, ensure_ascii=False, indent=2),
+        draft_path=CHAIN_DRAFT_PATH,
+    )
+
+
+def chain_summary_repair_prompt(validation_error: str, attempt: int) -> str:
+    return build_chain_summary_repair_prompt(
+        validation_error=validation_error,
+        attempt=attempt,
+        max_attempts=CHAIN_MAX_REPAIR_ATTEMPTS,
+        draft_path=CHAIN_DRAFT_PATH,
+    )
+
+
+def read_and_validate_chain_draft(draft_path: Path, workspace_path: Path) -> dict[str, Any]:
+    if not draft_path.exists():
+        raise RuntimeError(f"Chain builder did not create {CHAIN_DRAFT_PATH}.")
+    raw = read_json(draft_path)
+    if not isinstance(raw, dict):
+        raise RuntimeError("Chain summary draft must be a JSON object.")
+    candidate = normalize_chain_summary(raw)
+    validate_chain_summary(candidate, workspace_path)
+    return candidate
 
 
 def collect_workspace_manifest(workspace_path: Path) -> dict[str, Any]:
@@ -146,6 +140,7 @@ def collect_workspace_manifest(workspace_path: Path) -> dict[str, Any]:
         "user/iteration-state.md",
         "reports/final-summary.md",
         "user/final-solution.md",
+        "artifacts/knowledge-graph.json",
     ]
     existing = [path for path in candidates if (workspace_path / path).exists()]
     reports = _glob_relative(workspace_path, "reports/iterations/*.md", limit=80)
@@ -160,6 +155,8 @@ def collect_workspace_manifest(workspace_path: Path) -> dict[str, Any]:
         *(_glob_relative(workspace_path, "reports/**/*.png", limit=120)),
     ]
     node_logs = _glob_relative(workspace_path, "logs/nodes/*.jsonl", limit=80)
+    references = _glob_relative(workspace_path, "references/**/*", limit=120)
+    knowledge_base = _glob_relative(workspace_path, "knowledge_base/**/*", limit=120)
     return {
         "workspace": str(workspace_path),
         "requiredLogs": existing,
@@ -168,6 +165,8 @@ def collect_workspace_manifest(workspace_path: Path) -> dict[str, Any]:
         "runFiles": run_files,
         "toolReadmes": tool_files,
         "visualizationCandidates": sorted(set(plots)),
+        "referenceFiles": references,
+        "knowledgeBaseFiles": knowledge_base,
     }
 
 
@@ -205,6 +204,68 @@ def normalize_chain_summary(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def validate_chain_summary(summary: dict[str, Any], workspace_path: Path) -> None:
+    """Reject shallow decision chains instead of persisting a misleading report."""
+    iterations = summary.get("iterations") if isinstance(summary.get("iterations"), list) else []
+    _require_chinese("title", summary.get("title"))
+    _require_chinese("overview", summary.get("overview"))
+    for index, warning in enumerate(summary.get("uncertainty", [])):
+        _require_chinese(f"uncertainty[{index}]", warning)
+    knowledge_available = any([
+        (workspace_path / "artifacts" / "knowledge-graph.json").exists(),
+        any((workspace_path / "references").glob("**/*")) if (workspace_path / "references").exists() else False,
+        any((workspace_path / "knowledge_base").glob("**/*")) if (workspace_path / "knowledge_base").exists() else False,
+    ])
+    for index, iteration in enumerate(iterations[:-1]):
+        decision = iteration.get("nextDecision") if isinstance(iteration.get("nextDecision"), dict) else {}
+        iteration_id = iteration.get("iterationId") or index + 1
+        if not decision.get("decision") or not decision.get("iterationEvidence"):
+            raise RuntimeError(f"Iteration {iteration_id} nextDecision requires decision and iterationEvidence.")
+        actions = decision.get("actions") if isinstance(decision.get("actions"), list) else []
+        if not actions or any(not all(action.get(key) for key in ("action", "expectedEffect", "validation")) for action in actions):
+            raise RuntimeError(f"Iteration {iteration_id} nextDecision requires executable, testable actions.")
+        if knowledge_available:
+            knowledge = decision.get("domainKnowledge") if isinstance(decision.get("domainKnowledge"), list) else []
+            complete = [entry for entry in knowledge if all(entry.get(key) for key in ("knowledge", "sourcePath", "guidance"))]
+            if len(complete) < 2:
+                raise RuntimeError(f"Iteration {iteration_id} nextDecision requires at least two sourced domain-knowledge links.")
+            for knowledge_index, entry in enumerate(complete):
+                source_path = workspace_path / entry["sourcePath"]
+                try:
+                    source_path.resolve().relative_to(workspace_path.resolve())
+                except ValueError as exc:
+                    raise RuntimeError(f"Iteration {iteration_id} domainKnowledge[{knowledge_index}] sourcePath escapes workspace.") from exc
+                if not source_path.is_file():
+                    raise RuntimeError(f"Iteration {iteration_id} domainKnowledge[{knowledge_index}] sourcePath does not exist: {entry['sourcePath']}")
+
+    for iteration_index, iteration in enumerate(iterations):
+        iteration_id = iteration.get("iterationId") or iteration_index + 1
+        for method_index, method in enumerate(iteration.get("methods", [])):
+            _require_chinese(f"Iteration {iteration_id} methods[{method_index}].hypothesis", method.get("hypothesis"))
+        results = iteration.get("methodResults") or iteration.get("testResults") or []
+        for result_index, result in enumerate(results):
+            _require_chinese(f"Iteration {iteration_id} results[{result_index}].interpretation", result.get("interpretation"))
+        for sample_index, sample in enumerate(iteration.get("sampleInspirations", [])):
+            _require_chinese(f"Iteration {iteration_id} sampleInspirations[{sample_index}].interpretation", sample.get("interpretation"))
+            _require_chinese(f"Iteration {iteration_id} sampleInspirations[{sample_index}].nextIterationImpact", sample.get("nextIterationImpact"))
+        decision = iteration.get("nextDecision") if isinstance(iteration.get("nextDecision"), dict) else {}
+        for key in ("decision", "iterationEvidence"):
+            if decision.get(key):
+                _require_chinese(f"Iteration {iteration_id} nextDecision.{key}", decision[key])
+        for knowledge_index, entry in enumerate(decision.get("domainKnowledge", [])):
+            _require_chinese(f"Iteration {iteration_id} domainKnowledge[{knowledge_index}].knowledge", entry.get("knowledge"))
+            _require_chinese(f"Iteration {iteration_id} domainKnowledge[{knowledge_index}].guidance", entry.get("guidance"))
+        for action_index, action in enumerate(decision.get("actions", [])):
+            for key in ("action", "expectedEffect", "validation"):
+                _require_chinese(f"Iteration {iteration_id} actions[{action_index}].{key}", action.get(key))
+
+
+def _require_chinese(field: str, value: Any) -> None:
+    text = str(value or "").strip()
+    if text and not re.search(r"[\u4e00-\u9fff]", text):
+        raise RuntimeError(f"{field} must contain Simplified Chinese user-facing text.")
+
+
 def chain_summary_from_logs(workspace_path: Path) -> dict[str, Any]:
     """Deterministic fallback used by tests and by the UI before the agent runs."""
     timeline = read_jsonl(workspace_path / "logs" / "timeline.jsonl")
@@ -217,12 +278,16 @@ def chain_summary_from_logs(workspace_path: Path) -> dict[str, Any]:
         output_paths = payload.get("outputPaths") if isinstance(payload.get("outputPaths"), list) else []
         iterations.append({
             "iterationId": str(event.get("nodeSessionId") or f"iteration-{len(iterations) + 1}"),
-            "summary": str(event.get("message") or ""),
             "methods": [],
             "testResults": [],
             "methodResults": [],
             "sampleInspirations": [],
-            "nextStep": str(payload.get("nextNode") or payload.get("loopDecision") or ""),
+            "nextDecision": {
+                "decision": str(payload.get("nextNode") or payload.get("loopDecision") or ""),
+                "iterationEvidence": str(event.get("message") or ""),
+                "domainKnowledge": [],
+                "actions": [],
+            },
             "artifacts": [{"path": str(path), "role": "output"} for path in output_paths],
         })
     return normalize_chain_summary({
@@ -262,13 +327,32 @@ def _normalize_metric_series(item: dict[str, Any]) -> dict[str, Any]:
 def _normalize_iteration(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "iterationId": str(item.get("iterationId") or item.get("id") or ""),
-        "summary": str(item.get("summary") or ""),
         "methods": _normalize_list_of_dicts(item.get("methods"), ("name", "hypothesis", "artifactPath")),
         "testResults": _normalize_list_of_dicts(item.get("testResults"), ("metric", "value", "evidencePath", "interpretation")),
         "methodResults": _normalize_list_of_dicts(item.get("methodResults"), ("methodName", "metric", "value", "evidencePath", "interpretation")),
         "sampleInspirations": _normalize_list_of_dicts(item.get("sampleInspirations"), ("sampleId", "visualizationPath", "interpretation", "nextIterationImpact")),
-        "nextStep": str(item.get("nextStep") or ""),
+        "nextDecision": _normalize_next_decision(item),
         "artifacts": [_normalize_artifact(artifact) for artifact in item.get("artifacts", []) if isinstance(artifact, dict)],
+    }
+
+
+def _normalize_next_decision(item: dict[str, Any]) -> dict[str, Any]:
+    raw = item.get("nextDecision") if isinstance(item.get("nextDecision"), dict) else {}
+    legacy = str(item.get("nextStep") or "")
+    domain_knowledge = raw.get("domainKnowledge") if isinstance(raw.get("domainKnowledge"), list) else []
+    actions = raw.get("actions") if isinstance(raw.get("actions"), list) else []
+    return {
+        "decision": str(raw.get("decision") or legacy),
+        "iterationEvidence": str(raw.get("iterationEvidence") or ""),
+        "domainKnowledge": [
+            {key: str(entry.get(key) or "") for key in ("knowledge", "sourcePath", "guidance")}
+            for entry in domain_knowledge if isinstance(entry, dict)
+        ],
+        "actions": [
+            {key: str(entry.get(key) or "") for key in ("action", "expectedEffect", "validation")}
+            for entry in actions if isinstance(entry, dict)
+        ],
+        "legacy": bool(legacy and not raw),
     }
 
 

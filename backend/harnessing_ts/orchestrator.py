@@ -21,6 +21,7 @@ from harnessing_ts.knowledge_graph import (
 from harnessing_ts.node_state import NodeStateMachine
 from harnessing_ts.schema import NODE_SPECS, ControlRequest, NodeSession, NodeType, Part, RunRecord, WorkspaceState
 from harnessing_ts.settings.llm import LlmConfig, mask_llm_config, read_effective_llm_config
+from harnessing_ts.state.jsonl import clear_file
 from harnessing_ts.state.workspace_store import WorkspaceStore, now_iso
 from harnessing_ts.tools.compose_tools import build_node_native_tools
 
@@ -655,6 +656,7 @@ class HarnessOrchestrator:
     async def build_chain_summary(self, trigger: str = "manual") -> dict[str, Any]:
         self._ensure_initialized()
         setattr(self, "_chain_summary_pause_requested", False)
+        clear_file(self.store.chain_summary_log_path)
         status = self.store.write_chain_summary_status({
             "running": True,
             "status": "running",

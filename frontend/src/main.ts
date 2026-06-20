@@ -4,6 +4,7 @@ import DOMPurify from 'dompurify';
 import {
   Activity,
   AlertTriangle,
+  ArrowDown,
   ArrowUp,
   Archive,
   Bot,
@@ -386,6 +387,7 @@ app.innerHTML = `
 const iconMap: Record<string, IconNode> = {
   Activity,
   AlertTriangle,
+  ArrowDown,
   ArrowUp,
   Archive,
   Bot,
@@ -1443,14 +1445,15 @@ function metricChartHtml(series: JsonMap) {
   const min = Math.min(...numeric);
   const max = Math.max(...numeric);
   const spread = max - min || 1;
-  const width = 320;
-  const height = 150;
-  const padX = 28;
-  const padY = 22;
+  const width = Math.max(520, (values.length - 1) * 82 + 96);
+  const height = 180;
+  const padX = 48;
+  const padY = 38;
   const points = values.map((item, index) => {
     const value = Number(item.value);
     const x = values.length === 1 ? width / 2 : padX + (index * (width - padX * 2)) / (values.length - 1);
-    const y = height - padY - ((value - min) / spread) * (height - padY * 2);
+    const rawY = height - padY - ((value - min) / spread) * (height - padY * 2);
+    const y = Math.max(32, Math.min(height - 32, rawY));
     return {
       x,
       y,
@@ -1466,17 +1469,23 @@ function metricChartHtml(series: JsonMap) {
         <span>${escapeHtml(series.name || 'metric')}</span>
         <span class="meta">${escapeHtml(series.unit || series.direction || '')}</span>
       </div>
-      <svg class="metric-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(series.name || 'metric')}">
-        <line class="metric-axis" x1="${padX}" y1="${height - padY}" x2="${width - padX}" y2="${height - padY}"></line>
-        <polyline class="metric-line" points="${polyline}"></polyline>
-        ${points.map((point) => `
-          <g class="metric-point" transform="translate(${point.x} ${point.y})">
-            <circle r="4"></circle>
-            <text y="-8">${escapeHtml(formatMetricValue(point.value))}</text>
-          </g>
-        `).join('')}
-      </svg>
-      <div class="metric-labels">${points.map((point) => `<span title="${escapeHtml(point.note || point.label)}">${escapeHtml(point.label)}</span>`).join('')}</div>
+      <div class="metric-chart-scroll">
+        <div class="metric-chart-stage" style="min-width:${width}px">
+          <svg class="metric-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(series.name || 'metric')}">
+            <line class="metric-axis" x1="${padX}" y1="${height - padY}" x2="${width - padX}" y2="${height - padY}"></line>
+            <polyline class="metric-line" points="${polyline}"></polyline>
+            ${points.map((point) => `
+              <g class="metric-point" transform="translate(${point.x} ${point.y})">
+                <circle r="5"></circle>
+                <text y="-11">${escapeHtml(formatMetricValue(point.value))}</text>
+              </g>
+            `).join('')}
+          </svg>
+          <div class="metric-labels">
+            ${points.map((point) => `<span style="left:${(point.x / width) * 100}%" title="${escapeHtml(point.note || point.label)}">${escapeHtml(point.label)}</span>`).join('')}
+          </div>
+        </div>
+      </div>
     </article>
   `;
 }
@@ -1504,8 +1513,8 @@ function isBetterMetricValue(next: number, current: number, direction: string) {
 function iterationAxisLabel(value: any, index: number) {
   const text = String(value || '').trim();
   const match = text.match(/(?:iteration|iter|it)[^\d]*(\d+)/i) || text.match(/(\d+)/);
-  if (match) return `it-${match[1].padStart(Math.max(3, match[1].length), '0')}`;
-  return `it-${String(index + 1).padStart(3, '0')}`;
+  if (match) return String(Number(match[1]));
+  return String(index + 1);
 }
 
 function iterationSortKey(value: any) {
@@ -1536,13 +1545,16 @@ function renderChainContent(summary: JsonMap, build: JsonMap = {}) {
       ${summary.generatedAt ? `<div class="meta">Generated ${escapeHtml(formatTime(summary.generatedAt))}</div>` : ''}
       <div class="markdown-body">${renderMarkdown(summary.overview || '')}</div>
       ${Array.isArray(summary.uncertainty) && summary.uncertainty.length ? `
-        <div class="chain-uncertainty">
-          ${summary.uncertainty.map((item: any) => `<span><span data-icon="AlertTriangle"></span>${escapeHtml(item)}</span>`).join('')}
-        </div>
+        <details class="chain-uncertainty">
+          <summary><span data-icon="AlertTriangle"></span><span>Warnings / 信息缺口</span><span class="chain-warning-count">${summary.uncertainty.length}</span></summary>
+          <div class="chain-uncertainty-list">
+            ${summary.uncertainty.map((item: any) => `<span><span data-icon="AlertTriangle"></span>${escapeHtml(item)}</span>`).join('')}
+          </div>
+        </details>
       ` : ''}
     </article>
     <div class="chain-iterations">
-      ${iterations.map(chainIterationHtml).join('')}
+      ${iterations.map((iteration, index) => chainIterationHtml(iteration, index, iterations.length)).join('')}
     </div>
   `;
   for (const item of els.chainSummaryContent.querySelectorAll<HTMLElement>('[data-chain-path]')) {
@@ -1550,7 +1562,7 @@ function renderChainContent(summary: JsonMap, build: JsonMap = {}) {
   }
 }
 
-function chainIterationHtml(iteration: JsonMap) {
+function chainIterationHtml(iteration: JsonMap, index: number, total: number) {
   const methods: JsonMap[] = iteration.methods || [];
   const results: JsonMap[] = Array.isArray(iteration.methodResults) && iteration.methodResults.length ? iteration.methodResults : iteration.testResults || [];
   const samples: JsonMap[] = iteration.sampleInspirations || [];
@@ -1558,17 +1570,68 @@ function chainIterationHtml(iteration: JsonMap) {
   return `
     <article class="chain-iteration-card">
       <header class="chain-iteration-head">
-        <div>
-          <div class="chain-iteration-id">${escapeHtml(iteration.iterationId || 'iteration')}</div>
-          <div class="meta">${escapeHtml(iteration.nextStep || '')}</div>
-        </div>
+        <div class="chain-iteration-id"><span>Iteration</span>${escapeHtml(iteration.iterationId || 'iteration')}</div>
       </header>
-      ${iteration.summary ? `<p class="chain-summary-text">${escapeHtml(iteration.summary)}</p>` : ''}
-      <div class="detail-section-title">提出的方法 / 测试结果</div>
+      <section class="chain-card-section">
+      <div class="detail-section-title"><span class="chain-section-index">1</span><span>提出方法</span></div>
       ${methodRows.length ? `<div class="chain-method-result-list">${methodRows.map(methodResultRowHtml).join('')}</div>` : emptyState('没有可审计的方法与测试结果记录。', 'Info')}
-      <div class="detail-section-title">样本启发</div>
+      </section>
+      <section class="chain-card-section">
+      <div class="detail-section-title"><span class="chain-section-index">2</span><span>样本启发</span></div>
       ${samples.length ? `<div class="chain-samples">${samples.map(chainSampleHtml).join('')}</div>` : emptyState('没有记录样本级启发。', 'Info')}
+      </section>
+      ${nextDecisionHtml(iteration.nextDecision || { decision: iteration.nextStep || '' })}
     </article>
+    ${index < total - 1 ? `
+      <div class="chain-transition-arrow" aria-label="该决策指导下一轮提出方法">
+        <span>该决策指导下一轮提出方法</span>
+        <span data-icon="ArrowDown"></span>
+      </div>
+    ` : ''}
+  `;
+}
+
+function nextDecisionHtml(decision: JsonMap) {
+  const knowledge: JsonMap[] = Array.isArray(decision.domainKnowledge) ? decision.domainKnowledge : [];
+  const actions: JsonMap[] = Array.isArray(decision.actions) ? decision.actions : [];
+  return `
+    <section class="chain-card-section chain-next-decision">
+      <div class="detail-section-title"><span class="chain-section-index">3</span><span>下轮决策</span><span class="chain-core-label">思维链核心</span></div>
+      <p class="chain-decision-lead">${escapeHtml(decision.decision || '没有记录下轮决策。')}</p>
+      ${decision.iterationEvidence ? `
+        <div class="chain-decision-evidence">
+          <strong>本轮证据</strong>
+          <p>${escapeHtml(decision.iterationEvidence)}</p>
+        </div>
+      ` : ''}
+      <div class="chain-decision-subtitle">领域知识如何指导决策</div>
+      ${knowledge.length ? `
+        <div class="chain-knowledge-list">
+          ${knowledge.map((item, knowledgeIndex) => `
+            <article class="chain-knowledge-item">
+              <span class="chain-knowledge-index">K${knowledgeIndex + 1}</span>
+              <div>
+                <strong>${escapeHtml(item.knowledge || '未命名领域知识')}</strong>
+                <p>${escapeHtml(item.guidance || '')}</p>
+                ${item.sourcePath ? `<button type="button" class="artifact-item" data-chain-path="${escapeHtml(item.sourcePath)}"><span data-icon="File"></span><span>${escapeHtml(item.sourcePath)}</span></button>` : ''}
+              </div>
+            </article>
+          `).join('')}
+        </div>
+      ` : `<div class="chain-decision-missing">${decision.legacy ? '这是旧版报告，未记录领域知识与决策的映射。请重新生成思维链总结。' : '未记录领域知识与决策的映射。'}</div>`}
+      <div class="chain-decision-subtitle">下一轮执行与验证</div>
+      ${actions.length ? `
+        <div class="chain-action-list">
+          ${actions.map((item, actionIndex) => `
+            <article class="chain-action-item">
+              <strong>${actionIndex + 1}. ${escapeHtml(item.action || '未命名动作')}</strong>
+              <p><span>预期效果</span>${escapeHtml(item.expectedEffect || '')}</p>
+              <p><span>验证方式</span>${escapeHtml(item.validation || '')}</p>
+            </article>
+          `).join('')}
+        </div>
+      ` : `<div class="chain-decision-missing">未记录可执行且可验证的下一轮计划。</div>`}
+    </section>
   `;
 }
 
@@ -1596,13 +1659,13 @@ function methodResultRowHtml(row: { method: JsonMap; result: JsonMap; index: num
   return `
     <div class="chain-method-result-row">
       <section class="chain-mini-card chain-method-card">
-        <div class="chain-card-eyebrow">方法</div>
+        <div class="chain-card-eyebrow">Candidate ${row.index + 1} · 方法</div>
         <strong>${escapeHtml(methodName)}</strong>
         <p>${escapeHtml(method.hypothesis || '')}</p>
         ${method.artifactPath ? `<button type="button" class="artifact-item" data-chain-path="${escapeHtml(method.artifactPath)}"><span data-icon="File"></span><span>${escapeHtml(method.artifactPath)}</span></button>` : ''}
       </section>
       <section class="chain-mini-card chain-result-card">
-        <div class="chain-card-eyebrow">测试结果</div>
+        <div class="chain-card-eyebrow">Candidate ${row.index + 1} · 测试结果</div>
         <strong>${escapeHtml(metric)}${result.value ? `: ${escapeHtml(result.value)}` : ''}</strong>
         <p>${escapeHtml(result.interpretation || '')}</p>
         ${result.evidencePath ? `<button type="button" class="artifact-item" data-chain-path="${escapeHtml(result.evidencePath)}"><span data-icon="File"></span><span>${escapeHtml(result.evidencePath)}</span></button>` : ''}

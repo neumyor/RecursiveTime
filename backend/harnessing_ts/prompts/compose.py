@@ -84,6 +84,39 @@ def build_node_attachment(node_type: NodeType, input_summary: str | None = None)
     })
 
 
+def build_chain_summary_system_prompt() -> str:
+    return "\n\n---\n\n".join([
+        read_prompt_text("chain-summary/system.md"),
+        "## JSON Schema\n\n" + read_prompt_text("chain-summary/schema.md"),
+    ])
+
+
+def build_chain_summary_generate_prompt(*, manifest_json: str, draft_path: str) -> str:
+    return _render_template(read_prompt_text("chain-summary/generate.md"), {
+        "manifest_json": manifest_json,
+        "draft_path": draft_path,
+    })
+
+
+def build_chain_summary_repair_system_prompt() -> str:
+    return read_prompt_text("chain-summary/repair-system.md")
+
+
+def build_chain_summary_repair_prompt(
+    *,
+    validation_error: str,
+    attempt: int,
+    max_attempts: int,
+    draft_path: str,
+) -> str:
+    return _render_template(read_prompt_text("chain-summary/repair.md"), {
+        "validation_error": validation_error,
+        "attempt": str(attempt),
+        "max_attempts": str(max_attempts),
+        "draft_path": draft_path,
+    })
+
+
 def _node_specific_guidance(node_type: NodeType) -> str:
     return node_document(node_type)["guidance"]
 

@@ -59,3 +59,23 @@ def test_common_node_rules_do_not_forbid_task_when_node_allows_it() -> None:
 
     assert "不要用 Task 子代理" not in common_rules
     assert "只有当本 node 规范明确允许或要求 `Task` 时" in common_rules
+
+
+def test_chain_summary_prompts_are_markdown_backed() -> None:
+    chain_summary_source = (
+        REPO_ROOT / "backend" / "harnessing_ts" / "chain_summary.py"
+    ).read_text(encoding="utf-8")
+    prompt_root = (
+        REPO_ROOT / "backend" / "harnessing_ts" / "config" / "prompts" / "chain-summary"
+    )
+
+    assert "CHAIN_SYSTEM_PROMPT" not in chain_summary_source
+    assert "CHAIN_REPAIR_SYSTEM_PROMPT" not in chain_summary_source
+    assert "请生成 HarnessingTS 当前 workspace 的思维链总结" not in chain_summary_source
+    assert {
+        "system.md",
+        "schema.md",
+        "generate.md",
+        "repair-system.md",
+        "repair.md",
+    } <= {path.name for path in prompt_root.glob("*.md")}

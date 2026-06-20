@@ -997,6 +997,14 @@ details[open] > summary.panel-heading::after {
     linear-gradient(135deg, rgba(40, 100, 201, 0.10), transparent 30%),
     linear-gradient(315deg, rgba(15, 124, 124, 0.06), transparent 38%),
     var(--bg);
+  font-size: 16px;
+}
+
+.chain-summary-view *,
+.chain-summary-view *::before,
+.chain-summary-view *::after {
+  box-sizing: border-box;
+  min-width: 0;
 }
 
 .chain-header {
@@ -1110,13 +1118,13 @@ details[open] > summary.panel-heading::after {
 }
 
 .chain-status-stats strong {
-  font-size: 16px;
+  font-size: 18px;
   line-height: 1;
 }
 
 .chain-status-stats small {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 16px;
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -1130,7 +1138,7 @@ details[open] > summary.panel-heading::after {
 
 .metric-chart-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -1159,10 +1167,22 @@ details[open] > summary.panel-heading::after {
   white-space: nowrap;
 }
 
+.metric-chart-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0 5px;
+}
+
+.metric-chart-stage {
+  width: 100%;
+}
+
 .metric-chart-svg {
   width: 100%;
-  height: 150px;
+  height: 180px;
   display: block;
+  overflow: visible;
 }
 
 .metric-axis {
@@ -1186,24 +1206,24 @@ details[open] > summary.panel-heading::after {
 
 .metric-point text {
   text-anchor: middle;
-  font-size: 11px;
+  font-size: 16px;
   font-weight: 800;
   fill: var(--text);
 }
 
 .metric-labels {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  position: relative;
+  height: 28px;
   color: var(--muted);
-  font-size: 11px;
-  overflow: hidden;
+  font-size: 16px;
 }
 
 .metric-labels span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  min-width: 40px;
+  text-align: center;
   white-space: nowrap;
 }
 
@@ -1251,36 +1271,84 @@ details[open] > summary.panel-heading::after {
   overflow-wrap: anywhere;
 }
 
-.chain-uncertainty {
-  display: grid;
-  gap: 6px;
-  margin-top: 10px;
-  max-height: 180px;
-  overflow: auto;
-  padding: 8px;
-  border: 1px solid color-mix(in srgb, var(--blue) 24%, var(--line));
-  border-radius: 8px;
-  background: var(--blue-soft);
+.chain-overview .markdown-body,
+.chain-overview .markdown-body * {
+  font-size: 16px;
+  line-height: 1.65;
 }
 
-.chain-uncertainty span {
+.chain-uncertainty {
+  margin-top: 10px;
+  border: 1px solid color-mix(in srgb, var(--amber) 35%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--amber-soft) 55%, var(--surface));
+  overflow: hidden;
+}
+
+.chain-uncertainty > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 13px;
+  color: var(--amber);
+  font-size: 16px;
+  font-weight: 750;
+  cursor: pointer;
+  list-style: none;
+}
+
+.chain-uncertainty > summary::-webkit-details-marker {
+  display: none;
+}
+
+.chain-warning-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 26px;
+  height: 26px;
+  margin-left: auto;
+  border-radius: 999px;
+  background: var(--amber-soft);
+}
+
+.chain-uncertainty-list {
+  display: grid;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 0 13px 13px;
+}
+
+.chain-uncertainty-list > span {
   display: flex;
   align-items: flex-start;
-  gap: 7px;
-  color: var(--blue);
-  font-size: 12px;
+  gap: 8px;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.chain-summary-view .eyebrow,
+.chain-summary-view .panel-heading,
+.chain-summary-view .empty-state,
+.chain-summary-view .empty,
+.chain-summary-view .empty *,
+.chain-summary-view .detail-section-title {
+  font-size: 16px;
 }
 
 .chain-iterations {
   display: grid;
-  gap: 14px;
+  gap: 0;
 }
 
 .chain-iteration-card {
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 14px;
+  padding: 20px;
   background: var(--surface);
+  overflow: hidden;
 }
 
 .chain-iteration-head {
@@ -1291,14 +1359,190 @@ details[open] > summary.panel-heading::after {
 }
 
 .chain-iteration-id {
-  font-size: 15px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 20px;
   font-weight: 850;
   color: var(--ink);
 }
 
-.chain-summary-text {
-  margin: 10px 0;
-  color: var(--text);
+.chain-iteration-id span {
+  color: var(--blue);
+  font-size: 16px;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chain-card-section {
+  margin-top: 24px;
+}
+
+.chain-card-section + .chain-card-section {
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+
+.chain-card-section .detail-section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+  font-size: 18px;
+}
+
+.chain-section-index {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-radius: 50%;
+  background: var(--blue);
+  color: white;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.chain-next-decision {
+  padding: 20px;
+  border: 2px solid color-mix(in srgb, var(--blue) 48%, var(--line)) !important;
+  border-radius: 10px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 78%, white), var(--surface) 72%);
+  box-shadow: 0 10px 28px rgba(40, 100, 201, 0.10);
+}
+
+.chain-core-label {
+  margin-left: auto;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--blue);
+  color: white;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.chain-decision-lead {
+  margin: 0;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.chain-decision-evidence {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-left: 4px solid var(--blue);
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.chain-decision-evidence strong,
+.chain-decision-subtitle {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.chain-decision-evidence p {
+  margin: 6px 0 0;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.chain-decision-subtitle {
+  margin: 20px 0 10px;
+}
+
+.chain-knowledge-list,
+.chain-action-list {
+  display: grid;
+  gap: 10px;
+}
+
+.chain-knowledge-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px 0;
+  border-top: 1px solid color-mix(in srgb, var(--blue) 22%, var(--line));
+}
+
+.chain-knowledge-index {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 30px;
+  border-radius: 7px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 16px;
+  font-weight: 850;
+}
+
+.chain-knowledge-item strong,
+.chain-action-item strong {
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+.chain-knowledge-item p,
+.chain-action-item p {
+  margin: 6px 0;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.chain-action-item {
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--blue) 20%, var(--line));
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.chain-action-item p span {
+  display: inline-block;
+  min-width: 80px;
+  margin-right: 8px;
+  color: var(--blue);
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.chain-decision-missing {
+  padding: 12px 14px;
+  border: 1px dashed var(--amber);
+  border-radius: 8px;
+  color: var(--amber);
+  background: var(--amber-soft);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.chain-transition-arrow {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  min-height: 82px;
+  padding: 12px 0;
+  color: var(--blue);
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.chain-transition-arrow::before {
+  content: "";
+  width: 2px;
+  height: 16px;
+  background: color-mix(in srgb, var(--blue) 58%, var(--line));
+}
+
+.chain-transition-arrow [data-icon] svg {
+  width: 26px;
+  height: 26px;
+  stroke-width: 2.5;
 }
 
 .chain-columns {
@@ -1317,12 +1561,13 @@ details[open] > summary.panel-heading::after {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 10px;
   align-items: stretch;
+  overflow: hidden;
 }
 
 .chain-mini-card {
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 10px;
+  padding: 16px;
   background: var(--bg);
   min-width: 0;
 }
@@ -1333,7 +1578,7 @@ details[open] > summary.panel-heading::after {
 
 .chain-card-eyebrow {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 16px;
   font-weight: 900;
   letter-spacing: 0;
   text-transform: uppercase;
@@ -1343,7 +1588,36 @@ details[open] > summary.panel-heading::after {
 .chain-mini-card p {
   margin: 6px 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.chain-mini-card strong,
+.chain-sample-title,
+.metric-chart-title {
+  font-size: 17px;
+  line-height: 1.45;
+}
+
+.chain-summary-view .meta,
+.chain-summary-view .mini-pill,
+.chain-summary-view .artifact-item,
+.chain-summary-view button,
+.chain-summary-view small {
+  font-size: 16px;
+}
+
+.chain-summary-view .artifact-item {
+  width: 100%;
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+  overflow: hidden;
+}
+
+.chain-summary-view .artifact-item span:last-child {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chain-samples {
@@ -1358,8 +1632,9 @@ details[open] > summary.panel-heading::after {
   gap: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 10px;
+  padding: 16px;
   background: var(--bg);
+  overflow: hidden;
 }
 
 .chain-sample-card img,
@@ -1387,7 +1662,8 @@ details[open] > summary.panel-heading::after {
 
 .chain-sample-card p {
   margin: 6px 0;
-  font-size: 13px;
+  font-size: 16px;
+  line-height: 1.6;
 }
 
 .graph-header {
@@ -2400,6 +2676,11 @@ dialog pre {
     margin-right: 0;
   }
 
+  body.chain-page .main-pane {
+    margin-left: 0;
+    margin-right: 0;
+  }
+
   .toolbar-main {
     grid-template-columns: 1fr;
   }
@@ -2856,13 +3137,27 @@ body.settings-page.left-collapsed .main-pane {
     white-space: normal;
   }
   .chain-status-stats {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: 1fr;
     width: 100%;
+  }
+  .chain-status-stats span {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    column-gap: 12px;
   }
   .chain-columns,
   .chain-method-result-row,
   .chain-sample-card {
     grid-template-columns: 1fr;
+  }
+  .chain-samples {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .chain-next-decision {
+    padding: 16px;
+  }
+  .chain-core-label {
+    margin-left: 0;
   }
   .chain-sample-card img,
   .sample-image-placeholder {
