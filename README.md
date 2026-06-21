@@ -95,6 +95,8 @@ frontend/src/types.ts
 
 Keep new behavior inside these boundaries. Routing rules belong in `node_state.py`; SDK session construction belongs in `agent/session_factory.py`; aggregate API response shape belongs in `api/payloads.py`; workspace layout details belong in `state/workspace_layout.py`.
 
+The browser receives main-session, node-session, and knowledge-graph-builder message updates through the `/api/events` Server-Sent Events stream. Reference and raw-data uploads publish updated workspace file trees on the same stream. `/api/bootstrap` remains the initial and reconnect snapshot; `/api/live` is retained as a compatibility/fallback snapshot endpoint rather than the primary message transport.
+
 | Node | Responsibility | Produces | Native tools |
 |---|---|---|---|
 | `problem-contract` | Use the user request and references to acquire/process data, explore it, and clarify the real task. It may optionally prepare a domain brief for the independent literature knowledge builder. | `user/problem-contract.md`, `user/data-spec.md` | `Read`, `LS`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Write`, `Edit`, `Bash` |

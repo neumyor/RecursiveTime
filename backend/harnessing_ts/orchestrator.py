@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from harnessing_ts.agent.sdk_runner import SdkRunner
@@ -69,10 +69,35 @@ class HarnessOrchestrator:
         self._main_runner_knowledge_graph_ready: bool | None = None
         self.active_node_runner: SdkRunner | None = None
         self.active_node_session: NodeSession | None = None
+        self._realtime_event_sink: Callable[[str, dict[str, Any]], None] | None = None
 
     def initialize(self) -> WorkspaceState:
         self.state = self.store.initialize(self.mode)
         return self.state
+
+    def set_realtime_event_sink(self, sink: Callable[[str, dict[str, Any]], None] | None) -> None:
+        self._realtime_event_sink = sink
+
+    def _emit_realtime(self, event_type: str, payload: dict[str, Any]) -> None:
+        if self._realtime_event_sink:
+            self._realtime_event_sink(event_type, payload)
+
+    def _emit_main_parts(self, _part: Part) -> None:
+        self._emit_realtime("main_parts", {"mainParts": self.get_main_parts()})
+
+    def _emit_knowledge_graph_parts(self, _part: Part) -> None:
+        self._emit_realtime(
+            "knowledge_graph_parts",
+            {"knowledgeGraphParts": self.get_knowledge_graph_parts()},
+        )
+
+    def _emit_node_parts(self, node_id: str, _part: Part) -> None:
+        self._emit_realtime("node_parts", {
+            "nodePartsById": {node_id: self.get_node_parts(node_id)},
+            "nodes": self.get_node_sessions(),
+            "state": self.get_state(),
+            "timeline": self.get_timeline(),
+        })
 
     async def send_main_user_message(self, text: str) -> list[Part]:
         self._ensure_initialized()
@@ -616,6 +641,7 @@ class HarnessOrchestrator:
                 llm_config=self._knowledge_graph_llm_config(),
                 trigger=trigger,
                 uploaded_paths=uploaded_paths,
+                on_part=self._emit_knowledge_graph_parts,
                 on_runner=lambda runner: setattr(self, "_knowledge_graph_runner", runner),
             )
         except Exception as exc:
@@ -822,11 +848,26 @@ class HarnessOrchestrator:
 
     def upload_reference_file(self, filename: str, content: bytes) -> str:
         self._ensure_initialized()
-        return self.store.write_reference_file(filename, content)
+        path = self.store.write_reference_file(filename, content)
+        self._emit_realtime("workspace_files", {
+            "fileTree": self.get_file_tree(),
+            "change": {"kind": "reference_uploaded", "path": path},
+        })
+        return path
 
     def upload_raw_data_zip(self, filename: str, content: bytes) -> dict[str, Any]:
         self._ensure_initialized()
-        return self.store.extract_raw_data_zip(filename, content)
+        result = self.store.extract_raw_data_zip(filename, content)
+        self._emit_realtime("workspace_files", {
+            "fileTree": self.get_file_tree(),
+            "change": {
+                "kind": "raw_data_uploaded",
+                "archive": result.get("archive"),
+                "targetDir": result.get("targetDir"),
+                "extractedCount": len(result.get("extracted") or []),
+            },
+        })
+        return result
 
     async def clear_debug_logs(self, scope: str = "main") -> None:
         self._ensure_initialized()
@@ -1178,6 +1219,7 @@ class HarnessOrchestrator:
             log_path=self.store.main_log_path,
             enter_node=self.request_enter_node,
             query_knowledge=self.request_query_knowledge if knowledge_graph_ready else None,
+            on_part=self._emit_main_parts,
         )
         self._main_runner_knowledge_graph_ready = knowledge_graph_ready
 
@@ -1211,4 +1253,5 @@ class HarnessOrchestrator:
             record_run=lambda args: self.record_run_for_node(args, node_id, node_type),
             get_runtime_settings=self.get_runtime_settings,
             on_session_id=on_session_id,
+            on_part=lambda part: self._emit_node_parts(node_id, part),
         )

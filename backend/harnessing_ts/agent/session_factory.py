@@ -11,7 +11,7 @@ from harnessing_ts.prompts.compose import (
     build_node_attachment,
     build_node_system_prompt,
 )
-from harnessing_ts.schema import NodeSession, NodeType
+from harnessing_ts.schema import NodeSession, NodeType, Part
 from harnessing_ts.settings.llm import read_effective_llm_config, build_sdk_invocation_config
 from harnessing_ts.state.message_log import MessageLog
 from harnessing_ts.tools.compose_tools import build_main_allowed_tools, build_node_allowed_tools
@@ -24,6 +24,7 @@ def build_main_runner(
     log_path: Path,
     enter_node: Callable[[dict[str, Any]], Any],
     query_knowledge: Callable[[dict[str, Any]], Any] | None,
+    on_part: Callable[[Part], None] | None = None,
 ) -> SdkRunner:
     ctx = PromptContext(str(workspace_path), locale)
     sdk_config = build_sdk_invocation_config(read_effective_llm_config(workspace_path))
@@ -44,6 +45,7 @@ def build_main_runner(
         extra_args=sdk_config.extra_args,
         mcp_server=mcp_server,
         log=MessageLog(log_path),
+        on_part=on_part,
     ))
 
 
@@ -59,6 +61,7 @@ def build_node_runner(
     record_run: Callable[[dict[str, Any]], Any],
     get_runtime_settings: Callable[[], Any],
     on_session_id: Callable[[str], None],
+    on_part: Callable[[Part], None] | None = None,
 ) -> SdkRunner:
     ctx = PromptContext(str(workspace_path), locale)
     sdk_config = build_sdk_invocation_config(read_effective_llm_config(workspace_path))
@@ -84,4 +87,5 @@ def build_node_runner(
         mcp_server=mcp_server,
         log=MessageLog(log_path),
         on_session_id=on_session_id,
+        on_part=on_part,
     ))

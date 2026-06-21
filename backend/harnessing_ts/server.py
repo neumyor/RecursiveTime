@@ -8,12 +8,13 @@ from typing import Any
 from urllib.parse import unquote
 
 import uvicorn
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from harnessing_ts.api.payloads import build_bootstrap_payload, build_live_payload, masked_llm_config
+from harnessing_ts.api.realtime import RealtimeEvent, RealtimeEventBroker
 from harnessing_ts.orchestrator import HarnessOrchestrator
 from harnessing_ts.paths import default_workspace_path, frontend_root
 
@@ -82,7 +83,10 @@ def create_app() -> FastAPI:
     orchestrator = HarnessOrchestrator(workspace_path, dry_run=dry_run, locale="zh", mode=control_mode)
     orchestrator.initialize()
     app = FastAPI(title="HarnessingTS")
+    realtime = RealtimeEventBroker()
+    orchestrator.set_realtime_event_sink(realtime.publish)
     app.state.orchestrator = orchestrator
+    app.state.realtime = realtime
     app.state.workspace_path = workspace_path
     app.state.dry_run = dry_run
     app.state.debug_enabled = debug_enabled
@@ -107,6 +111,37 @@ def create_app() -> FastAPI:
     @app.get("/api/live")
     async def live() -> dict[str, Any]:
         return _live(orchestrator)
+
+    @app.get("/api/events")
+    async def events(request: Request) -> StreamingResponse:
+        async def stream():
+            queue = realtime.subscribe()
+            try:
+                initial = RealtimeEvent(0, "bootstrap_snapshot", {
+                    "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled),
+                })
+                yield initial.as_sse()
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    except TimeoutError:
+                        yield ": keepalive\n\n"
+                        continue
+                    yield event.as_sse()
+            finally:
+                realtime.unsubscribe(queue)
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.get("/api/state")
     async def state() -> dict[str, Any]:
@@ -210,7 +245,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/knowledge-graph/build")
     async def trigger_knowledge_graph_build(request: KnowledgeGraphBuildRequest) -> dict[str, Any]:
-        accepted = _start_knowledge_graph_build(app, orchestrator, request.trigger or "manual", [])
+        accepted = _start_knowledge_graph_build(app, orchestrator, realtime, request.trigger or "manual", [])
         return {"accepted": accepted, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
     @app.post("/api/knowledge-graph/pause")
@@ -220,7 +255,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/knowledge-graph/continue")
     async def continue_knowledge_graph_build() -> dict[str, Any]:
-        accepted = _start_knowledge_graph_build(app, orchestrator, "continue", [])
+        accepted = _start_knowledge_graph_build(app, orchestrator, realtime, "continue", [])
         return {"accepted": accepted, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
     @app.get("/api/knowledge-graph/status")
@@ -343,8 +378,9 @@ def create_app() -> FastAPI:
                 await asyncio.wait_for(asyncio.shield(current), timeout=2.0)
             except TimeoutError:
                 raise HTTPException(status_code=409, detail="paused node is still settling; retry shortly") from None
-        app.state.run_task = asyncio.create_task(_run_main_turn(orchestrator, text))
+        app.state.run_task = asyncio.create_task(_run_main_turn(orchestrator, text, realtime))
         setattr(orchestrator, "_server_run_task", app.state.run_task)
+        realtime.publish("live_snapshot", {"snapshot": _live(orchestrator)})
         return {"accepted": True, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
     @app.post("/api/interrupt")
@@ -361,8 +397,9 @@ def create_app() -> FastAPI:
         current = app.state.run_task
         if current is not None and not current.done():
             raise HTTPException(status_code=409, detail="a harness run is already active")
-        app.state.run_task = asyncio.create_task(_run_control_approval(orchestrator))
+        app.state.run_task = asyncio.create_task(_run_control_approval(orchestrator, realtime))
         setattr(orchestrator, "_server_run_task", app.state.run_task)
+        realtime.publish("live_snapshot", {"snapshot": _live(orchestrator)})
         return {"accepted": True, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
     @app.post("/api/control/reject")
@@ -416,7 +453,7 @@ def _live(orchestrator: HarnessOrchestrator) -> dict[str, Any]:
     return build_live_payload(orchestrator=orchestrator, task_running=_task_running)
 
 
-async def _run_main_turn(orchestrator: HarnessOrchestrator, text: str) -> None:
+async def _run_main_turn(orchestrator: HarnessOrchestrator, text: str, realtime: RealtimeEventBroker) -> None:
     setattr(orchestrator, "_server_run_task", asyncio.current_task())
     try:
         await orchestrator.send_main_user_message(text)
@@ -429,9 +466,10 @@ async def _run_main_turn(orchestrator: HarnessOrchestrator, text: str) -> None:
         orchestrator.store.append_main_part(system_error_part_for_server(str(exc)))
     finally:
         setattr(orchestrator, "_server_run_task", None)
+        realtime.publish("live_snapshot", {"snapshot": _live(orchestrator)})
 
 
-async def _run_control_approval(orchestrator: HarnessOrchestrator) -> None:
+async def _run_control_approval(orchestrator: HarnessOrchestrator, realtime: RealtimeEventBroker) -> None:
     setattr(orchestrator, "_server_run_task", asyncio.current_task())
     try:
         await orchestrator.approve_pending_control()
@@ -440,9 +478,16 @@ async def _run_control_approval(orchestrator: HarnessOrchestrator) -> None:
         orchestrator.store.append_main_part(system_error_part_for_server(str(exc)))
     finally:
         setattr(orchestrator, "_server_run_task", None)
+        realtime.publish("live_snapshot", {"snapshot": _live(orchestrator)})
 
 
-def _start_knowledge_graph_build(app: FastAPI, orchestrator: HarnessOrchestrator, trigger: str, uploaded_paths: list[str]) -> bool:
+def _start_knowledge_graph_build(
+    app: FastAPI,
+    orchestrator: HarnessOrchestrator,
+    realtime: RealtimeEventBroker,
+    trigger: str,
+    uploaded_paths: list[str],
+) -> bool:
     current = getattr(app.state, "knowledge_graph_task", None)
     if current is not None and not current.done():
         orchestrator.store.append_timeline({
@@ -452,12 +497,20 @@ def _start_knowledge_graph_build(app: FastAPI, orchestrator: HarnessOrchestrator
             "payload": {"trigger": trigger, "uploadedPaths": uploaded_paths},
         })
         return False
-    app.state.knowledge_graph_task = asyncio.create_task(_run_knowledge_graph_build(orchestrator, trigger, uploaded_paths))
+    app.state.knowledge_graph_task = asyncio.create_task(
+        _run_knowledge_graph_build(orchestrator, realtime, trigger, uploaded_paths)
+    )
     setattr(orchestrator, "_server_knowledge_graph_task", app.state.knowledge_graph_task)
+    realtime.publish("live_snapshot", {"snapshot": _live(orchestrator)})
     return True
 
 
-async def _run_knowledge_graph_build(orchestrator: HarnessOrchestrator, trigger: str, uploaded_paths: list[str]) -> None:
+async def _run_knowledge_graph_build(
+    orchestrator: HarnessOrchestrator,
+    realtime: RealtimeEventBroker,
+    trigger: str,
+    uploaded_paths: list[str],
+) -> None:
     setattr(orchestrator, "_server_knowledge_graph_task", asyncio.current_task())
     try:
         await orchestrator.build_knowledge_graph(trigger, uploaded_paths)
@@ -466,6 +519,7 @@ async def _run_knowledge_graph_build(orchestrator: HarnessOrchestrator, trigger:
         pass
     finally:
         setattr(orchestrator, "_server_knowledge_graph_task", None)
+        realtime.publish("live_snapshot", {"snapshot": _live(orchestrator)})
 
 
 def _start_chain_summary_build(app: FastAPI, orchestrator: HarnessOrchestrator, trigger: str) -> bool:

@@ -69,3 +69,15 @@ def test_live_contract_is_incremental_subset(tmp_path, monkeypatch) -> None:
         "chainSummaryParts",
         "runtime",
     }.issubset(payload)
+
+
+def test_realtime_sse_endpoint_is_registered(tmp_path, monkeypatch) -> None:
+    from harnessing_ts.server import create_app
+
+    WorkspaceStore(tmp_path).ensure_layout()
+    monkeypatch.setenv("TS_HARNESS_WORKSPACE", str(tmp_path))
+
+    app = create_app()
+    routes = {getattr(route, "path", "") for route in app.routes}
+
+    assert "/api/events" in routes

@@ -748,16 +748,91 @@ async function refresh() {
 
 async function livePoll() {
   const data = await fetchJson<Bootstrap>('/api/live');
-  state.bootstrap = data;
-  state.busy = Boolean(data.runtime?.running);
+  const merged = { ...(state.bootstrap || emptyBootstrap()), ...data } as Bootstrap;
+  state.bootstrap = merged;
+  state.busy = Boolean(merged.runtime?.running);
   state.lastRefreshAt = new Date();
-  state.pendingParts = reconcilePendingParts(data);
-  if (!data.runtime?.running) {
+  state.pendingParts = reconcilePendingParts(merged);
+  if (!merged.runtime?.running) {
     state.loadingMessage = null;
   } else if (!state.loadingMessage) {
     state.loadingMessage = loadingPart('后端运行中，正在自动同步最新消息');
   }
-  liveRender(data);
+  liveRender(merged);
+}
+
+function connectRealtimeEvents() {
+  const source = new EventSource('/api/events');
+  source.onmessage = (event) => {
+    try {
+      const message = JSON.parse(event.data || '{}');
+      applyRealtimeEvent(message.type, message.payload || {});
+    } catch {
+      // EventSource reconnects automatically; malformed events are ignored.
+    }
+  };
+  window.addEventListener('beforeunload', () => source.close(), { once: true });
+}
+
+function applyRealtimeEvent(eventType: string, payload: JsonMap) {
+  if (eventType === 'bootstrap_snapshot' && payload.bootstrap) {
+    state.bootstrap = payload.bootstrap as Bootstrap;
+    state.busy = Boolean(state.bootstrap.runtime?.running);
+    state.pendingParts = reconcilePendingParts(state.bootstrap);
+    state.loadingMessage = state.busy
+      ? state.loadingMessage || loadingPart('后端运行中，正在实时接收最新消息')
+      : null;
+    render();
+    return;
+  }
+  if (!state.bootstrap) return;
+  if (eventType === 'main_parts') {
+    state.bootstrap.mainParts = payload.mainParts || [];
+    state.pendingParts = reconcilePendingParts(state.bootstrap);
+    renderChat(state.bootstrap);
+    updateControls(state.bootstrap);
+    hydrateIcons(els.chatStream);
+    return;
+  }
+  if (eventType === 'knowledge_graph_parts') {
+    state.bootstrap.knowledgeGraphParts = payload.knowledgeGraphParts || [];
+    if (state.view === 'knowledgeGraph') {
+      renderBuilderTrace(state.bootstrap.knowledgeGraphParts || []);
+      hydrateIcons(els.builderTrace);
+    }
+    return;
+  }
+  if (eventType === 'node_parts') {
+    state.bootstrap.nodePartsById = {
+      ...(state.bootstrap.nodePartsById || {}),
+      ...(payload.nodePartsById || {}),
+    };
+    if (payload.nodes) state.bootstrap.nodes = payload.nodes;
+    if (payload.state) state.bootstrap.state = payload.state;
+    if (payload.timeline) state.bootstrap.timeline = payload.timeline;
+    renderTranscriptScope(state.bootstrap.nodes || []);
+    renderChat(state.bootstrap);
+    renderTimeline(state.bootstrap.timeline || []);
+    updateControls(state.bootstrap);
+    hydrateIcons();
+    return;
+  }
+  if (eventType === 'workspace_files' && payload.fileTree) {
+    state.bootstrap.fileTree = payload.fileTree;
+    renderFileTree(payload.fileTree);
+    hydrateIcons(els.fileTree);
+    return;
+  }
+  if (eventType === 'live_snapshot' && payload.snapshot) {
+    const merged = { ...state.bootstrap, ...payload.snapshot } as Bootstrap;
+    state.bootstrap = merged;
+    state.busy = Boolean(merged.runtime?.running);
+    state.pendingParts = reconcilePendingParts(merged);
+    state.loadingMessage = state.busy
+      ? state.loadingMessage || loadingPart('后端运行中，正在实时接收最新消息')
+      : null;
+    liveRender(merged);
+  }
 }
 
 function liveRender(data: Bootstrap) {
@@ -966,7 +1041,9 @@ function renderChat(data: Bootstrap) {
   const savedScroll = els.chatStream.scrollTop;
   const parts = collectTranscriptParts(data);
   const visibleParts = normalizeChatParts(parts);
-  if (!visibleParts.length) {
+  const loadingParts = collectLoadingParts();
+  const renderedParts = [...visibleParts, ...loadingParts];
+  if (!renderedParts.length) {
     els.chatStream.innerHTML = `
       <div class="welcome-state">
         <div class="welcome-orbit"><span data-icon="Sparkles"></span></div>
@@ -976,7 +1053,7 @@ function renderChat(data: Bootstrap) {
     `;
     return;
   }
-  els.chatStream.innerHTML = visibleParts.map((part) => messageHtml(part)).join('');
+  els.chatStream.innerHTML = renderedParts.map((part) => messageHtml(part)).join('');
   bindToolCards();
   // Preserve scroll: auto-scroll only when user was already near bottom
   if (wasNearBottom) {
@@ -2102,16 +2179,18 @@ function collectTranscriptParts(data: Bootstrap): JsonMap[] {
   const pendingParts = state.pendingParts
     .filter((part) => !isPendingPartLogged(part, loggedUserTexts))
     .map((part) => ({ ...part, sortKey: `${part.timestamp || ''}:pending:${part.id || ''}` }));
-  const loadingParts = state.loadingMessage ? [{
-    ...state.loadingMessage,
-    sortKey: `${new Date().toISOString()}:loading:${state.loadingMessage.id}`,
-  }] : [];
-  if (scope === 'main') return [...mainParts, ...pendingParts, ...loadingParts].sort(sortByKey);
+  if (scope === 'main') return [...mainParts, ...pendingParts].sort(sortByKey);
   if (scope.startsWith('node:')) {
     const nodeId = scope.slice('node:'.length);
     return nodeParts.filter((part) => part.nodeSessionId === nodeId || part.sortKey.includes(`:node:${nodeId}:`)).sort(sortByKey);
   }
-  return [...mainParts, ...nodeParts, ...pendingParts, ...loadingParts].sort(sortByKey);
+  return [...mainParts, ...nodeParts, ...pendingParts].sort(sortByKey);
+}
+
+function collectLoadingParts(): JsonMap[] {
+  const scope = state.transcriptScope || 'all';
+  if (!state.loadingMessage || scope.startsWith('node:')) return [];
+  return normalizeChatParts([{ ...state.loadingMessage }]);
 }
 
 function reconcilePendingParts(data: Bootstrap | null): JsonMap[] {
@@ -2643,9 +2722,12 @@ function createIcon(iconNode: IconNode) {
 }
 
 setInterval(() => {
-  if (state.bootstrap?.runtime?.running || state.bootstrap?.runtime?.knowledgeGraphRunning || state.bootstrap?.runtime?.chainSummaryRunning || state.busy) {
+  // Chain summary still uses snapshot polling; main and knowledge-graph
+  // messages arrive through /api/events SSE.
+  if (state.bootstrap?.runtime?.chainSummaryRunning) {
     livePoll().catch(() => undefined);
   }
 }, 10000);
 
+connectRealtimeEvents();
 refresh().catch((error) => showDetail('Startup Error', { message: error instanceof Error ? error.message : String(error) }));

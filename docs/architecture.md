@@ -92,6 +92,10 @@ reports/final-summary.md
 
 The frontend is intentionally thin: it renders the same JSONL logs, node metadata, timeline, and runtime state that the Python backend persists on disk.
 
+## Realtime UI Updates
+
+The backend exposes `/api/events` as a Server-Sent Events stream. `SdkRunner.on_part` publishes persisted and collapsed main/node transcripts, while the knowledge graph builder publishes its trace through the same broker. Upload operations publish the refreshed workspace file tree. Task completion events publish a live snapshot so running/loading state is cleared immediately. The frontend uses `EventSource` for these updates and keeps `/api/bootstrap` for initial load and reconnect reconciliation.
+
 ## Chain Summary
 
 The chain summary page is opened from the right rail under the Knowledge Graph entry. Its `Generate` action starts an independent chain builder agent, separate from the main session, node sessions, and knowledge graph builder. The agent reads only runtime workspace logs and artifacts, then writes `artifacts/chain-summary.json` and its trace to `logs/chain-builder.jsonl`.
