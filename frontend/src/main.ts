@@ -48,7 +48,6 @@ const state = {
   pendingParts: [] as JsonMap[],
   loadingMessage: null as JsonMap | null,
   transcriptScope: 'all',
-  lastRefreshAt: null as Date | null,
   leftCollapsed: window.innerWidth <= 820,
   rightCollapsed: window.innerWidth <= 1180,
   view: ((window.location.pathname === '/knowledge-graph'
@@ -104,6 +103,13 @@ const state = {
   chainStatusSignature: '',
   chainChartSignature: '',
   chainContentSignature: '',
+  renderSignatures: new Map<string, string>(),
+  realtimeWaiters: [] as Array<{
+    predicate: (data: Bootstrap) => boolean;
+    resolve: (data: Bootstrap) => void;
+    reject: (error: Error) => void;
+    timer: number;
+  }>,
 };
 
 marked.setOptions({
@@ -559,18 +565,15 @@ els.messageInput.addEventListener('keydown', (event) => {
   if (!els.sendBtn.disabled) els.sendForm.requestSubmit();
 });
 els.approveControlBtn.addEventListener('click', async () => {
-  await runAction(async () => {
-    const result = await postJson('/api/control/approve', {});
-    state.bootstrap = result.bootstrap;
-    render();
+  await runStreamingAction(async () => {
+    await postJson('/api/control/approve', {});
   });
 });
 els.rejectControlBtn.addEventListener('click', async () => {
   const reason = els.messageInput.value.trim();
   await runAction(async () => {
     const result = await postJson('/api/control/reject', { reason: reason || 'Rejected from web UI.' });
-    state.bootstrap = result.bootstrap;
-    render();
+    applyBootstrapSnapshot(result.bootstrap);
   });
 });
 els.transcriptScope.addEventListener('change', () => {
@@ -596,16 +599,12 @@ els.settingsDoneBtn.addEventListener('click', () => {
 });
 els.buildGraphBtn.addEventListener('click', async () => {
   await postJson('/api/knowledge-graph/build', { trigger: 'manual' });
-  await refresh();
 });
 els.continueGraphBtn.addEventListener('click', async () => {
   await postJson('/api/knowledge-graph/continue', {});
-  await refresh();
 });
 els.pauseGraphBtn.addEventListener('click', async () => {
-  const result = await postJson('/api/knowledge-graph/pause', { reason: 'Paused from knowledge graph UI.' });
-  state.bootstrap = result.bootstrap;
-  render();
+  await postJson('/api/knowledge-graph/pause', { reason: 'Paused from knowledge graph UI.' });
 });
 els.saveGraphLlmBtn.addEventListener('click', async () => {
   await saveKnowledgeGraphLlmConfig();
@@ -613,15 +612,11 @@ els.saveGraphLlmBtn.addEventListener('click', async () => {
 els.kgCta.addEventListener('click', async () => {
   state.view = 'knowledgeGraph';
   history.pushState({}, '', '/knowledge-graph');
-  const graph = await fetchJson<JsonMap>('/api/knowledge-graph');
-  if (state.bootstrap) state.bootstrap.knowledgeGraph = graph;
   render();
 });
 els.chainCta.addEventListener('click', async () => {
   state.view = 'chainSummary';
   history.pushState({}, '', '/chain-summary');
-  const summary = await fetchJson<JsonMap>('/api/chain-summary');
-  if (state.bootstrap) state.bootstrap.chainSummary = summary;
   resetChainRenderSignatures();
   render();
 });
@@ -638,7 +633,6 @@ els.backToChainFromImageBtn.addEventListener('click', () => {
 els.buildChainSummaryBtn.addEventListener('click', async () => {
   resetChainRenderSignatures();
   await postJson('/api/chain-summary/build', {});
-  await refresh();
 });
 window.addEventListener('popstate', () => {
   const path = window.location.pathname;
@@ -663,9 +657,7 @@ async function saveGraphExtractionDepth() {
   const value = Number.parseInt(els.graphExtractionDepthInput.value, 10);
   if (!Number.isFinite(value)) return;
   const result = await postJson('/api/runtime-settings', { knowledgeGraphExtractionDepth: value });
-  state.bootstrap = result.bootstrap;
-  state.busy = Boolean(result.bootstrap?.runtime?.running);
-  render();
+  applyBootstrapSnapshot(result.bootstrap);
 }
 async function saveKnowledgeGraphLlmConfig() {
   const result = await postJson('/api/knowledge-graph/llm-config', {
@@ -675,9 +667,8 @@ async function saveKnowledgeGraphLlmConfig() {
     apiKey: els.graphApiKeyInput.value.trim() || undefined,
     baseUrl: els.graphBaseUrlInput.value.trim(),
   });
-  state.bootstrap = result.bootstrap;
+  applyBootstrapSnapshot(result.bootstrap);
   els.graphApiKeyInput.value = '';
-  render();
 }
 els.interruptBtn.addEventListener('click', async () => {
   const reason = els.messageInput.value.trim();
@@ -687,11 +678,11 @@ els.resetChatBtn.addEventListener('click', async () => {
   if (!confirm('这将重置聊天记录和 agent 工作流记忆，但保留 data/raw、references 和已构建的知识图谱。是否继续？')) return;
   await runAction(async () => {
     const result = await postJson('/api/debug/clear-logs', { scope: 'chat', confirmReset: true });
-    state.bootstrap = result.bootstrap;
     state.pendingParts = [];
     state.loadingMessage = null;
     state.transcriptScope = 'main';
-    render();
+    state.renderSignatures.clear();
+    applyBootstrapSnapshot(result.bootstrap);
   });
 });
 els.clearAllLogsBtn.addEventListener('click', async () => {
@@ -700,11 +691,11 @@ els.clearAllLogsBtn.addEventListener('click', async () => {
   if (typed !== 'RESET') return;
   await runAction(async () => {
     const result = await postJson('/api/debug/clear-logs', { scope: 'all', confirmReset: true });
-    state.bootstrap = result.bootstrap;
     state.pendingParts = [];
     state.loadingMessage = null;
     state.transcriptScope = 'main';
-    render();
+    state.renderSignatures.clear();
+    applyBootstrapSnapshot(result.bootstrap);
   });
 });
 
@@ -729,10 +720,7 @@ els.sendForm.addEventListener('submit', async (event) => {
   render();
   await nextPaint();
   await runStreamingAction(async () => {
-    const result = await postSend(text);
-    state.bootstrap = result.bootstrap;
-    state.pendingParts = reconcilePendingParts(result.bootstrap);
-    render();
+    await postSend(text);
   });
 });
 
@@ -743,10 +731,8 @@ els.uploadForm.addEventListener('submit', async (event) => {
   await runAction(async () => {
     const form = new FormData();
     for (const file of files) form.append('files', file);
-    const result = await postForm('/api/references/upload', form);
+    await postForm('/api/references/upload', form);
     els.referenceFiles.value = '';
-    state.bootstrap = result.bootstrap;
-    render();
   });
 });
 
@@ -759,45 +745,14 @@ els.rawZipUploadForm.addEventListener('submit', async (event) => {
     form.append('file', file);
     const result = await postForm('/api/data/raw/upload-zip', form);
     els.rawZipFile.value = '';
-    state.bootstrap = result.bootstrap;
     showDetail('Raw Data Zip Uploaded', {
       archive: result.uploaded?.archive,
       targetDir: result.uploaded?.targetDir,
       extractedCount: result.uploaded?.extracted?.length || 0,
       extracted: result.uploaded?.extracted || [],
     });
-    render();
   });
 });
-
-async function refresh() {
-  const data = await fetchJson<Bootstrap>('/api/bootstrap');
-  state.bootstrap = data;
-  state.busy = Boolean(data.runtime?.running);
-  state.lastRefreshAt = new Date();
-  state.pendingParts = reconcilePendingParts(data);
-  if (!data.runtime?.running) {
-    state.loadingMessage = null;
-  } else if (!state.loadingMessage) {
-    state.loadingMessage = loadingPart('后端运行中，正在自动同步最新消息');
-  }
-  render();
-}
-
-async function livePoll() {
-  const data = await fetchJson<Bootstrap>('/api/live');
-  const merged = { ...(state.bootstrap || emptyBootstrap()), ...data } as Bootstrap;
-  state.bootstrap = merged;
-  state.busy = Boolean(merged.runtime?.running);
-  state.lastRefreshAt = new Date();
-  state.pendingParts = reconcilePendingParts(merged);
-  if (!merged.runtime?.running) {
-    state.loadingMessage = null;
-  } else if (!state.loadingMessage) {
-    state.loadingMessage = loadingPart('后端运行中，正在自动同步最新消息');
-  }
-  liveRender(merged);
-}
 
 function connectRealtimeEvents() {
   const source = new EventSource('/api/events');
@@ -814,30 +769,24 @@ function connectRealtimeEvents() {
 
 function applyRealtimeEvent(eventType: string, payload: JsonMap) {
   if (eventType === 'bootstrap_snapshot' && payload.bootstrap) {
-    state.bootstrap = payload.bootstrap as Bootstrap;
-    state.busy = Boolean(state.bootstrap.runtime?.running);
-    state.pendingParts = reconcilePendingParts(state.bootstrap);
-    state.loadingMessage = state.busy
-      ? state.loadingMessage || loadingPart('后端运行中，正在实时接收最新消息')
-      : null;
-    render();
+    applyBootstrapSnapshot(payload.bootstrap as Bootstrap);
     return;
   }
   if (!state.bootstrap) return;
   if (eventType === 'main_parts') {
     state.bootstrap.mainParts = payload.mainParts || [];
     state.pendingParts = reconcilePendingParts(state.bootstrap);
-    renderChat(state.bootstrap);
-    updateControls(state.bootstrap);
-    hydrateIcons(els.chatStream);
+    render();
     return;
   }
   if (eventType === 'knowledge_graph_parts') {
     state.bootstrap.knowledgeGraphParts = payload.knowledgeGraphParts || [];
-    if (state.view === 'knowledgeGraph') {
-      renderBuilderTrace(state.bootstrap.knowledgeGraphParts || []);
-      hydrateIcons(els.builderTrace);
-    }
+    render();
+    return;
+  }
+  if (eventType === 'chain_summary_parts') {
+    state.bootstrap.chainSummaryParts = payload.chainSummaryParts || [];
+    render();
     return;
   }
   if (eventType === 'node_parts') {
@@ -848,67 +797,29 @@ function applyRealtimeEvent(eventType: string, payload: JsonMap) {
     if (payload.nodes) state.bootstrap.nodes = payload.nodes;
     if (payload.state) state.bootstrap.state = payload.state;
     if (payload.timeline) state.bootstrap.timeline = payload.timeline;
-    renderTranscriptScope(state.bootstrap.nodes || []);
-    renderChat(state.bootstrap);
-    renderTimeline(state.bootstrap.timeline || []);
-    updateControls(state.bootstrap);
-    hydrateIcons();
+    render();
     return;
   }
   if (eventType === 'workspace_files' && payload.fileTree) {
     state.bootstrap.fileTree = payload.fileTree;
-    renderFileTree(payload.fileTree);
-    hydrateIcons(els.fileTree);
+    render();
     return;
   }
   if (eventType === 'live_snapshot' && payload.snapshot) {
     const merged = { ...state.bootstrap, ...payload.snapshot } as Bootstrap;
-    state.bootstrap = merged;
-    state.busy = Boolean(merged.runtime?.running);
-    state.pendingParts = reconcilePendingParts(merged);
-    state.loadingMessage = state.busy
-      ? state.loadingMessage || loadingPart('后端运行中，正在实时接收最新消息')
-      : null;
-    liveRender(merged);
+    applyBootstrapSnapshot(merged);
   }
 }
 
-function liveRender(data: Bootstrap) {
-  const ws = data.state || {};
-  const activeNode = ws.activeNode;
-
-  // Lightweight status updates (text-only, no DOM rebuild)
-  els.statusText.innerHTML = statusPill(activeNode ? `Active: ${activeNode}` : 'Ready', activeNode ? 'active' : 'ready');
-  els.modeText.textContent = data.dryRun ? `${ws.controlMode || ws.mode} / dry-run` : (ws.controlMode || ws.mode || '-');
-  els.modelText.textContent = data.llmConfig?.config?.model || 'sdk-default';
-  els.runtimeUvText.innerHTML = runtimePill(data.runtime?.workspaceUv);
-
-  if (!state.selectedNodeType && data.nodeSpecs.length) {
-    state.selectedNodeType = activeNode || data.nodeSpecs[0].type;
-  }
-
-  // Live-updating panels — full render with scroll preservation
-  renderPendingControl(ws.pendingControl);
-  renderTranscriptScope(data.nodes);
-  renderChat(data);
-  renderTimeline(data.timeline);
-  renderRuntimeSettings(data.runtimeSettings || ws.runtimeSettings);
-  updateControls(data);
-
-  // Knowledge graph view extras (builder status + trace)
-  if (state.view === 'knowledgeGraph') {
-    renderKnowledgeGraphBuilder(data);
-    renderBuilderTrace(data.knowledgeGraphParts || []);
-  }
-  if (state.view === 'chainSummary') {
-    renderChainSummary(data);
-  }
-
-  renderKgCta(data);
-  renderChainCta(data);
-  renderShellState();
-  renderViewState();
-  hydrateIcons();
+function applyBootstrapSnapshot(data: Bootstrap) {
+  state.bootstrap = data;
+  state.busy = Boolean(data.runtime?.running);
+  state.pendingParts = reconcilePendingParts(data);
+  state.loadingMessage = state.busy
+    ? state.loadingMessage || loadingPart('后端运行中，正在实时接收最新消息')
+    : null;
+  render();
+  resolveRealtimeWaiters(data);
 }
 
 function render() {
@@ -921,36 +832,57 @@ function render() {
 
   const ws = data.state || {};
   const activeNode = ws.activeNode;
-  els.statusText.innerHTML = statusPill(activeNode ? `Active: ${activeNode}` : 'Ready', activeNode ? 'active' : 'ready');
+  setHtmlIfChanged(els.statusText, statusPill(activeNode ? `Active: ${activeNode}` : 'Ready', activeNode ? 'active' : 'ready'));
   els.modeText.textContent = data.dryRun ? `${ws.controlMode || ws.mode} / dry-run` : (ws.controlMode || ws.mode || '-');
   els.modelText.textContent = data.llmConfig?.config?.model || 'sdk-default';
-  els.runtimeUvText.innerHTML = runtimePill(data.runtime?.workspaceUv);
+  setHtmlIfChanged(els.runtimeUvText, runtimePill(data.runtime?.workspaceUv));
 
   if (!state.selectedNodeType && data.nodeSpecs.length) {
     state.selectedNodeType = activeNode || data.nodeSpecs[0].type;
   }
-  renderNodes(data.nodeSpecs, ws, data.nodes);
-  renderNodeDetail(data.nodeSpecs, data.nodes);
-  renderPendingControl(ws.pendingControl);
-  renderTranscriptScope(data.nodes);
+  renderStable('nodes', [data.nodeSpecs, ws, data.nodes, state.selectedNodeType], () => renderNodes(data.nodeSpecs, ws, data.nodes));
+  renderStable('node-detail', [data.nodeSpecs, data.nodes, state.selectedNodeType], () => renderNodeDetail(data.nodeSpecs, data.nodes));
+  renderStable('pending-control', ws.pendingControl, () => renderPendingControl(ws.pendingControl));
+  renderStable('transcript-scope', [data.nodes, state.transcriptScope], () => renderTranscriptScope(data.nodes));
   renderChat(data);
-  renderKnowledgeGraph(data.knowledgeGraph);
-  renderKnowledgeGraphBuilder(data);
-  renderKnowledgeWorkbench(data);
-  renderBuilderTrace(data.knowledgeGraphParts || []);
+  renderStable('knowledge-graph', [data.knowledgeGraph, state.selectedGraphNodeId], () => renderKnowledgeGraph(data.knowledgeGraph));
+  renderStable('knowledge-builder', [data.knowledgeGraphBuild, data.runtime, data.knowledgeGraphLlmConfig], () => renderKnowledgeGraphBuilder(data));
+  renderStable('knowledge-workbench', [data.knowledgeBaseSummary, state.selectedKnowledgeBaseKind, state.knowledgeBaseCards, state.knowledgeBaseCardsBusy, state.knowledgeQuestion, state.knowledgeAnswer, state.knowledgeQueryBusy], () => renderKnowledgeWorkbench(data));
+  renderStable('builder-trace', data.knowledgeGraphParts || [], () => renderBuilderTrace(data.knowledgeGraphParts || []));
   renderChainSummary(data);
   renderImageViewer();
-  renderSettings(data);
+  renderStable('settings', [data.llmConfig, data.knowledgeGraphLlmConfig, data.runtimeSettings], () => renderSettings(data));
   renderViewState();
-  renderTimeline(data.timeline);
-  renderFileTree(data.fileTree);
-  renderRuntimeSettings(data.runtimeSettings || ws.runtimeSettings);
+  renderStable('timeline', data.timeline, () => renderTimeline(data.timeline));
+  renderStable('file-tree', data.fileTree, () => renderFileTree(data.fileTree));
+  renderStable('runtime-settings', data.runtimeSettings || ws.runtimeSettings, () => renderRuntimeSettings(data.runtimeSettings || ws.runtimeSettings));
   renderKgCta(data);
   renderChainCta(data);
   renderDebugActions(Boolean(data.debugEnabled));
   updateControls(data);
   renderShellState();
   hydrateIcons();
+}
+
+function renderStable(key: string, value: any, renderFn: () => void) {
+  const signature = stableSignature(value);
+  if (state.renderSignatures.get(key) === signature) return;
+  state.renderSignatures.set(key, signature);
+  renderFn();
+}
+
+function stableSignature(value: any) {
+  const json = JSON.stringify(value ?? null);
+  let hash = 2166136261;
+  for (let index = 0; index < json.length; index += 1) {
+    hash ^= json.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${json.length}:${hash >>> 0}`;
+}
+
+function setHtmlIfChanged(element: HTMLElement, html: string) {
+  if (element.innerHTML !== html) element.innerHTML = html;
 }
 
 function renderPendingControl(pending: JsonMap | null | undefined) {
@@ -1083,23 +1015,80 @@ function renderChat(data: Bootstrap) {
   const loadingParts = collectLoadingParts();
   const renderedParts = [...visibleParts, ...loadingParts];
   if (!renderedParts.length) {
-    els.chatStream.innerHTML = `
-      <div class="welcome-state">
-        <div class="welcome-orbit"><span data-icon="Sparkles"></span></div>
-        <h3>Ready for a time-series workflow</h3>
-        <p>发送任务后，orchestrator 会读取 workspace、规划节点并把执行过程同步到这里。</p>
-      </div>
-    `;
+    if (!els.chatStream.querySelector('.welcome-state') || els.chatStream.childElementCount !== 1) {
+      els.chatStream.innerHTML = `
+        <div class="welcome-state">
+          <div class="welcome-orbit"><span data-icon="Sparkles"></span></div>
+          <h3>Ready for a time-series workflow</h3>
+          <p>发送任务后，orchestrator 会读取 workspace、规划节点并把执行过程同步到这里。</p>
+        </div>
+      `;
+      hydrateIcons(els.chatStream);
+    }
     return;
   }
-  els.chatStream.innerHTML = renderedParts.map((part) => messageHtml(part)).join('');
-  bindToolCards();
-  // Preserve scroll: auto-scroll only when user was already near bottom
-  if (wasNearBottom) {
+
+  els.chatStream.querySelector('.welcome-state')?.remove();
+  const existing = new Map<string, HTMLElement>();
+  for (const element of els.chatStream.querySelectorAll<HTMLElement>('[data-message-key]')) {
+    const key = element.dataset.messageKey;
+    if (key) existing.set(key, element);
+  }
+
+  const desired: HTMLElement[] = [];
+  const desiredKeys = new Set<string>();
+  let changed = false;
+  renderedParts.forEach((part, index) => {
+    const key = messageKey(part, index);
+    const fingerprint = stableSignature(part);
+    desiredKeys.add(key);
+    let element = existing.get(key);
+    if (!element || element.dataset.messageFingerprint !== fingerprint) {
+      const replacement = createMessageElement(part, key, fingerprint);
+      if (element) element.remove();
+      element = replacement;
+      changed = true;
+    }
+    desired.push(element);
+  });
+
+  for (const [key, element] of existing) {
+    if (!desiredKeys.has(key)) {
+      element.remove();
+      changed = true;
+    }
+  }
+
+  let cursor = els.chatStream.firstElementChild;
+  for (const element of desired) {
+    if (element !== cursor) {
+      els.chatStream.insertBefore(element, cursor);
+      changed = true;
+    }
+    cursor = element.nextElementSibling;
+  }
+
+  if (changed && wasNearBottom) {
     els.chatStream.scrollTop = els.chatStream.scrollHeight;
-  } else if (savedScroll < els.chatStream.scrollHeight) {
+  } else if (changed && savedScroll < els.chatStream.scrollHeight) {
     els.chatStream.scrollTop = Math.min(savedScroll, els.chatStream.scrollHeight - els.chatStream.clientHeight);
   }
+}
+
+function messageKey(part: JsonMap, index: number) {
+  return String(part.id || part.sortKey || `${part.role || 'system'}:${part.type || 'text'}:${part.timestamp || index}`);
+}
+
+function createMessageElement(part: JsonMap, key: string, fingerprint: string) {
+  const template = document.createElement('template');
+  template.innerHTML = messageHtml(part).trim();
+  const element = template.content.firstElementChild as HTMLElement | null;
+  if (!element) throw new Error(`Unable to render message ${key}`);
+  element.dataset.messageKey = key;
+  element.dataset.messageFingerprint = fingerprint;
+  bindToolCards(element);
+  hydrateIcons(element);
+  return element;
 }
 
 function renderRuntimeSettings(settings: JsonMap | null | undefined) {
@@ -1397,14 +1386,12 @@ async function saveRuntimeSettings() {
     iterativeCandidateCount: state.settings.iterativeK,
     knowledgeGraphExtractionDepth: state.settings.graphDepth,
   });
-  state.bootstrap = result.bootstrap;
-  state.busy = Boolean(result.bootstrap?.runtime?.running);
-  render();
+  applyBootstrapSnapshot(result.bootstrap);
 }
 
 async function saveLlmConfig(isMain: boolean) {
   const s = state.settings;
-  const status = els.settingsContent.querySelector<HTMLElement>(isMain ? '#mainSaveStatus' : '#graphSaveStatus');
+  const statusSelector = isMain ? '#mainSaveStatus' : '#graphSaveStatus';
   const body: JsonMap = isMain
     ? {
         authMode: s.mainAuthMode,
@@ -1425,7 +1412,7 @@ async function saveLlmConfig(isMain: boolean) {
   try {
     const url = isMain ? '/api/llm-config' : '/api/knowledge-graph/llm-config';
     const result = await postJson(url, body);
-    state.bootstrap = result.bootstrap;
+    applyBootstrapSnapshot(result.bootstrap);
     // Clear the password field after a successful save.
     if (isMain) {
       state.settings.mainApiKey = '';
@@ -1436,6 +1423,7 @@ async function saveLlmConfig(isMain: boolean) {
       const input = document.getElementById('graphApiKey') as HTMLInputElement | null;
       if (input) input.value = '';
     }
+    const status = els.settingsContent.querySelector<HTMLElement>(statusSelector);
     if (status) {
       status.textContent = 'Saved';
       status.classList.add('saved');
@@ -1459,9 +1447,8 @@ async function resetMainLlmConfig() {
       baseUrl: '',
       contextWindow: '',
     });
-    state.bootstrap = result.bootstrap;
     syncSettingsFromBootstrap(result.bootstrap);
-    render();
+    applyBootstrapSnapshot(result.bootstrap);
   } catch (error) {
     showDetail('Reset main LLM failed', { message: error instanceof Error ? error.message : String(error) });
   }
@@ -2432,7 +2419,6 @@ function updateControls(data: Bootstrap) {
   els.approveControlBtn.disabled = state.busy || !pendingControl;
   els.rejectControlBtn.disabled = state.busy || !pendingControl;
   updateSendButton(activePaused);
-  autosizeComposer();
 }
 
 function getActiveNodeSession(data: Bootstrap) {
@@ -2461,22 +2447,10 @@ async function runStreamingAction(fn: () => Promise<void>) {
   try {
     await fn();
   } catch (error) {
-    showDetail('Error', { message: error instanceof Error ? error.message : String(error) });
-  } finally {
-    try {
-      const data = await fetchJson<Bootstrap>('/api/bootstrap');
-      state.bootstrap = data;
-      state.busy = Boolean(data.runtime?.running);
-      state.pendingParts = reconcilePendingParts(data);
-      if (!data.runtime?.running) {
-        state.loadingMessage = null;
-      } else if (!state.loadingMessage) {
-        state.loadingMessage = loadingPart('后端运行中，正在自动同步最新消息');
-      }
-    } catch {
-      state.busy = false;
-    }
+    state.busy = false;
+    state.loadingMessage = null;
     render();
+    showDetail('Error', { message: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -2551,10 +2525,18 @@ function renderShellState() {
   document.body.classList.toggle('right-collapsed', state.rightCollapsed);
   els.leftRailToggle.title = state.leftCollapsed ? '展开左栏' : '折叠左栏';
   els.rightRailToggle.title = state.rightCollapsed ? '展开右栏' : '折叠右栏';
-  els.leftRailToggle.innerHTML = `<span data-icon="${state.leftCollapsed ? 'ChevronRight' : 'ChevronLeft'}"></span>`;
-  els.rightRailToggle.innerHTML = `<span data-icon="${state.rightCollapsed ? 'ChevronLeft' : 'ChevronRight'}"></span>`;
-  hydrateIcons(els.leftRailToggle);
-  hydrateIcons(els.rightRailToggle);
+  const leftIcon = state.leftCollapsed ? 'ChevronRight' : 'ChevronLeft';
+  const rightIcon = state.rightCollapsed ? 'ChevronLeft' : 'ChevronRight';
+  if (els.leftRailToggle.dataset.currentIcon !== leftIcon) {
+    els.leftRailToggle.dataset.currentIcon = leftIcon;
+    els.leftRailToggle.innerHTML = `<span data-icon="${leftIcon}"></span>`;
+    hydrateIcons(els.leftRailToggle);
+  }
+  if (els.rightRailToggle.dataset.currentIcon !== rightIcon) {
+    els.rightRailToggle.dataset.currentIcon = rightIcon;
+    els.rightRailToggle.innerHTML = `<span data-icon="${rightIcon}"></span>`;
+    hydrateIcons(els.rightRailToggle);
+  }
 }
 
 function autosizeComposer() {
@@ -2568,10 +2550,13 @@ function updateSendButton(activePaused = false) {
   const canSend = hasText && !els.messageInput.disabled && !state.busy;
   els.sendBtn.disabled = !canSend;
   const icon = state.busy ? 'Square' : activePaused ? 'Play' : 'ArrowUp';
-  els.sendBtn.innerHTML = `<span data-icon="${icon}"></span>`;
+  if (els.sendBtn.dataset.currentIcon !== icon) {
+    els.sendBtn.dataset.currentIcon = icon;
+    els.sendBtn.innerHTML = `<span data-icon="${icon}"></span>`;
+    hydrateIcons(els.sendBtn);
+  }
   els.sendBtn.title = activePaused ? '继续当前 node' : '发送';
   els.sendBtn.classList.toggle('ready', canSend);
-  hydrateIcons(els.sendBtn);
 }
 
 function loadingPart(text: string) {
@@ -2593,8 +2578,7 @@ async function interruptCurrent(reason: string) {
   els.interruptBtn.disabled = true;
   try {
     const result = await postJson('/api/interrupt', { reason });
-    state.bootstrap = result.bootstrap;
-    state.busy = Boolean(result.bootstrap?.runtime?.running);
+    applyBootstrapSnapshot(result.bootstrap);
     if (state.busy) {
       state.loadingMessage = loadingPart('暂停中，等待当前请求收尾');
       render();
@@ -2618,12 +2602,10 @@ async function postSend(text: string): Promise<any> {
       const message = error instanceof Error ? error.message : String(error);
       if (!isPausedResumeSettling(message)) break;
       state.loadingMessage = loadingPart('暂停恢复中，正在重试发送');
-      await sleep(700);
       try {
-        state.bootstrap = await fetchJson<Bootstrap>('/api/bootstrap');
-        state.busy = Boolean(state.bootstrap.runtime?.running);
+        await waitForRealtimeState((data) => !data.runtime?.running, 2500);
       } catch {
-        // Keep retrying with the original send request if the refresh races the server.
+        await sleep(300);
       }
     }
   }
@@ -2636,18 +2618,31 @@ function isPausedResumeSettling(message: string): boolean {
 }
 
 async function waitForBackendIdle(timeoutMs: number) {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    await sleep(300);
-    const data = await fetchJson<Bootstrap>('/api/bootstrap');
-    state.bootstrap = data;
-    state.busy = Boolean(data.runtime?.running);
-    if (!state.busy) {
-      state.loadingMessage = null;
-      render();
-      return;
-    }
-    render();
+  await waitForRealtimeState((data) => !data.runtime?.running, timeoutMs);
+}
+
+function waitForRealtimeState(predicate: (data: Bootstrap) => boolean, timeoutMs: number) {
+  if (state.bootstrap && predicate(state.bootstrap)) return Promise.resolve(state.bootstrap);
+  return new Promise<Bootstrap>((resolve, reject) => {
+    const waiter = {
+      predicate,
+      resolve,
+      reject,
+      timer: window.setTimeout(() => {
+        state.realtimeWaiters = state.realtimeWaiters.filter((candidate) => candidate !== waiter);
+        reject(new Error('Timed out waiting for a realtime state update.'));
+      }, timeoutMs),
+    };
+    state.realtimeWaiters.push(waiter);
+  });
+}
+
+function resolveRealtimeWaiters(data: Bootstrap) {
+  for (const waiter of [...state.realtimeWaiters]) {
+    if (!waiter.predicate(data)) continue;
+    window.clearTimeout(waiter.timer);
+    state.realtimeWaiters = state.realtimeWaiters.filter((candidate) => candidate !== waiter);
+    waiter.resolve(data);
   }
 }
 
@@ -2792,13 +2787,4 @@ function createIcon(iconNode: IconNode) {
   return svg;
 }
 
-setInterval(() => {
-  // Chain summary still uses snapshot polling; main and knowledge-graph
-  // messages arrive through /api/events SSE.
-  if (state.bootstrap?.runtime?.chainSummaryRunning) {
-    livePoll().catch(() => undefined);
-  }
-}, 10000);
-
 connectRealtimeEvents();
-refresh().catch((error) => showDetail('Startup Error', { message: error instanceof Error ? error.message : String(error) }));

@@ -20,6 +20,7 @@ The current implementation keeps runtime orchestration, domain routing rules, fi
 
 - `backend/harnessing_ts/server.py`: FastAPI app factory, route registration, background task wiring, and static frontend serving.
 - `backend/harnessing_ts/api/payloads.py`: aggregate response construction for `/api/bootstrap` and `/api/live`.
+- `backend/harnessing_ts/api/realtime.py`: SSE fan-out for session parts, builder state, runtime state, and workspace file changes. The browser uses the SSE bootstrap snapshot and does not poll `/api/live`.
 - `backend/harnessing_ts/orchestrator.py`: application facade that coordinates workspace state, main/node sessions, pending control, knowledge operations, and runner lifecycle.
 - `backend/harnessing_ts/node_state.py`: node-chain routing and validation, including `loopDecision`, `nextNode`, pipeline completion, and iterative-solving output requirements.
 - `backend/harnessing_ts/agent/sdk_runner.py`: Claude Code SDK wrapper for message send/receive, tool-call/result merging, session id capture, interrupt/close, and client recovery after SDK failures.
@@ -94,7 +95,7 @@ The frontend is intentionally thin: it renders the same JSONL logs, node metadat
 
 ## Realtime UI Updates
 
-The backend exposes `/api/events` as a Server-Sent Events stream. `SdkRunner.on_part` publishes persisted and collapsed main/node transcripts, while the knowledge graph builder publishes its trace through the same broker. Upload operations publish the refreshed workspace file tree. Task completion events publish a live snapshot so running/loading state is cleared immediately. The frontend uses `EventSource` for these updates and keeps `/api/bootstrap` for initial load and reconnect reconciliation.
+The backend exposes `/api/events` as a Server-Sent Events stream. `SdkRunner.on_part` publishes deduplicated persisted transcripts for main, node, knowledge-graph-builder, and chain-summary-builder sessions. Upload operations publish the refreshed workspace file tree, and task lifecycle events publish runtime snapshots. The stream's bootstrap event provides initial and reconnect state; the frontend does not poll snapshot endpoints. Messages use keyed DOM reconciliation, and other high-cost panels use content signatures so unchanged UI nodes are retained.
 
 ## Chain Summary
 

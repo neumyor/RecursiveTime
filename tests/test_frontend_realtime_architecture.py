@@ -1,0 +1,27 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+MAIN_TS = ROOT / "frontend" / "src" / "main.ts"
+
+
+def test_frontend_uses_sse_without_snapshot_polling() -> None:
+    source = MAIN_TS.read_text()
+
+    assert "new EventSource('/api/events')" in source
+    assert "fetchJson<Bootstrap>('/api/live')" not in source
+    assert "fetchJson<Bootstrap>('/api/bootstrap')" not in source
+    assert "setInterval(" not in source
+    assert "livePoll" not in source
+
+
+def test_chat_uses_keyed_incremental_dom_reconciliation() -> None:
+    source = MAIN_TS.read_text()
+
+    assert "data-message-key" in source
+    assert "messageFingerprint" in source
+    assert "function createMessageElement" in source
+    assert "function renderStable" in source
+    assert "els.chatStream.innerHTML = renderedParts.map" not in source

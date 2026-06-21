@@ -251,6 +251,7 @@ def create_app() -> FastAPI:
     @app.post("/api/knowledge-graph/pause")
     async def pause_knowledge_graph_build(request: InterruptRequest) -> dict[str, Any]:
         await orchestrator.pause_knowledge_graph_build(request.reason)
+        realtime.publish("live_snapshot", {"snapshot": _live(orchestrator)})
         return {"bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
     @app.post("/api/knowledge-graph/continue")
@@ -289,12 +290,13 @@ def create_app() -> FastAPI:
 
     @app.post("/api/chain-summary/build")
     async def trigger_chain_summary_build() -> dict[str, Any]:
-        accepted = _start_chain_summary_build(app, orchestrator, "manual")
+        accepted = _start_chain_summary_build(app, orchestrator, realtime, "manual")
         return {"accepted": accepted, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
     @app.post("/api/chain-summary/pause")
     async def pause_chain_summary_build(request: InterruptRequest) -> dict[str, Any]:
         await orchestrator.pause_chain_summary_build(request.reason)
+        realtime.publish("live_snapshot", {"snapshot": _live(orchestrator)})
         return {"bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
     @app.post("/api/llm-config")
@@ -390,6 +392,7 @@ def create_app() -> FastAPI:
         except Exception as exc:
             orchestrator.store.append_timeline({"type": "interrupt_error", "timestamp": now_iso_for_server(), "message": str(exc)})
             result = {"target": "unknown", "error": str(exc), "state": orchestrator.get_state()}
+        realtime.publish("live_snapshot", {"snapshot": _live(orchestrator)})
         return {"result": result, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
     @app.post("/api/control/approve")
@@ -522,7 +525,12 @@ async def _run_knowledge_graph_build(
         realtime.publish("live_snapshot", {"snapshot": _live(orchestrator)})
 
 
-def _start_chain_summary_build(app: FastAPI, orchestrator: HarnessOrchestrator, trigger: str) -> bool:
+def _start_chain_summary_build(
+    app: FastAPI,
+    orchestrator: HarnessOrchestrator,
+    realtime: RealtimeEventBroker,
+    trigger: str,
+) -> bool:
     current = getattr(app.state, "chain_summary_task", None)
     if current is not None and not current.done():
         orchestrator.store.append_timeline({
@@ -532,12 +540,17 @@ def _start_chain_summary_build(app: FastAPI, orchestrator: HarnessOrchestrator, 
             "payload": {"trigger": trigger},
         })
         return False
-    app.state.chain_summary_task = asyncio.create_task(_run_chain_summary_build(orchestrator, trigger))
+    app.state.chain_summary_task = asyncio.create_task(_run_chain_summary_build(orchestrator, realtime, trigger))
     setattr(orchestrator, "_server_chain_summary_task", app.state.chain_summary_task)
+    realtime.publish("live_snapshot", {"snapshot": _live(orchestrator)})
     return True
 
 
-async def _run_chain_summary_build(orchestrator: HarnessOrchestrator, trigger: str) -> None:
+async def _run_chain_summary_build(
+    orchestrator: HarnessOrchestrator,
+    realtime: RealtimeEventBroker,
+    trigger: str,
+) -> None:
     setattr(orchestrator, "_server_chain_summary_task", asyncio.current_task())
     try:
         await orchestrator.build_chain_summary(trigger)
@@ -546,6 +559,7 @@ async def _run_chain_summary_build(orchestrator: HarnessOrchestrator, trigger: s
         pass
     finally:
         setattr(orchestrator, "_server_chain_summary_task", None)
+        realtime.publish("live_snapshot", {"snapshot": _live(orchestrator)})
 
 
 def _task_running(task: Any) -> bool:

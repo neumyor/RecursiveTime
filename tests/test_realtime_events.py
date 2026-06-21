@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from io import BytesIO
+from unittest.mock import AsyncMock, patch
 import zipfile
 
 from harnessing_ts.agent.translate import user_text_part
 from harnessing_ts.api.realtime import RealtimeEventBroker
 from harnessing_ts.orchestrator import HarnessOrchestrator
+from harnessing_ts.state.message_log import MessageLog
 
 
 def test_realtime_broker_publishes_to_all_subscribers() -> None:
@@ -44,6 +46,48 @@ def test_main_part_event_contains_collapsed_persisted_transcript(tmp_path) -> No
 
     assert events[-1][0] == "main_parts"
     assert events[-1][1]["mainParts"][0]["text"] == "hello"
+
+
+def test_unchanged_visible_main_transcript_is_not_republished(tmp_path) -> None:
+    orchestrator = HarnessOrchestrator(tmp_path)
+    orchestrator.initialize()
+    events: list[tuple[str, dict]] = []
+    orchestrator.set_realtime_event_sink(lambda kind, payload: events.append((kind, payload)))
+    part = user_text_part("hello")
+    orchestrator.store.append_main_part(part)
+
+    orchestrator._emit_main_parts(part)
+    orchestrator._emit_main_parts(part)
+
+    assert [kind for kind, _payload in events] == ["main_parts"]
+
+
+def test_chain_summary_part_event_is_realtime_and_deduplicated(tmp_path) -> None:
+    orchestrator = HarnessOrchestrator(tmp_path)
+    orchestrator.initialize()
+    events: list[tuple[str, dict]] = []
+    orchestrator.set_realtime_event_sink(lambda kind, payload: events.append((kind, payload)))
+    part = user_text_part("build summary")
+    MessageLog(orchestrator.store.chain_summary_log_path).append(part)
+
+    orchestrator._emit_chain_summary_parts(part)
+    orchestrator._emit_chain_summary_parts(part)
+
+    assert [kind for kind, _payload in events] == ["chain_summary_parts"]
+    assert events[0][1]["chainSummaryParts"][0]["text"] == "build summary"
+
+
+def test_chain_summary_builder_receives_realtime_part_callback(tmp_path) -> None:
+    orchestrator = HarnessOrchestrator(tmp_path)
+    orchestrator.initialize()
+
+    with patch(
+        "harnessing_ts.orchestrator.build_chain_summary",
+        new=AsyncMock(return_value={"title": "summary", "iterations": []}),
+    ) as build:
+        asyncio.run(orchestrator.build_chain_summary())
+
+    assert build.call_args.kwargs["on_part"] == orchestrator._emit_chain_summary_parts
 
 
 def test_node_part_event_contains_session_transcript_and_state(tmp_path) -> None:

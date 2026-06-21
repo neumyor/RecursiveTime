@@ -70,6 +70,7 @@ class HarnessOrchestrator:
         self.active_node_runner: SdkRunner | None = None
         self.active_node_session: NodeSession | None = None
         self._realtime_event_sink: Callable[[str, dict[str, Any]], None] | None = None
+        self._realtime_parts_cache: dict[str, list[Part]] = {}
 
     def initialize(self) -> WorkspaceState:
         self.state = self.store.initialize(self.mode)
@@ -83,21 +84,40 @@ class HarnessOrchestrator:
             self._realtime_event_sink(event_type, payload)
 
     def _emit_main_parts(self, _part: Part) -> None:
-        self._emit_realtime("main_parts", {"mainParts": self.get_main_parts()})
+        self._emit_parts_if_changed("main_parts", "mainParts", self.get_main_parts())
 
     def _emit_knowledge_graph_parts(self, _part: Part) -> None:
-        self._emit_realtime(
+        self._emit_parts_if_changed(
             "knowledge_graph_parts",
-            {"knowledgeGraphParts": self.get_knowledge_graph_parts()},
+            "knowledgeGraphParts",
+            self.get_knowledge_graph_parts(),
         )
 
     def _emit_node_parts(self, node_id: str, _part: Part) -> None:
+        parts = self.get_node_parts(node_id)
+        cache_key = f"node_parts:{node_id}"
+        if self._realtime_parts_cache.get(cache_key) == parts:
+            return
+        self._realtime_parts_cache[cache_key] = parts
         self._emit_realtime("node_parts", {
-            "nodePartsById": {node_id: self.get_node_parts(node_id)},
+            "nodePartsById": {node_id: parts},
             "nodes": self.get_node_sessions(),
             "state": self.get_state(),
             "timeline": self.get_timeline(),
         })
+
+    def _emit_chain_summary_parts(self, _part: Part) -> None:
+        self._emit_parts_if_changed(
+            "chain_summary_parts",
+            "chainSummaryParts",
+            self.get_chain_summary_parts(),
+        )
+
+    def _emit_parts_if_changed(self, event_type: str, payload_key: str, parts: list[Part]) -> None:
+        if self._realtime_parts_cache.get(event_type) == parts:
+            return
+        self._realtime_parts_cache[event_type] = parts
+        self._emit_realtime(event_type, {payload_key: parts})
 
     async def send_main_user_message(self, text: str) -> list[Part]:
         self._ensure_initialized()
@@ -753,6 +773,7 @@ class HarnessOrchestrator:
                 workspace_path=self.workspace_path,
                 store=self.store,
                 llm_config=self._knowledge_graph_llm_config(),
+                on_part=self._emit_chain_summary_parts,
                 on_runner=lambda runner: setattr(self, "_chain_summary_runner", runner),
             )
         except Exception as exc:

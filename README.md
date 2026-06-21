@@ -95,7 +95,7 @@ frontend/src/types.ts
 
 Keep new behavior inside these boundaries. Routing rules belong in `node_state.py`; SDK session construction belongs in `agent/session_factory.py`; aggregate API response shape belongs in `api/payloads.py`; workspace layout details belong in `state/workspace_layout.py`.
 
-The browser receives main-session, node-session, and knowledge-graph-builder message updates through the `/api/events` Server-Sent Events stream. Reference and raw-data uploads publish updated workspace file trees on the same stream. `/api/bootstrap` remains the initial and reconnect snapshot; `/api/live` is retained as a compatibility/fallback snapshot endpoint rather than the primary message transport.
+The browser receives main-session, node-session, knowledge-graph-builder, chain-summary-builder, runtime-status, and workspace-file updates through the `/api/events` Server-Sent Events stream. The frontend does not poll `/api/live`: the SSE bootstrap event supplies initial/reconnect state, and keyed DOM reconciliation only inserts, moves, updates, or removes messages whose stable ids changed. `/api/live` is retained for API compatibility and diagnostics only.
 
 | Node | Responsibility | Produces | Native tools |
 |---|---|---|---|
@@ -314,7 +314,7 @@ The browser UI uses this split:
 - Right rail upload: use `Reference Files` to upload PDFs, markdown, text, CSV, or other reference files into `references/`. The upload is recorded in `logs/timeline.jsonl`.
 - Right rail upload: use `Raw Data Zip` to upload a `.zip` archive and extract it into `data/raw/` as original data. The backend rejects unsafe archive paths such as `../...` and records the upload in `logs/timeline.jsonl`.
 
-The frontend stays static after each action. Use the refresh button to pull the latest JSONL-backed logs from the backend. Tool calls and tool results are merged into a single collapsed tool message. The collapsed row primarily shows the call's `intend` field; expand it to inspect detailed parameters and returned results.
+The frontend stays synchronized through SSE after each action. It incrementally reconciles messages by stable id, so unchanged messages, expanded tool cards, images, and scroll state are preserved instead of rebuilding the transcript. Tool calls and tool results are merged into a single collapsed tool message. The collapsed row primarily shows the call's `intend` field; expand it to inspect detailed parameters and returned results.
 
 Default control mode is `auto`. Once a node finishes successfully, the harness automatically advances to the next node. Set `TS_HARNESS_CONTROL_MODE=manual` when you want every node entry and node completion to require explicit approval in the left-side Pending Control panel.
 - DOCX references are automatically extracted to `<filename>.docx.txt`. Agents can also run `uv run python tools/read_docx.py references/<file>.docx artifacts/<file>.txt`.
