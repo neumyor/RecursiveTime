@@ -55,9 +55,12 @@ const state = {
     ? 'knowledgeGraph'
     : window.location.pathname === '/chain-summary'
     ? 'chainSummary'
+    : window.location.pathname === '/image-viewer'
+    ? 'imageViewer'
     : window.location.pathname === '/settings'
     ? 'settings'
-    : 'chat') as 'chat' | 'knowledgeGraph' | 'chainSummary' | 'settings'),
+    : 'chat') as 'chat' | 'knowledgeGraph' | 'chainSummary' | 'imageViewer' | 'settings'),
+  selectedImagePath: new URLSearchParams(window.location.search).get('path') || '',
   selectedGraphNodeId: null as string | null,
   selectedKnowledgeBaseKind: null as string | null,
   knowledgeBaseCards: null as JsonMap | null,
@@ -315,6 +318,20 @@ app.innerHTML = `
       <section id="chainSummaryContent" class="chain-content-panel"></section>
     </section>
 
+    <section id="imageViewerView" class="image-viewer-view" hidden>
+      <header class="image-viewer-header">
+        <div>
+          <div class="eyebrow"><span data-icon="Activity"></span><span>Chain Summary Image</span></div>
+          <h2 id="imageViewerTitle">样本可视化</h2>
+        </div>
+        <button id="backToChainFromImageBtn" type="button" class="chain-back-btn"><span data-icon="ChevronLeft"></span><span>返回思维链总结</span></button>
+      </header>
+      <section class="image-viewer-stage">
+        <img id="imageViewerImage" alt="Chain summary visualization" />
+      </section>
+      <div id="imageViewerPath" class="image-viewer-path"></div>
+    </section>
+
     <form id="sendForm" class="composer">
       <div class="composer-shell">
         <textarea id="messageInput" rows="1" placeholder="向 orchestrator 发送消息"></textarea>
@@ -437,6 +454,11 @@ const els = {
   chatStream: query<HTMLElement>('#chatStream'),
   knowledgeGraphView: query<HTMLElement>('#knowledgeGraphView'),
   chainSummaryView: query<HTMLElement>('#chainSummaryView'),
+  imageViewerView: query<HTMLElement>('#imageViewerView'),
+  imageViewerTitle: query<HTMLElement>('#imageViewerTitle'),
+  imageViewerImage: query<HTMLImageElement>('#imageViewerImage'),
+  imageViewerPath: query<HTMLElement>('#imageViewerPath'),
+  backToChainFromImageBtn: query<HTMLButtonElement>('#backToChainFromImageBtn'),
   backToChatFromChainBtn: query<HTMLButtonElement>('#backToChatFromChainBtn'),
   buildChainSummaryBtn: query<HTMLButtonElement>('#buildChainSummaryBtn'),
   chainBuildStatus: query<HTMLElement>('#chainBuildStatus'),
@@ -608,6 +630,11 @@ els.backToChatFromChainBtn.addEventListener('click', () => {
   history.pushState({}, '', '/');
   render();
 });
+els.backToChainFromImageBtn.addEventListener('click', () => {
+  state.view = 'chainSummary';
+  history.pushState({}, '', '/chain-summary');
+  render();
+});
 els.buildChainSummaryBtn.addEventListener('click', async () => {
   resetChainRenderSignatures();
   await postJson('/api/chain-summary/build', {});
@@ -615,7 +642,18 @@ els.buildChainSummaryBtn.addEventListener('click', async () => {
 });
 window.addEventListener('popstate', () => {
   const path = window.location.pathname;
-  state.view = path === '/knowledge-graph' ? 'knowledgeGraph' : path === '/chain-summary' ? 'chainSummary' : path === '/settings' ? 'settings' : 'chat';
+  state.view = path === '/knowledge-graph'
+    ? 'knowledgeGraph'
+    : path === '/chain-summary'
+    ? 'chainSummary'
+    : path === '/image-viewer'
+    ? 'imageViewer'
+    : path === '/settings'
+    ? 'settings'
+    : 'chat';
+  state.selectedImagePath = path === '/image-viewer'
+    ? new URLSearchParams(window.location.search).get('path') || ''
+    : state.selectedImagePath;
   render();
 });
 els.graphExtractionDepthInput.addEventListener('change', async () => {
@@ -901,6 +939,7 @@ function render() {
   renderKnowledgeWorkbench(data);
   renderBuilderTrace(data.knowledgeGraphParts || []);
   renderChainSummary(data);
+  renderImageViewer();
   renderSettings(data);
   renderViewState();
   renderTimeline(data.timeline);
@@ -1431,16 +1470,19 @@ async function resetMainLlmConfig() {
 function renderViewState() {
   const graphMode = state.view === 'knowledgeGraph';
   const chainMode = state.view === 'chainSummary';
+  const imageMode = state.view === 'imageViewer';
   const settingsMode = state.view === 'settings';
-  els.chatStream.hidden = graphMode || chainMode || settingsMode;
+  els.chatStream.hidden = graphMode || chainMode || imageMode || settingsMode;
   els.knowledgeGraphView.hidden = !graphMode;
   els.chainSummaryView.hidden = !chainMode;
+  els.imageViewerView.hidden = !imageMode;
   els.settingsView.hidden = !settingsMode;
-  els.sendForm.hidden = graphMode || chainMode || settingsMode;
-  els.transcriptScope.disabled = graphMode || chainMode;
-  query('#mainTitle').textContent = graphMode ? 'Knowledge Graph' : chainMode ? '思维链总结' : settingsMode ? 'Settings' : 'Orchestrator';
+  els.sendForm.hidden = graphMode || chainMode || imageMode || settingsMode;
+  els.transcriptScope.disabled = graphMode || chainMode || imageMode;
+  query('#mainTitle').textContent = graphMode ? 'Knowledge Graph' : chainMode ? '思维链总结' : imageMode ? '图片查看' : settingsMode ? 'Settings' : 'Orchestrator';
   document.body.classList.toggle('knowledge-page', graphMode);
   document.body.classList.toggle('chain-page', chainMode);
+  document.body.classList.toggle('image-page', imageMode);
   document.body.classList.toggle('settings-page', settingsMode);
 }
 
@@ -1637,6 +1679,9 @@ function renderChainContent(summary: JsonMap, build: JsonMap = {}) {
   for (const item of els.chainSummaryContent.querySelectorAll<HTMLElement>('[data-chain-path]')) {
     item.addEventListener('click', async () => showWorkspaceFile(item.dataset.chainPath || ''));
   }
+  for (const item of els.chainSummaryContent.querySelectorAll<HTMLElement>('[data-chain-image]')) {
+    item.addEventListener('click', () => openChainImage(item.dataset.chainImage || ''));
+  }
 }
 
 function chainIterationHtml(iteration: JsonMap, index: number, total: number) {
@@ -1753,20 +1798,46 @@ function methodResultRowHtml(row: { method: JsonMap; result: JsonMap; index: num
 
 function chainSampleHtml(sample: JsonMap) {
   const path = String(sample.visualizationPath || '').trim();
-  const image = isPreviewableImage(path)
-    ? `<img src="/api/files/preview?path=${encodeURIComponent(path)}" alt="${escapeHtml(sample.sampleId || 'sample visualization')}" loading="lazy" />`
+  const previewable = isPreviewableImage(path);
+  const image = previewable
+    ? `<button type="button" class="chain-sample-image-button" data-chain-image="${escapeHtml(path)}" aria-label="查看 ${escapeHtml(sample.sampleId || 'sample visualization')}"><img src="/api/files/preview?path=${encodeURIComponent(path)}" alt="${escapeHtml(sample.sampleId || 'sample visualization')}" loading="lazy" /></button>`
     : '';
   return `
     <article class="chain-sample-card">
       ${image || `<div class="sample-image-placeholder"><span data-icon="File"></span></div>`}
       <div>
         <div class="chain-sample-title">${escapeHtml(sample.sampleId || 'sample')}</div>
-        ${path ? `<button type="button" class="artifact-item" data-chain-path="${escapeHtml(path)}"><span data-icon="File"></span><span>${escapeHtml(path)}</span></button>` : ''}
+        ${path ? `<button type="button" class="artifact-item" ${previewable ? `data-chain-image="${escapeHtml(path)}"` : `data-chain-path="${escapeHtml(path)}"`}><span data-icon="File"></span><span>${escapeHtml(path)}</span></button>` : ''}
         <p>${escapeHtml(sample.interpretation || '')}</p>
         <p class="meta">${escapeHtml(sample.nextIterationImpact || '')}</p>
       </div>
     </article>
   `;
+}
+
+function openChainImage(path: string) {
+  const normalized = String(path || '').trim();
+  if (!normalized || !isPreviewableImage(normalized)) return;
+  state.selectedImagePath = normalized;
+  state.view = 'imageViewer';
+  history.pushState({}, '', `/image-viewer?path=${encodeURIComponent(normalized)}`);
+  render();
+}
+
+function renderImageViewer() {
+  const path = String(state.selectedImagePath || '').trim();
+  if (!path) {
+    els.imageViewerTitle.textContent = '未选择图片';
+    els.imageViewerImage.removeAttribute('src');
+    els.imageViewerImage.hidden = true;
+    els.imageViewerPath.textContent = '';
+    return;
+  }
+  els.imageViewerTitle.textContent = path.split('/').pop() || '样本可视化';
+  els.imageViewerImage.src = `/api/files/preview?path=${encodeURIComponent(path)}`;
+  els.imageViewerImage.alt = path;
+  els.imageViewerImage.hidden = false;
+  els.imageViewerPath.innerHTML = `<span data-icon="File"></span><code>${escapeHtml(path)}</code>`;
 }
 
 function renderKnowledgeGraphBuilder(data: Bootstrap) {

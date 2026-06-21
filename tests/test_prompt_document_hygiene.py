@@ -117,7 +117,8 @@ def test_iterative_case_review_visualization_contract_is_explicit() -> None:
     assert "按 `user/data-spec.md` 读取" in guidance
     assert "`summary_` 前缀" in guidance
     assert "保存为 PNG" in guidance
-    assert "DPI 不得低于 30" in guidance
+    assert guidance.count("250 DPI") >= 2
+    assert "DPI 不得低于 30" not in guidance
     assert "宽高比必须为 16:9" in guidance
     assert "蓝、橙、绿、红" in guidance
 

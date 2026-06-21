@@ -546,6 +546,14 @@ body.chain-page .toolbar {
   display: none;
 }
 
+body.image-page .left-rail,
+body.image-page .right-rail,
+body.image-page .left-toggle,
+body.image-page .right-toggle,
+body.image-page .toolbar {
+  display: none;
+}
+
 body.knowledge-page .main-pane {
   margin-left: 320px;
   margin-right: 0;
@@ -564,6 +572,11 @@ body.chain-page .main-pane {
 
 body.chain-page.left-collapsed .main-pane {
   margin-left: 0;
+}
+
+body.image-page .main-pane {
+  margin: 0;
+  grid-template-rows: 1fr;
 }
 
 .brand-block {
@@ -1646,6 +1659,99 @@ details[open] > summary.panel-heading::after {
   border: 1px solid var(--line);
   background: var(--surface);
   object-fit: contain;
+}
+
+.chain-sample-image-button {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.chain-sample-image-button:hover:not(:disabled) {
+  border: 0;
+  background: transparent;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 28%, transparent);
+  transform: none;
+}
+
+.chain-sample-image-button img {
+  display: block;
+}
+
+.image-viewer-view {
+  height: 100vh;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  padding: 18px;
+  background:
+    radial-gradient(circle at top left, rgba(40, 100, 201, 0.10), transparent 32%),
+    var(--bg);
+}
+
+.image-viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.image-viewer-header h2 {
+  margin: 4px 0 0;
+  font-size: 24px;
+}
+
+.image-viewer-stage {
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 92%, black 8%);
+  box-shadow: var(--shadow-soft);
+}
+
+.image-viewer-stage img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  background: white;
+}
+
+.image-viewer-path {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.image-viewer-path code {
+  color: var(--text);
+  white-space: normal;
+  word-break: break-all;
 }
 
 .sample-image-placeholder {
