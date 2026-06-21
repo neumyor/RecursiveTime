@@ -195,9 +195,9 @@ When `frontend/dist/` exists, `ts-harness-server` serves the built frontend auto
 
 ## Deploy On A Server
 
-HarnessingTS can run on a remote Linux/macOS server and be opened from other computers on the same network, or through a reverse proxy/VPN. Install `git`, `uv`, and Bun first, and make either a Claude Code CLI login or LLM API credentials available to the server account.
+HarnessingTS can run on a Linux/macOS server and be opened from the same network, reverse proxy, or VPN. Install `git`, `uv`, and Bun first, and make either a Claude Code CLI login or LLM API credentials available to the server account.
 
-The normal first-server setup is three commands. The first command clones the repository, the second performs all repository and machine initialization, and the third starts the selected runtime workspace:
+Typical setup is clone, prepare, and start:
 
 ```bash
 git clone https://github.com/neumyor/RecursiveTime.git && cd RecursiveTime
@@ -211,17 +211,17 @@ uv run ts-harness setup-server
 HOST=0.0.0.0 PORT=4327 TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/v0 TS_HARNESS_VARIANT=V0 uv run ts-harness-server
 ```
 
-`uv run` synchronizes the Python backend before invoking `setup-server`. The setup command then runs the frozen Bun install, builds `frontend/dist`, detects the machine accelerator, and prepares the shared PyTorch plus workspace dependency runtime base. The server creates and initializes `TS_HARNESS_WORKSPACE` automatically on first start, so a separate `uv sync`, frontend build, `prepare-runtime-base`, or workspace `init` command is not required.
+`setup-server` runs the frozen Bun install, builds `frontend/dist`, detects the machine accelerator, and prepares the shared PyTorch plus workspace dependency runtime base. The server creates and initializes `TS_HARNESS_WORKSPACE` automatically on first start, so separate `uv sync`, frontend build, `prepare-runtime-base`, or workspace `init` commands are not required.
 
-Use a different workspace path for each ablation variant. Replace `V0` and `/v0` together, for example with `V3` and `/v3`. To use a manual LLM endpoint, add the `TS_HARNESS_LLM_*` variables to the same launch environment or configure the workspace from the UI after startup.
+Use a different workspace path for each ablation variant. Replace `V0` and `/v0` together, for example with `V3` and `/v3`. To use a manual LLM endpoint, add `TS_HARNESS_LLM_*` variables to the launch environment or configure the workspace from the UI.
 
-The server will print a `LAN access URL` when it can detect the machine's LAN address. From another computer, open:
+The server prints a `LAN access URL` when it can detect the machine's LAN address. From another computer, open:
 
 ```text
 http://<server-ip-or-hostname>:4327
 ```
 
-Open the port in the server firewall if needed. Examples:
+Open the port in the server firewall if needed:
 
    ```bash
    # Ubuntu ufw
@@ -232,7 +232,7 @@ Open the port in the server firewall if needed. Examples:
    sudo firewall-cmd --reload
    ```
 
-For long-running use, run the process under a service manager such as `systemd`, `supervisord`, Docker, tmux, or a platform process manager. A minimal `systemd` service looks like:
+For long-running use, run the process under a service manager such as `systemd`, `supervisord`, Docker, tmux, or a platform process manager:
 
    ```ini
    [Unit]
@@ -252,23 +252,13 @@ For long-running use, run the process under a service manager such as `systemd`,
    WantedBy=multi-user.target
    ```
 
-If the server is reachable from untrusted networks, put it behind a reverse proxy with authentication, HTTPS, and network allowlisting. Do not expose a debug server publicly. Keep `TS_HARNESS_DEBUG` unset in shared or public deployments because debug actions include workspace reset controls.
+If the server is reachable from untrusted networks, put it behind authentication, HTTPS, and network allowlisting. Keep `TS_HARNESS_DEBUG` unset in shared or public deployments because debug actions include workspace reset controls.
 
-For UI testing without calling the model:
+Useful launch flags:
 
 ```bash
 TS_HARNESS_DRY_RUN=true uv run ts-harness-server
-```
-
-Enable debug actions in the UI, including clearing the current chat log:
-
-```bash
 TS_HARNESS_DEBUG=true uv run ts-harness-server
-```
-
-Claude Code SDK turn budget defaults to `80`. Override it if a node still hits `error_max_turns`:
-
-```bash
 TS_HARNESS_MAX_TURNS=120 uv run ts-harness-server
 ```
 
@@ -299,7 +289,9 @@ Runtime iteration and knowledge extraction settings are stored in workspace stat
 - `iterativeCandidateCount`: number of candidates proposed by each `iterative-solving` round, bounded from 1 to 8.
 - `knowledgeGraphExtractionDepth`: graph extraction depth used by the knowledge builder, bounded from 1 to 4.
 
-By default, runtime workspaces are separated from this source repository:
+### Runtime workspaces and package indexes
+
+Runtime workspaces are isolated `uv` projects stored outside this source repository by default:
 
 ```text
 ~/.harnessingts/workspaces/default
@@ -312,19 +304,27 @@ TS_HARNESS_WORKSPACE=/path/to/time-series-workspace uv run ts-harness-server
 uv run ts-harness --workspace /path/to/time-series-workspace init
 ```
 
-Before creating runtime workspaces on a machine, prepare the project-level runtime base once from the HarnessingTS source root:
+`setup-server` prepares `.runtime-base/`, a machine-local environment and uv cache. It detects the host accelerator, asks uv to select the PyTorch backend, resolves PyTorch plus the full default workspace dependency set, verifies imports and the actual PyTorch device backend, and records exact versions in `.runtime-base/runtime-base.json`. New workspaces pin those verified versions and reuse `.runtime-base/uv-cache`.
+
+Use `prepare-runtime-base` directly only when rebuilding the compute dependency base independently:
 
 ```bash
 uv run ts-harness prepare-runtime-base
-# Equivalent direct script:
-uv run python scripts/prepare_runtime_base.py
 ```
 
-For a fresh server, prefer `uv run ts-harness setup-server`; it includes this runtime-base preparation together with frontend installation and production build. Use `prepare-runtime-base` directly only when rebuilding the compute dependency base independently.
+Useful environment variables:
 
-This creates the git-ignored `.runtime-base/` environment and cache. The script detects the host OS, CPU architecture, and available NVIDIA CUDA, AMD ROCm, or Apple MPS acceleration; asks `uv` to select the best supported PyTorch backend; resolves compatible versions of PyTorch and the full default workspace dependency set; verifies the imports and actual PyTorch device backend; and records the exact result in `.runtime-base/runtime-base.json`. Native `uv` progress is displayed while packages are resolved and installed. Set `TS_HARNESS_TORCH_BACKEND` (for example, `cpu` or `cu128`) only when automatic selection must be overridden.
+```bash
+# Override PyTorch backend selection only when automatic detection is wrong.
+TS_HARNESS_TORCH_BACKEND=cpu uv run ts-harness setup-server
 
-New workspaces pin the verified versions and reuse `.runtime-base/uv-cache`. Package files are materialized through uv's hard-link or copy-on-write cache modes where the filesystem supports them, avoiding repeated downloads and builds while preserving an independent workspace `.venv`, `uv.lock`, and `uv add` workflow. Re-run the command after changing the host GPU/driver, Python version, or when intentionally upgrading the shared package set. Existing workspace projects are not rewritten automatically.
+# Use a faster Python package index for both setup-server and workspace uv sync.
+UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple \
+UV_INDEX_STRATEGY=unsafe-best-match \
+uv run ts-harness setup-server
+```
+
+`UV_DEFAULT_INDEX` changes uv's default package index. `UV_INDEX` can add extra indexes. Older `UV_INDEX_URL` and `UV_EXTRA_INDEX_URL` names may still work, but prefer `UV_DEFAULT_INDEX` and `UV_INDEX`. PyTorch CUDA wheels are still resolved through the PyTorch index written into the workspace `pyproject.toml`, unless that wheel source is also mirrored.
 
 ## Verification
 
@@ -338,7 +338,7 @@ cd frontend && bun run build
 
 Tests set `TS_HARNESS_SKIP_WORKSPACE_UV=true` automatically through `tests/conftest.py`; unit tests must not create a full `.venv` for every temporary workspace. Runtime-base behavior is covered with mocked uv commands in `tests/test_runtime_base.py`, while V0-V6 capabilities, contracts, prompts, and sampler behavior are covered in `tests/test_ablation_variants.py`.
 
-When a runtime workspace is initialized, HarnessingTS automatically makes that folder an isolated `uv` Python project:
+Runtime workspace layout:
 
 ```text
 /path/to/time-series-workspace/
@@ -349,7 +349,7 @@ When a runtime workspace is initialized, HarnessingTS automatically makes that f
   state/runtime.json
 ```
 
-This workspace environment is separate from the `uv` environment used to run the HarnessingTS backend. When a prepared runtime base is available, the workspace inherits its verified package versions and shared uv cache rather than downloading or rebuilding them. Claude Code SDK sessions run with `cwd` set to the runtime workspace, and the prompts require agents to execute Python and shell work through the workspace project:
+This environment is separate from the backend project. SDK sessions run with `cwd` set to the runtime workspace, so Python and shell work should use the workspace project:
 
 ```bash
 uv run python script.py
@@ -357,7 +357,7 @@ uv add package-name
 uv run --with package-name python script.py
 ```
 
-Do not install task dependencies into the HarnessingTS source repository environment. Use `TS_HARNESS_SKIP_WORKSPACE_UV=true` only when you intentionally want to skip automatic workspace environment setup.
+Do not install task dependencies into the HarnessingTS source repository environment. Use `TS_HARNESS_SKIP_WORKSPACE_UV=true` only when intentionally skipping automatic workspace setup.
 
 The browser UI uses this split:
 
