@@ -22,21 +22,21 @@
 
 本项目后端使用 Python 实现，依赖由 `uv` 管理。前端是 `frontend/` 下的静态页面，直接由 Python FastAPI 服务托管。
 
-安装依赖：
+新服务器的标准流程必须优先保持为三条主命令：
+
+```bash
+git clone https://github.com/neumyor/RecursiveTime.git && cd RecursiveTime
+uv run ts-harness setup-server
+HOST=0.0.0.0 PORT=4327 TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/v0 TS_HARNESS_VARIANT=V0 uv run ts-harness-server
+```
+
+`uv run` 会先自动同步 Python 后端；`setup-server` 会继续执行 frozen Bun install、生产前端构建和共享 runtime base 构建；`ts-harness-server` 会在首次启动时自动创建并初始化 `TS_HARNESS_WORKSPACE`。不要再要求用户重复执行 `uv sync`、`bun install/build`、`prepare-runtime-base` 和 `ts-harness init`。
+
+以下拆分命令只用于开发、诊断或局部重建：
 
 ```bash
 uv sync
-```
-
-首次在一台机器上创建 runtime workspace 前，准备可复用的计算依赖基础环境：
-
-```bash
 uv run ts-harness prepare-runtime-base
-```
-
-初始化工作区：
-
-```bash
 uv run ts-harness init
 ```
 
@@ -60,7 +60,7 @@ Python 语法检查：
 uv run python -m compileall backend/harnessing_ts
 ```
 
-启动前端工作台：
+本地启动前端工作台：
 
 ```bash
 uv run ts-harness-server
@@ -75,10 +75,10 @@ http://127.0.0.1:4327
 服务器部署并允许其他电脑访问时，必须显式绑定非 loopback 地址：
 
 ```bash
-HOST=0.0.0.0 PORT=4327 TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/default uv run ts-harness-server
+HOST=0.0.0.0 PORT=4327 TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/v0 TS_HARNESS_VARIANT=V0 uv run ts-harness-server
 ```
 
-对外共享部署必须先构建 `frontend/dist/`，并在 README 的 “Deploy On A Server” 章节同步维护防火墙、进程守护、反向代理和安全注意事项。不要在公网部署时启用 `TS_HARNESS_DEBUG`。
+对外共享部署必须先运行 `setup-server` 生成 `frontend/dist/` 和 runtime base，并在 README 的 “Deploy On A Server” 章节同步维护防火墙、进程守护、反向代理和安全注意事项。不要在公网部署时启用 `TS_HARNESS_DEBUG`。
 
 不调用模型的前端测试模式：
 
@@ -186,6 +186,7 @@ uv run ts-harness training-template
 - `backend/harnessing_ts/state/workspace_store.py`：workspace 文件/JSON/JSONL repository facade，保留读写状态、日志、运行记录、上传、reset 等外部 API。
 - `backend/harnessing_ts/state/workspace_layout.py`：workspace 目录布局、内置 `tools/read_docx.py`、DOCX reference 文本派生。
 - `backend/harnessing_ts/runtime_base.py`：项目级 torch/numpy/scikit-learn 基础环境、硬件探测、uv backend 选择、验证和共享 cache metadata。
+- `backend/harnessing_ts/server_setup.py`：新服务器聚合初始化，统一执行前端依赖/构建和共享 runtime base 准备。
 - `backend/harnessing_ts/knowledge_graph.py`：文件型知识库表、确定性工具、graph view/search/cards、builder/reasoner 调用逻辑。
 - `backend/harnessing_ts/knowledge_prompts.py`：Knowledge Builder / Reasoning Agent prompt 文本与知识图谱构建请求文本。
 - `backend/harnessing_ts/chain_summary.py`：独立 chain builder agent，读取 runtime workspace 的 logs/reports/runs/tools/user 工件，输出结构化思维链总结和 metric series。

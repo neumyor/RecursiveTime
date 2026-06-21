@@ -11,6 +11,7 @@ from harnessing_ts.orchestrator import HarnessOrchestrator
 from harnessing_ts.paths import default_workspace_path
 from harnessing_ts.runtime_base import prepare_runtime_base
 from harnessing_ts.schema import NODE_TYPES
+from harnessing_ts.server_setup import setup_server
 from harnessing_ts.settings.llm import build_sdk_invocation_config, mask_llm_config, mask_sdk_invocation_config, read_effective_llm_config
 from harnessing_ts.training.lightning import write_training_template
 
@@ -30,6 +31,10 @@ async def _main() -> None:
     sub.add_parser("llm-config")
     prepare_base = sub.add_parser("prepare-runtime-base")
     prepare_base.add_argument("--python", default="3.11")
+    setup = sub.add_parser("setup-server")
+    setup.add_argument("--python", default="3.11")
+    setup.add_argument("--skip-frontend", action="store_true")
+    setup.add_argument("--skip-runtime-base", action="store_true")
 
     send = sub.add_parser("send")
     send.add_argument("text", nargs="+")
@@ -59,6 +64,16 @@ async def _main() -> None:
 
     if command == "prepare-runtime-base":
         status = prepare_runtime_base(python_version=args.python)
+        if status.get("state") != "ready":
+            print_json(status)
+            raise SystemExit(1)
+        return
+    if command == "setup-server":
+        status = setup_server(
+            python_version=args.python,
+            skip_frontend=args.skip_frontend,
+            skip_runtime_base=args.skip_runtime_base,
+        )
         if status.get("state") != "ready":
             print_json(status)
             raise SystemExit(1)

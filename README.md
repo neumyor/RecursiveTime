@@ -80,6 +80,9 @@ backend/harnessing_ts/mcp/server.py
 backend/harnessing_ts/runtime_base.py
   Machine-local torch/numpy/scikit-learn runtime-base preparation, hardware detection, verification, and shared uv-cache metadata.
 
+backend/harnessing_ts/server_setup.py
+  Aggregated first-server setup for frontend dependency/build preparation and the shared machine runtime base.
+
 backend/harnessing_ts/state/workspace_store.py
   Workspace repository facade for JSON/JSONL state, logs, file reads, uploads, reset behavior, runtime settings, and run/artifact records.
 
@@ -192,41 +195,33 @@ When `frontend/dist/` exists, `ts-harness-server` serves the built frontend auto
 
 ## Deploy On A Server
 
-HarnessingTS can run on a remote Linux/macOS server and be opened from other computers on the same network, or through a reverse proxy/VPN. The important difference from local development is that the server must bind to a non-loopback interface.
+HarnessingTS can run on a remote Linux/macOS server and be opened from other computers on the same network, or through a reverse proxy/VPN. Install `git`, `uv`, and Bun first, and make either a Claude Code CLI login or LLM API credentials available to the server account.
 
-1. Install runtime dependencies on the server:
+The normal first-server setup is three commands. The first command clones the repository, the second performs all repository and machine initialization, and the third starts the selected runtime workspace:
 
-   ```bash
-   cd /path/to/HarnessingTS
-   uv sync
-   cd frontend
-   bun install
-   bun run build
-   cd ..
-   ```
+```bash
+git clone https://github.com/neumyor/RecursiveTime.git && cd RecursiveTime
+```
 
-2. Choose a persistent runtime workspace. Keep it outside the source checkout so generated logs, data, reports, tools, and API settings are not mixed with repository files:
+```bash
+uv run ts-harness setup-server
+```
 
-   ```bash
-   export TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/default
-   uv run ts-harness --workspace "$TS_HARNESS_WORKSPACE" init
-   ```
+```bash
+HOST=0.0.0.0 PORT=4327 TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/v0 TS_HARNESS_VARIANT=V0 uv run ts-harness-server
+```
 
-3. Configure the LLM used by the server process. Either log in to Claude Code on the server account, or create the workspace LLM config from the UI/CLI. For manual API use, store `config.llm.json` in the runtime workspace, not in the git checkout.
+`uv run` synchronizes the Python backend before invoking `setup-server`. The setup command then runs the frozen Bun install, builds `frontend/dist`, detects the machine accelerator, and prepares the shared torch/numpy/scikit-learn runtime base. The server creates and initializes `TS_HARNESS_WORKSPACE` automatically on first start, so a separate `uv sync`, frontend build, `prepare-runtime-base`, or workspace `init` command is not required.
 
-4. Start the web server on all network interfaces:
+Use a different workspace path for each ablation variant. Replace `V0` and `/v0` together, for example with `V3` and `/v3`. To use a manual LLM endpoint, add the `TS_HARNESS_LLM_*` variables to the same launch environment or configure the workspace from the UI after startup.
 
-   ```bash
-   HOST=0.0.0.0 PORT=4327 TS_HARNESS_WORKSPACE="$TS_HARNESS_WORKSPACE" uv run ts-harness-server
-   ```
+The server will print a `LAN access URL` when it can detect the machine's LAN address. From another computer, open:
 
-   The server will print a `LAN access URL` when it can detect the machine's LAN address. From another computer, open:
+```text
+http://<server-ip-or-hostname>:4327
+```
 
-   ```text
-   http://<server-ip-or-hostname>:4327
-   ```
-
-5. Open the port in the server firewall if needed. Examples:
+Open the port in the server firewall if needed. Examples:
 
    ```bash
    # Ubuntu ufw
@@ -237,7 +232,7 @@ HarnessingTS can run on a remote Linux/macOS server and be opened from other com
    sudo firewall-cmd --reload
    ```
 
-6. For long-running use, run the process under a service manager such as `systemd`, `supervisord`, Docker, tmux, or a platform process manager. A minimal `systemd` service looks like:
+For long-running use, run the process under a service manager such as `systemd`, `supervisord`, Docker, tmux, or a platform process manager. A minimal `systemd` service looks like:
 
    ```ini
    [Unit]
@@ -248,7 +243,8 @@ HarnessingTS can run on a remote Linux/macOS server and be opened from other com
    WorkingDirectory=/path/to/HarnessingTS
    Environment=HOST=0.0.0.0
    Environment=PORT=4327
-   Environment=TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/default
+   Environment=TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/v0
+   Environment=TS_HARNESS_VARIANT=V0
    ExecStart=/usr/bin/env uv run ts-harness-server
    Restart=on-failure
 
@@ -256,7 +252,7 @@ HarnessingTS can run on a remote Linux/macOS server and be opened from other com
    WantedBy=multi-user.target
    ```
 
-7. If the server is reachable from untrusted networks, put it behind a reverse proxy with authentication, HTTPS, and network allowlisting. Do not expose a debug server publicly. Keep `TS_HARNESS_DEBUG` unset in shared or public deployments because debug actions include workspace reset controls.
+If the server is reachable from untrusted networks, put it behind a reverse proxy with authentication, HTTPS, and network allowlisting. Do not expose a debug server publicly. Keep `TS_HARNESS_DEBUG` unset in shared or public deployments because debug actions include workspace reset controls.
 
 For UI testing without calling the model:
 
@@ -323,6 +319,8 @@ uv run ts-harness prepare-runtime-base
 # Equivalent direct script:
 uv run python scripts/prepare_runtime_base.py
 ```
+
+For a fresh server, prefer `uv run ts-harness setup-server`; it includes this runtime-base preparation together with frontend installation and production build. Use `prepare-runtime-base` directly only when rebuilding the compute dependency base independently.
 
 This creates the git-ignored `.runtime-base/` environment and cache. The script detects the host OS, CPU architecture, and available NVIDIA CUDA, AMD ROCm, or Apple MPS acceleration; asks `uv` to select the best supported PyTorch backend; resolves compatible versions of `torch`, `numpy`, and `scikit-learn`; verifies the imports and actual PyTorch device backend; and records the exact result in `.runtime-base/runtime-base.json`. Native `uv` progress is displayed while packages are resolved and installed. Set `TS_HARNESS_TORCH_BACKEND` (for example, `cpu` or `cu128`) only when automatic selection must be overridden.
 
