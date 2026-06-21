@@ -8,19 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from harnessing_ts.state.jsonl import write_json
-from harnessing_ts.runtime_base import apply_runtime_base_env, read_runtime_base, workspace_base_dependencies, workspace_torch_source
+from harnessing_ts.runtime_base import DEFAULT_WORKSPACE_DEPENDENCIES, apply_runtime_base_env, read_runtime_base, workspace_base_dependencies, workspace_torch_source
 
 
 DEFAULT_PYTHON_VERSION = "3.11"
-DEFAULT_DEPENDENCIES = [
-    "python-docx>=1.1.2",
-    "numpy>=1.26",
-    "pandas>=2.2",
-    "scipy>=1.12",
-    "scikit-learn>=1.4",
-    "matplotlib>=3.8",
-    "sktime>=0.35",
-]
+DEFAULT_DEPENDENCIES = DEFAULT_WORKSPACE_DEPENDENCIES
 
 
 def ensure_workspace_uv_environment(root: Path) -> dict[str, Any]:

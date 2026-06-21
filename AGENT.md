@@ -185,7 +185,7 @@ uv run ts-harness training-template
 - `backend/harnessing_ts/mcp/server.py`：MCP tool schema 和 callback 绑定；暴露治理、审计、V2 random sampler 和知识库确定性工具。
 - `backend/harnessing_ts/state/workspace_store.py`：workspace 文件/JSON/JSONL repository facade，保留读写状态、日志、运行记录、上传、reset 等外部 API。
 - `backend/harnessing_ts/state/workspace_layout.py`：workspace 目录布局、内置 `tools/read_docx.py`、DOCX reference 文本派生。
-- `backend/harnessing_ts/runtime_base.py`：项目级 torch/numpy/scikit-learn 基础环境、硬件探测、uv backend 选择、验证和共享 cache metadata。
+- `backend/harnessing_ts/runtime_base.py`：项目级 PyTorch 与 workspace 默认依赖基础环境、硬件探测、uv backend 选择、验证和共享 cache metadata。
 - `backend/harnessing_ts/server_setup.py`：新服务器聚合初始化，统一执行前端依赖/构建和共享 runtime base 准备。
 - `backend/harnessing_ts/knowledge_graph.py`：文件型知识库表、确定性工具、graph view/search/cards、builder/reasoner 调用逻辑。
 - `backend/harnessing_ts/knowledge_prompts.py`：Knowledge Builder / Reasoning Agent prompt 文本与知识图谱构建请求文本。

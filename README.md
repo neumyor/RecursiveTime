@@ -78,7 +78,7 @@ backend/harnessing_ts/mcp/server.py
   MCP governance, audit, runtime-settings, V2 random-candidate sampling, knowledge-query, and deterministic knowledge-base tool schemas.
 
 backend/harnessing_ts/runtime_base.py
-  Machine-local torch/numpy/scikit-learn runtime-base preparation, hardware detection, verification, and shared uv-cache metadata.
+  Machine-local PyTorch and workspace dependency runtime-base preparation, hardware detection, verification, and shared uv-cache metadata.
 
 backend/harnessing_ts/server_setup.py
   Aggregated first-server setup for frontend dependency/build preparation and the shared machine runtime base.
@@ -211,7 +211,7 @@ uv run ts-harness setup-server
 HOST=0.0.0.0 PORT=4327 TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/v0 TS_HARNESS_VARIANT=V0 uv run ts-harness-server
 ```
 
-`uv run` synchronizes the Python backend before invoking `setup-server`. The setup command then runs the frozen Bun install, builds `frontend/dist`, detects the machine accelerator, and prepares the shared torch/numpy/scikit-learn runtime base. The server creates and initializes `TS_HARNESS_WORKSPACE` automatically on first start, so a separate `uv sync`, frontend build, `prepare-runtime-base`, or workspace `init` command is not required.
+`uv run` synchronizes the Python backend before invoking `setup-server`. The setup command then runs the frozen Bun install, builds `frontend/dist`, detects the machine accelerator, and prepares the shared PyTorch plus workspace dependency runtime base. The server creates and initializes `TS_HARNESS_WORKSPACE` automatically on first start, so a separate `uv sync`, frontend build, `prepare-runtime-base`, or workspace `init` command is not required.
 
 Use a different workspace path for each ablation variant. Replace `V0` and `/v0` together, for example with `V3` and `/v3`. To use a manual LLM endpoint, add the `TS_HARNESS_LLM_*` variables to the same launch environment or configure the workspace from the UI after startup.
 
@@ -322,7 +322,7 @@ uv run python scripts/prepare_runtime_base.py
 
 For a fresh server, prefer `uv run ts-harness setup-server`; it includes this runtime-base preparation together with frontend installation and production build. Use `prepare-runtime-base` directly only when rebuilding the compute dependency base independently.
 
-This creates the git-ignored `.runtime-base/` environment and cache. The script detects the host OS, CPU architecture, and available NVIDIA CUDA, AMD ROCm, or Apple MPS acceleration; asks `uv` to select the best supported PyTorch backend; resolves compatible versions of `torch`, `numpy`, and `scikit-learn`; verifies the imports and actual PyTorch device backend; and records the exact result in `.runtime-base/runtime-base.json`. Native `uv` progress is displayed while packages are resolved and installed. Set `TS_HARNESS_TORCH_BACKEND` (for example, `cpu` or `cu128`) only when automatic selection must be overridden.
+This creates the git-ignored `.runtime-base/` environment and cache. The script detects the host OS, CPU architecture, and available NVIDIA CUDA, AMD ROCm, or Apple MPS acceleration; asks `uv` to select the best supported PyTorch backend; resolves compatible versions of PyTorch and the full default workspace dependency set; verifies the imports and actual PyTorch device backend; and records the exact result in `.runtime-base/runtime-base.json`. Native `uv` progress is displayed while packages are resolved and installed. Set `TS_HARNESS_TORCH_BACKEND` (for example, `cpu` or `cu128`) only when automatic selection must be overridden.
 
 New workspaces pin the verified versions and reuse `.runtime-base/uv-cache`. Package files are materialized through uv's hard-link or copy-on-write cache modes where the filesystem supports them, avoiding repeated downloads and builds while preserving an independent workspace `.venv`, `uv.lock`, and `uv add` workflow. Re-run the command after changing the host GPU/driver, Python version, or when intentionally upgrading the shared package set. Existing workspace projects are not rewritten automatically.
 

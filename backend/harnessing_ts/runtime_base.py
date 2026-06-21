@@ -13,8 +13,25 @@ from harnessing_ts.paths import project_root
 from harnessing_ts.state.jsonl import write_json
 
 
+def _requirement_name(requirement: str) -> str:
+    for separator in ("==", ">=", "<=", "~=", "!=", ">", "<", "["):
+        if separator in requirement:
+            return requirement.split(separator, 1)[0]
+    return requirement
+
+
 DEFAULT_PYTHON_VERSION = "3.11"
-RUNTIME_BASE_PACKAGES = ("torch", "numpy", "scikit-learn")
+DEFAULT_WORKSPACE_DEPENDENCIES = (
+    "python-docx>=1.1.2",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scipy>=1.12",
+    "scikit-learn>=1.4",
+    "matplotlib>=3.8",
+    "sktime>=0.35",
+)
+RUNTIME_BASE_DEPENDENCIES = ("torch", *DEFAULT_WORKSPACE_DEPENDENCIES)
+RUNTIME_BASE_PACKAGES = tuple(_requirement_name(dependency) for dependency in RUNTIME_BASE_DEPENDENCIES)
 STATUS_FILE = "runtime-base.json"
 
 
@@ -61,9 +78,9 @@ def prepare_runtime_base(
         _preferred_link_mode(),
         "--torch-backend",
         env["UV_TORCH_BACKEND"],
-        *RUNTIME_BASE_PACKAGES,
+        *RUNTIME_BASE_DEPENDENCIES,
     ]
-    _report(reporter, "[3/4] Resolving and installing torch, numpy, and scikit-learn with uv.")
+    _report(reporter, "[3/4] Resolving and installing torch plus the full workspace dependency set with uv.")
     _report(reporter, "      PyTorch backend selection: auto (GPU preferred when supported).")
     try:
         result = _run_base_command(venv_command, root, env, 300)
@@ -195,7 +212,7 @@ def apply_runtime_base_env(env: dict[str, str], base: dict[str, Any] | None) -> 
 
 
 def _write_base_project(root: Path, python_version: str) -> None:
-    dependencies = "\n".join(f'  "{name}",' for name in RUNTIME_BASE_PACKAGES)
+    dependencies = "\n".join(f'  "{dependency}",' for dependency in RUNTIME_BASE_DEPENDENCIES)
     (root / "pyproject.toml").write_text(f'''[project]
 name = "harnessing-ts-runtime-base"
 version = "0.1.0"
@@ -229,13 +246,15 @@ def _preferred_link_mode() -> str:
 
 def _verify_base(root: Path) -> dict[str, Any]:
     python = root / ".venv" / _python_relative_path()
+    package_names = json.dumps(RUNTIME_BASE_PACKAGES)
     script = '''
 import importlib.metadata as metadata
 import json
 try:
     import torch
+    package_names = __PACKAGE_NAMES__
     payload = {
-        "packages": {name: metadata.version(name) for name in ("torch", "numpy", "scikit-learn")},
+        "packages": {name: metadata.version(name) for name in package_names},
         "torch": {
             "cudaAvailable": bool(torch.cuda.is_available()),
             "cudaVersion": torch.version.cuda,
@@ -247,7 +266,7 @@ try:
 except Exception as exc:
     payload = {"error": f"{type(exc).__name__}: {exc}"}
 print(json.dumps(payload))
-'''
+'''.replace("__PACKAGE_NAMES__", package_names)
     try:
         result = subprocess.run([str(python), "-c", script], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -313,7 +332,7 @@ def _ready_summary(status: dict[str, Any]) -> str:
     return (
         "Runtime base ready: "
         f"torch {packages['torch']} ({backend}), numpy {packages['numpy']}, "
-        f"scikit-learn {packages['scikit-learn']}."
+        f"scikit-learn {packages['scikit-learn']}, sktime {packages['sktime']}."
     )
 
 

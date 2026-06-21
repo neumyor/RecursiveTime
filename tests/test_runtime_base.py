@@ -29,9 +29,23 @@ def test_prepare_runtime_base_records_resolved_packages_and_backend(tmp_path, mo
             (tmp_path / ".venv" / "bin" / "python").touch()
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if command[:3] == ["/usr/bin/uv", "pip", "install"]:
+            assert "sktime>=0.35" in command
+            assert "pandas>=2.2" in command
+            assert "scipy>=1.12" in command
+            assert "matplotlib>=3.8" in command
+            assert "python-docx>=1.1.2" in command
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         payload = {
-            "packages": {"torch": "2.8.0", "numpy": "2.2.6", "scikit-learn": "1.7.1"},
+            "packages": {
+                "torch": "2.8.0",
+                "python-docx": "1.2.0",
+                "numpy": "2.2.6",
+                "pandas": "2.3.1",
+                "scipy": "1.16.1",
+                "scikit-learn": "1.7.1",
+                "matplotlib": "3.10.5",
+                "sktime": "0.39.0",
+            },
             "torch": {"cudaAvailable": True, "cudaVersion": "12.8", "hipVersion": None, "mpsAvailable": False, "deviceCount": 1},
         }
         return SimpleNamespace(returncode=0, stdout=json.dumps(payload) + "\n", stderr="")
@@ -47,6 +61,7 @@ def test_prepare_runtime_base_records_resolved_packages_and_backend(tmp_path, mo
     assert "--torch-backend auto" in status["commands"][1]
     assert status["torchBackend"] == "cu128"
     assert (tmp_path / "uv-cache").as_posix() == status["cache"]
+    assert status["packages"]["sktime"] == "0.39.0"
 
 
 def test_new_workspace_pins_and_reuses_runtime_base(tmp_path, monkeypatch):
@@ -55,7 +70,16 @@ def test_new_workspace_pins_and_reuses_runtime_base(tmp_path, monkeypatch):
     base = {
         "root": str(base_root),
         "cache": str(base_root / "uv-cache"),
-        "packages": {"torch": "2.8.0", "numpy": "2.2.6", "scikit-learn": "1.7.1"},
+        "packages": {
+            "torch": "2.8.0",
+            "python-docx": "1.2.0",
+            "numpy": "2.2.6",
+            "pandas": "2.3.1",
+            "scipy": "1.16.1",
+            "scikit-learn": "1.7.1",
+            "matplotlib": "3.10.5",
+            "sktime": "0.39.0",
+        },
         "torchBackend": "cu128",
     }
     workspace.mkdir()
@@ -65,10 +89,20 @@ def test_new_workspace_pins_and_reuses_runtime_base(tmp_path, monkeypatch):
     pyproject = (workspace / "pyproject.toml").read_text(encoding="utf-8")
     parsed = tomllib.loads(pyproject)
     assert '"torch==2.8.0"' in pyproject
+    assert '"python-docx==1.2.0"' in pyproject
     assert '"numpy==2.2.6"' in pyproject
+    assert '"pandas==2.3.1"' in pyproject
+    assert '"scipy==1.16.1"' in pyproject
     assert '"scikit-learn==1.7.1"' in pyproject
+    assert '"matplotlib==3.10.5"' in pyproject
+    assert '"sktime==0.39.0"' in pyproject
+    assert '"python-docx>=1.1.2"' not in pyproject
     assert '"numpy>=1.26"' not in pyproject
+    assert '"pandas>=2.2"' not in pyproject
+    assert '"scipy>=1.12"' not in pyproject
     assert '"scikit-learn>=1.4"' not in pyproject
+    assert '"matplotlib>=3.8"' not in pyproject
+    assert '"sktime>=0.35"' not in pyproject
     assert 'url = "https://download.pytorch.org/whl/cu128"' in pyproject
     assert parsed["tool"]["uv"]["sources"]["torch"]["index"] == "pytorch-cu128"
 
@@ -88,7 +122,16 @@ def test_runtime_base_is_rejected_for_wrong_python_or_machine(tmp_path, monkeypa
         "venv": str(tmp_path / ".venv"),
         "pythonVersion": "3.11",
         "machine": _machine(),
-        "packages": {"torch": "2.8.0", "numpy": "2.2.6", "scikit-learn": "1.7.1"},
+        "packages": {
+            "torch": "2.8.0",
+            "python-docx": "1.2.0",
+            "numpy": "2.2.6",
+            "pandas": "2.3.1",
+            "scipy": "1.16.1",
+            "scikit-learn": "1.7.1",
+            "matplotlib": "3.10.5",
+            "sktime": "0.39.0",
+        },
     }
     (tmp_path / runtime_base.STATUS_FILE).write_text(json.dumps(status), encoding="utf-8")
     monkeypatch.setattr(runtime_base, "detect_machine", _machine)
