@@ -262,7 +262,7 @@ class HarnessOrchestrator:
         node = self.active_node_session
         success = args.get("success", True)
         goal_met = args.get("goalMet")
-        next_node_specified = "nextNode" in args
+        next_node_specified = self._is_next_node_specified(args)
         next_node = self._normalize_next_node(args.get("nextNode"))
         loop_decision = self._normalize_loop_decision(args.get("loopDecision"))
         output_paths = list(args.get("outputPaths") or [])
@@ -1154,6 +1154,14 @@ class HarnessOrchestrator:
 
     def _next_node_after_completion(self, latest: NodeSession) -> NodeType | None:
         return self.node_state.next_node_after_completion(latest)
+
+    def _is_next_node_specified(self, args: dict[str, Any]) -> bool:
+        if "nextNode" not in args:
+            return False
+        value = args.get("nextNode")
+        if value is None:
+            return False
+        return True
 
     def _normalize_next_node(self, value: Any) -> NodeType | None:
         return self.node_state.normalize_next_node(value)

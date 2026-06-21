@@ -210,6 +210,23 @@ def test_omitted_next_node_uses_node_spec_default(tmp_path) -> None:
     assert result["nextNode"] == "iterative-solving"
 
 
+def test_null_next_node_uses_node_spec_default(tmp_path) -> None:
+    orchestrator = _orchestrator(tmp_path, mode="auto")
+    node = _activate_node(orchestrator, "problem-contract")
+
+    result = asyncio.run(orchestrator.finish_node({
+        "success": True,
+        "summary": "contract complete",
+        "goalMet": False,
+        "nextNode": None,
+        "outputPaths": ["user/problem-contract.md", "user/data-spec.md"],
+    }))
+
+    persisted = orchestrator.store.read_node_session(node["id"])
+    assert persisted["nextNodeSpecified"] is False
+    assert result["nextNode"] == "iterative-solving"
+
+
 def test_explicit_none_next_node_stops_successful_ordinary_node(tmp_path) -> None:
     orchestrator = _orchestrator(tmp_path, mode="auto")
     node = _activate_node(orchestrator, "problem-contract")
