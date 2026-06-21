@@ -17,6 +17,7 @@ from harnessing_ts.api.payloads import build_bootstrap_payload, build_live_paylo
 from harnessing_ts.api.realtime import RealtimeEvent, RealtimeEventBroker
 from harnessing_ts.orchestrator import HarnessOrchestrator
 from harnessing_ts.paths import default_workspace_path, frontend_root
+from harnessing_ts.variants import resolve_variant
 
 
 class SendRequest(BaseModel):
@@ -611,6 +612,8 @@ def main() -> None:
             print(f"LAN access URL: http://{lan_host}:{port}")
     print(f"Workspace: {default_workspace_path()}")
     print(f"Control mode: {os.getenv('TS_HARNESS_CONTROL_MODE', 'auto')}")
+    variant = resolve_variant()
+    print(f"Ablation variant: {variant.id} · {variant.name}")
     if os.getenv("TS_HARNESS_DRY_RUN") == "true":
         print("Dry-run mode enabled")
     if os.getenv("TS_HARNESS_DEBUG") == "true":

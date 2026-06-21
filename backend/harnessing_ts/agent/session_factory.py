@@ -15,6 +15,7 @@ from harnessing_ts.schema import NodeSession, NodeType, Part
 from harnessing_ts.settings.llm import read_effective_llm_config, build_sdk_invocation_config
 from harnessing_ts.state.message_log import MessageLog
 from harnessing_ts.tools.compose_tools import build_main_allowed_tools, build_node_allowed_tools
+from harnessing_ts.variants import AblationVariant, get_variant
 
 
 def build_main_runner(
@@ -22,10 +23,12 @@ def build_main_runner(
     workspace_path: Path,
     locale: str,
     log_path: Path,
-    enter_node: Callable[[dict[str, Any]], Any],
+    enter_node: Callable[[dict[str, Any]], Any] | None,
     query_knowledge: Callable[[dict[str, Any]], Any] | None,
+    variant: AblationVariant | None = None,
     on_part: Callable[[Part], None] | None = None,
 ) -> SdkRunner:
+    variant = variant or get_variant("V0")
     ctx = PromptContext(str(workspace_path), locale)
     sdk_config = build_sdk_invocation_config(read_effective_llm_config(workspace_path))
     mcp_server = create_harness_mcp_server(
@@ -34,12 +37,12 @@ def build_main_runner(
         query_knowledge=query_knowledge,
     )
     if mcp_server is None:
-        raise RuntimeError("Claude Code SDK MCP server is required for node control but could not be created.")
+        raise RuntimeError("Claude Code SDK Harness MCP server could not be created.")
     return SdkRunner(SdkRunnerConfig(
         cwd=workspace_path,
-        system_prompt=build_main_system_prompt(ctx),
+        system_prompt=build_main_system_prompt(ctx, variant),
         attachment_text=None,
-        allowed_tools=build_main_allowed_tools(knowledge_graph_ready=query_knowledge is not None),
+        allowed_tools=build_main_allowed_tools(knowledge_graph_ready=query_knowledge is not None, variant=variant),
         model=sdk_config.model,
         env=sdk_config.env,
         extra_args=sdk_config.extra_args,
@@ -56,13 +59,16 @@ def build_node_runner(
     node: NodeSession,
     log_path: Path,
     finish_node: Callable[[dict[str, Any]], Any],
-    query_knowledge: Callable[[dict[str, Any]], Any],
+    query_knowledge: Callable[[dict[str, Any]], Any] | None,
     record_artifact: Callable[[dict[str, Any]], Any],
     record_run: Callable[[dict[str, Any]], Any],
     get_runtime_settings: Callable[[], Any],
+    sample_random_candidates: Callable[[dict[str, Any]], Any] | None = None,
     on_session_id: Callable[[str], None],
     on_part: Callable[[Part], None] | None = None,
+    variant: AblationVariant | None = None,
 ) -> SdkRunner:
+    variant = variant or get_variant("V0")
     ctx = PromptContext(str(workspace_path), locale)
     sdk_config = build_sdk_invocation_config(read_effective_llm_config(workspace_path))
     node_type: NodeType = node["nodeType"]
@@ -73,14 +79,15 @@ def build_node_runner(
         record_artifact=record_artifact,
         record_run=record_run,
         get_runtime_settings=get_runtime_settings,
+        sample_random_candidates=sample_random_candidates,
     )
     if mcp_server is None:
         raise RuntimeError("Claude Code SDK MCP server is required for node control but could not be created.")
     return SdkRunner(SdkRunnerConfig(
         cwd=workspace_path,
-        system_prompt=build_node_system_prompt(node_type, ctx),
+        system_prompt=build_node_system_prompt(node_type, ctx, variant),
         attachment_text=build_node_attachment(node_type, node.get("inputSummary")),
-        allowed_tools=build_node_allowed_tools(node_type),
+        allowed_tools=build_node_allowed_tools(node_type, variant=variant),
         model=sdk_config.model,
         env=sdk_config.env,
         extra_args=sdk_config.extra_args,

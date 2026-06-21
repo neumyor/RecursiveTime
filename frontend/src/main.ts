@@ -144,6 +144,8 @@ app.innerHTML = `
         <dd id="statusText">Loading</dd>
         <dt>Mode</dt>
         <dd id="modeText">-</dd>
+        <dt>Variant</dt>
+        <dd id="variantText">-</dd>
         <dt>Model</dt>
         <dd id="modelText">-</dd>
         <dt>Runtime</dt>
@@ -449,6 +451,7 @@ const els = {
   rightRailToggle: query<HTMLButtonElement>('#rightRailToggle'),
   statusText: query('#statusText'),
   modeText: query('#modeText'),
+  variantText: query('#variantText'),
   modelText: query('#modelText'),
   runtimeUvText: query('#runtimeUvText'),
   pendingControlPanel: query<HTMLElement>('#pendingControlPanel'),
@@ -834,6 +837,7 @@ function render() {
   const activeNode = ws.activeNode;
   setHtmlIfChanged(els.statusText, statusPill(activeNode ? `Active: ${activeNode}` : 'Ready', activeNode ? 'active' : 'ready'));
   els.modeText.textContent = data.dryRun ? `${ws.controlMode || ws.mode} / dry-run` : (ws.controlMode || ws.mode || '-');
+  setHtmlIfChanged(els.variantText, variantPill(data.variant));
   els.modelText.textContent = data.llmConfig?.config?.model || 'sdk-default';
   setHtmlIfChanged(els.runtimeUvText, runtimePill(data.runtime?.workspaceUv));
 
@@ -1176,6 +1180,7 @@ function renderSettings(data: Bootstrap) {
   const ws = data.state || {};
 
   const workspaceRows = [
+    { label: 'Variant', value: variantPill(data.variant) },
     { label: 'Active node', value: ws.activeNode
       ? `<span class="settings-readout-pill active">${escapeHtml(ws.activeNode)}</span>`
       : `<span class="settings-readout-pill">—</span>` },
@@ -1204,7 +1209,7 @@ function renderSettings(data: Bootstrap) {
           </div>
         `).join('')}
       </div>
-      <p class="settings-section-foot">Read-only at runtime. Control mode, dry run, and debug actions are server launch env vars (<code>TS_HARNESS_CONTROL_MODE</code> / <code>TS_HARNESS_DRY_RUN</code> / <code>TS_HARNESS_DEBUG</code>); restart the server to change them.</p>
+      <p class="settings-section-foot">Read-only at runtime. Variant, control mode, dry run, and debug actions are server launch env vars (<code>TS_HARNESS_VARIANT</code> / <code>TS_HARNESS_CONTROL_MODE</code> / <code>TS_HARNESS_DRY_RUN</code> / <code>TS_HARNESS_DEBUG</code>); restart the server to change them.</p>
     </div>
 
     <div class="settings-section">
@@ -1831,11 +1836,12 @@ function renderKnowledgeGraphBuilder(data: Bootstrap) {
   const build = data.knowledgeGraphBuild || {};
   const config = data.knowledgeGraphLlmConfig?.config || {};
   const running = Boolean(data.runtime?.knowledgeGraphRunning || build.running);
+  const knowledgeEnabled = data.variant?.capabilities?.knowledgeGraph !== false;
   const canContinue = !running && ['paused', 'failed'].includes(String(build.status || ''));
   els.graphBuildStatus.innerHTML = `
     <span class="mini-pill ${build.status === 'failed' ? 'failed' : running ? 'active' : build.status === 'completed' ? 'ready' : 'pending'}">
       ${running ? '<span data-icon="Loader2"></span>' : ''}
-      ${escapeHtml(running ? 'running' : build.status || 'idle')}
+      ${escapeHtml(!knowledgeEnabled ? `disabled · ${data.variant?.id || 'variant'}` : running ? 'running' : build.status || 'idle')}
     </span>
     <span class="meta">${escapeHtml(build.message || '')}</span>
   `;
@@ -1843,11 +1849,11 @@ function renderKnowledgeGraphBuilder(data: Bootstrap) {
   if (els.graphProtocol.value !== (config.protocol || '')) els.graphProtocol.value = config.protocol || '';
   if (els.graphModelInput.value !== (config.model || '')) els.graphModelInput.value = config.model || '';
   if (els.graphBaseUrlInput.value !== (config.baseUrl || '')) els.graphBaseUrlInput.value = config.baseUrl || '';
-  els.buildGraphBtn.disabled = running;
-  els.continueGraphBtn.disabled = !canContinue;
-  els.pauseGraphBtn.disabled = !running;
-  els.graphExtractionDepthInput.disabled = running;
-  els.saveGraphLlmBtn.disabled = false;
+  els.buildGraphBtn.disabled = running || !knowledgeEnabled;
+  els.continueGraphBtn.disabled = !canContinue || !knowledgeEnabled;
+  els.pauseGraphBtn.disabled = !running || !knowledgeEnabled;
+  els.graphExtractionDepthInput.disabled = running || !knowledgeEnabled;
+  els.saveGraphLlmBtn.disabled = !knowledgeEnabled;
 }
 
 function renderKnowledgeWorkbench(data: Bootstrap) {
@@ -2465,6 +2471,13 @@ function emptyBootstrap(): Bootstrap {
     fileTree: null,
     runtime: { running: false, workspaceUv: null },
   };
+}
+
+function variantPill(variant: JsonMap | null | undefined) {
+  if (!variant?.id) return '<span class="mini-pill pending">-</span>';
+  const id = String(variant.id).toUpperCase();
+  const label = `${id} · ${variant.name || 'Unknown variant'}`;
+  return `<span class="mini-pill variant-pill variant-${escapeHtml(id.toLowerCase())}" title="${escapeHtml(variant.description || label)}">${escapeHtml(label)}</span>`;
 }
 
 function formatRuntimeUv(runtimeUv: JsonMap | null | undefined) {

@@ -7,6 +7,7 @@ from typing import Any
 from harnessing_ts.config.markdown import node_document, read_prompt_text
 from harnessing_ts.schema import NODE_SPECS, NodeType, get_node_spec
 from harnessing_ts.tools.compose_tools import build_node_native_tools
+from harnessing_ts.variants import AblationVariant, get_variant
 
 
 @dataclass(frozen=True)
@@ -26,55 +27,91 @@ def _workspace_static(ctx: PromptContext) -> str:
     })
 
 
-def _node_specs_guide() -> str:
+def _node_specs_guide(variant: AblationVariant) -> str:
     chunks: list[str] = []
     for spec in NODE_SPECS:
         lines = [
             f"## {spec.type}",
-            f"Purpose: {spec.purpose}",
-            f"Requires: {', '.join(spec.requires)}",
-            f"Produces: {', '.join(spec.produces)}",
+            f"Purpose: {variant.node_purpose(spec.type, spec.purpose)}",
+            f"Requires: {', '.join(variant.node_requires(spec.type, spec.requires))}",
+            f"Produces: {', '.join(variant.node_produces(spec.type, spec.produces))}",
             f"Next: {spec.next}" if spec.next else "Next: none",
         ]
         chunks.append("\n".join([line for line in lines if line]))
     return "\n\n".join(chunks)
 
 
-def build_main_system_prompt(ctx: PromptContext) -> str:
-    return "\n\n---\n\n".join([
+def build_main_system_prompt(ctx: PromptContext, variant: AblationVariant | None = None) -> str:
+    variant = variant or get_variant("V0")
+    if not variant.node_chain:
+        return "\n\n---\n\n".join([
+            _role_kernel(),
+            _workspace_static(ctx),
+            variant.prompt_overlay("main"),
+        ])
+    chunks = [
         _role_kernel(),
         _workspace_static(ctx),
         read_prompt_text("main/role.md"),
         read_prompt_text("main/control-protocol.md"),
-        "## Node Chain\n" + _node_specs_guide(),
-    ])
+        "## Node Chain\n" + _node_specs_guide(variant),
+    ]
+    if variant.id != "V0":
+        chunks.append(f"## Active Ablation Variant\n\n{variant.id} · {variant.name}\n\n{variant.description}")
+    return "\n\n---\n\n".join(chunks)
 
 
-def build_main_attachment(ctx: PromptContext, progress: dict[str, Any] | None = None) -> str:
+def build_main_attachment(
+    ctx: PromptContext,
+    progress: dict[str, Any] | None = None,
+    variant: AblationVariant | None = None,
+) -> str:
+    variant = variant or get_variant("V0")
+    if variant.direct_main_tool_use:
+        return "\n".join([
+            "# Workspace State Attachment",
+            f"workspace_path: {ctx.workspace_path}",
+            f"variant: {variant.id} · {variant.name}",
+            "This is a direct single-agent session. Do not create or enter HarnessingTS nodes.",
+            "",
+            "## Current Workspace Progress",
+            "```json",
+            json.dumps(progress or {}, ensure_ascii=False, indent=2, sort_keys=True),
+            "```",
+        ])
     return _render_template(read_prompt_text("main/attachment.md"), {
         "workspace_path": ctx.workspace_path,
         "progress_json": json.dumps(progress or {}, ensure_ascii=False, indent=2, sort_keys=True),
     })
 
 
-def build_node_system_prompt(node_type: NodeType, ctx: PromptContext) -> str:
+def build_node_system_prompt(
+    node_type: NodeType,
+    ctx: PromptContext,
+    variant: AblationVariant | None = None,
+) -> str:
+    variant = variant or get_variant("V0")
     spec = get_node_spec(node_type)
-    return "\n\n---\n\n".join([
+    chunks = [
         _role_kernel(),
         _workspace_static(ctx),
         "\n".join([
             f"## Active Node: {spec.type}",
-            f"Purpose: {spec.purpose}",
-            f"Required inputs: {', '.join(spec.requires)}",
-            f"Required outputs: {', '.join(spec.produces)}",
-            f"Native tools available in this node: {', '.join(build_node_native_tools(node_type))}",
+            f"Purpose: {variant.node_purpose(spec.type, spec.purpose)}",
+            f"Required inputs: {', '.join(variant.node_requires(spec.type, spec.requires))}",
+            f"Required outputs: {', '.join(variant.node_produces(spec.type, spec.produces))}",
+            f"Native tools available in this node: {', '.join(build_node_native_tools(node_type, variant=variant))}",
             "",
             read_prompt_text("node/execution-rules.md"),
             "",
             read_prompt_text("node/finish-protocol.md"),
         ]),
         _node_specific_guidance(node_type),
-    ])
+    ]
+    overlay = variant.prompt_overlay(node_type)
+    if overlay:
+        chunks.append(overlay)
+    return "\n\n---\n\n".join(chunks)
 
 
 def build_node_attachment(node_type: NodeType, input_summary: str | None = None) -> str:

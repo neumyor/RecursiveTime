@@ -16,6 +16,7 @@ def test_bootstrap_contract_includes_full_static_payload(tmp_path, monkeypatch) 
     assert response.status_code == 200
     payload = response.json()
     assert {
+        "variant",
         "state",
         "timeline",
         "mainParts",
@@ -38,6 +39,7 @@ def test_bootstrap_contract_includes_full_static_payload(tmp_path, monkeypatch) 
         "runtime",
     }.issubset(payload)
     assert {"running", "knowledgeGraphRunning", "chainSummaryRunning", "workspaceUv"}.issubset(payload["runtime"])
+    assert payload["variant"]["id"] == "V0"
 
 
 def test_live_contract_is_incremental_subset(tmp_path, monkeypatch) -> None:
@@ -53,6 +55,7 @@ def test_live_contract_is_incremental_subset(tmp_path, monkeypatch) -> None:
     assert "nodeSpecs" not in payload
     assert "fileTree" not in payload
     assert {
+        "variant",
         "state",
         "timeline",
         "mainParts",

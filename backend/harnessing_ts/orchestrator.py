@@ -25,6 +25,8 @@ from harnessing_ts.settings.llm import LlmConfig, mask_llm_config, read_effectiv
 from harnessing_ts.state.jsonl import clear_file
 from harnessing_ts.state.workspace_store import WorkspaceStore, now_iso
 from harnessing_ts.tools.compose_tools import build_node_native_tools
+from harnessing_ts.variants import resolve_variant
+from harnessing_ts.variants.random_search import sample_candidates
 
 
 def _main_node_snapshot(node: NodeSession | None) -> dict[str, Any] | None:
@@ -62,8 +64,9 @@ class HarnessOrchestrator:
         self.locale = locale
         self.mode = mode
         self.dry_run = dry_run
+        self.variant = resolve_variant()
         self.store = WorkspaceStore(workspace_path)
-        self.node_state = NodeStateMachine(workspace_path)
+        self.node_state = NodeStateMachine(workspace_path, self.variant)
         self.state: WorkspaceState | None = None
         self.main_runner: SdkRunner | None = None
         self._main_runner_knowledge_graph_ready: bool | None = None
@@ -74,6 +77,7 @@ class HarnessOrchestrator:
 
     def initialize(self) -> WorkspaceState:
         self.state = self.store.initialize(self.mode)
+        self._stamp_variant_state()
         return self.state
 
     def set_realtime_event_sink(self, sink: Callable[[str, dict[str, Any]], None] | None) -> None:
@@ -131,10 +135,12 @@ class HarnessOrchestrator:
         if self.dry_run:
             user_part = user_text_part(text)
             self.store.append_main_part(user_part)
-            part = system_text_part("\n".join([
-                "Dry run mode: main session was not sent to Python Claude Code SDK.",
-                "Use `start-node <nodeType>` to exercise harness state transitions without SDK.",
-            ]))
+            dry_run_lines = ["Dry run mode: main session was not sent to Python Claude Code SDK."]
+            if self.variant.node_chain:
+                dry_run_lines.append("Use `start-node <nodeType>` to exercise harness state transitions without SDK.")
+            else:
+                dry_run_lines.append(f"{self.variant.id} direct tool use requires a live SDK session.")
+            part = system_text_part("\n".join(dry_run_lines))
             self.store.append_main_part(part)
             return [user_part, part]
         await self._refresh_main_runner_for_knowledge_graph()
@@ -145,6 +151,7 @@ class HarnessOrchestrator:
             context_text=build_main_attachment(
                 PromptContext(str(self.workspace_path), self.locale),
                 self._main_progress_snapshot(),
+                self.variant,
             ),
         )
         return parts
@@ -152,6 +159,8 @@ class HarnessOrchestrator:
     async def request_enter_node(self, args: dict[str, Any]) -> dict[str, Any]:
         self._ensure_initialized()
         assert self.state
+        if not self.variant.node_chain:
+            raise RuntimeError(f"{self.variant.id} disables the HarnessingTS node chain; solve directly in the main session.")
         if self._control_mode() == "manual":
             return self._park_control_request("enter_node", args)
         node = await self.enter_node(args)
@@ -185,6 +194,18 @@ class HarnessOrchestrator:
         self._ensure_initialized()
         assert self.state
         node_type = args["nodeType"]
+        if not self.variant.node_chain:
+            raise RuntimeError(f"{self.variant.id} disables node entry.")
+        if node_type == "iterative-solving" and self.variant.max_iterations is not None:
+            prior_iterations = sum(
+                1
+                for session in self.store.list_node_sessions()
+                if session.get("nodeType") == "iterative-solving"
+            )
+            if prior_iterations >= self.variant.max_iterations:
+                raise RuntimeError(
+                    f"{self.variant.id} permits at most {self.variant.max_iterations} iterative-solving round(s)."
+                )
         if self.state["activeNode"]:
             raise RuntimeError(f"Cannot enter {node_type}; active node {self.state['activeNode']} is still running.")
         # Defensive: once the pipeline is fully complete (final-summary
@@ -330,6 +351,8 @@ class HarnessOrchestrator:
         return {"ok": True}
 
     async def request_query_knowledge(self, args: dict[str, Any]) -> dict[str, Any]:
+        if not self.variant.knowledge_graph:
+            raise RuntimeError(f"Knowledge queries are disabled by ablation variant {self.variant.id}.")
         if not self.store.is_knowledge_graph_ready():
             raise RuntimeError("Knowledge graph is not ready. Build it successfully before calling query_knowledge.")
         return await self.query_knowledge(
@@ -520,9 +543,25 @@ class HarnessOrchestrator:
         self._ensure_initialized()
         return self.store.read_runtime_status()
 
+    def get_variant(self) -> dict[str, Any]:
+        return self.variant.public_payload()
+
     def get_runtime_settings(self) -> dict[str, Any]:
         self._ensure_initialized()
         return self.store.read_runtime_settings()
+
+    def sample_random_search_candidates(self, _args: dict[str, Any] | None = None) -> dict[str, Any]:
+        if not self.variant.random_search:
+            raise RuntimeError(f"Random candidate sampling is not enabled by variant {self.variant.id}.")
+        settings = self.get_runtime_settings()
+        result = sample_candidates(int(settings["iterativeCandidateCount"]))
+        self.store.append_timeline({
+            "type": "random_candidates_sampled",
+            "timestamp": now_iso(),
+            "message": f"Sampled {result['candidateCount']} candidates with seed {result['seed']}.",
+            "payload": result,
+        })
+        return result
 
     def update_runtime_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
         self._ensure_initialized()
@@ -532,14 +571,19 @@ class HarnessOrchestrator:
 
     def get_knowledge_graph(self) -> dict[str, Any]:
         self._ensure_initialized()
+        if not self.variant.knowledge_graph:
+            return {}
         return self.store.read_knowledge_graph()
 
     def get_knowledge_base_summary(self) -> dict[str, Any]:
         self._ensure_initialized()
+        if not self.variant.knowledge_graph:
+            return {}
         return self.store.read_knowledge_base_summary()
 
     def get_knowledge_base_cards(self, kind: str, limit: int = 200) -> dict[str, Any]:
         self._ensure_initialized()
+        self._require_knowledge_variant()
         return self.store.read_knowledge_base_cards(kind, limit)
 
     def get_knowledge_graph_build_status(self) -> dict[str, Any]:
@@ -548,6 +592,8 @@ class HarnessOrchestrator:
 
     def get_knowledge_graph_parts(self) -> list[Part]:
         self._ensure_initialized()
+        if not self.variant.knowledge_graph:
+            return []
         return self.store.read_knowledge_graph_parts()
 
     def get_chain_summary(self) -> dict[str, Any]:
@@ -576,6 +622,8 @@ class HarnessOrchestrator:
         include_evidence: bool = False,
     ) -> dict[str, Any]:
         self._ensure_initialized()
+        if not self.variant.knowledge_graph:
+            raise RuntimeError(f"Knowledge queries are disabled by ablation variant {self.variant.id}.")
         if not self.store.is_knowledge_graph_ready():
             raise RuntimeError("Knowledge graph is not ready. Build it successfully before querying knowledge.")
         result = await answer_knowledge_query(
@@ -602,26 +650,32 @@ class HarnessOrchestrator:
 
     def search_knowledge_notes(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
         self._ensure_initialized()
+        self._require_knowledge_variant()
         return search_knowledge_notes(self.workspace_path, query, top_k)
 
     def search_evidence_notes(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
         self._ensure_initialized()
+        self._require_knowledge_variant()
         return search_evidence_notes(self.workspace_path, query, top_k)
 
     def search_knowledge_graph(self, query: str, relation_type: str | None = None, top_k: int = 10) -> list[dict[str, Any]]:
         self._ensure_initialized()
+        self._require_knowledge_variant()
         return search_graph(self.workspace_path, query, relation_type, top_k)
 
     def get_knowledge_neighbors(self, concept: str, depth: int = 1) -> dict[str, Any]:
         self._ensure_initialized()
+        self._require_knowledge_variant()
         return get_neighbors(self.workspace_path, concept, depth)
 
     def get_knowledge_supporting_evidence(self, note_or_edge_id: str, top_k: int = 8) -> list[dict[str, Any]]:
         self._ensure_initialized()
+        self._require_knowledge_variant()
         return get_supporting_evidence(self.workspace_path, note_or_edge_id, top_k)
 
     def suggest_knowledge_next_checks(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
         self._ensure_initialized()
+        self._require_knowledge_variant()
         return suggest_next_checks(self.workspace_path, query, top_k)
 
     def update_knowledge_graph_llm_config(self, values: dict[str, Any]) -> dict[str, Any]:
@@ -638,6 +692,8 @@ class HarnessOrchestrator:
 
     async def build_knowledge_graph(self, trigger: str = "manual", uploaded_paths: list[str] | None = None) -> dict[str, Any]:
         self._ensure_initialized()
+        if not self.variant.knowledge_graph:
+            raise RuntimeError(f"Knowledge graph building is disabled by ablation variant {self.variant.id}.")
         setattr(self, "_knowledge_graph_pause_requested", False)
         status = self.store.write_knowledge_graph_build_status({
             "running": True,
@@ -908,18 +964,21 @@ class HarnessOrchestrator:
         self.store.clear_debug_logs(scope if scope in {"all", "chat"} else "main")
         if scope in {"all", "chat"}:
             self.state = self.store.read_state()
+            self._stamp_variant_state()
             self.active_node_session = None
 
     def get_node_specs(self) -> list[dict[str, Any]]:
+        if not self.variant.node_chain:
+            return []
         return [
             {
                 "type": spec.type,
                 "phase": spec.phase,
-                "purpose": spec.purpose,
-                "requires": list(spec.requires),
-                "produces": list(spec.produces),
+                "purpose": self.variant.node_purpose(spec.type, spec.purpose),
+                "requires": self.variant.node_requires(spec.type, spec.requires),
+                "produces": self.variant.node_produces(spec.type, spec.produces),
                 "next": spec.next,
-                "nativeTools": build_node_native_tools(spec.type),
+                "nativeTools": build_node_native_tools(spec.type, variant=self.variant),
             }
             for spec in NODE_SPECS
         ]
@@ -1135,6 +1194,29 @@ class HarnessOrchestrator:
         if not self.state:
             self.initialize()
 
+    def _stamp_variant_state(self) -> None:
+        if not self.state:
+            return
+        if (
+            self.state.get("variantId") == self.variant.id
+            and self.state.get("variantName") == self.variant.name
+        ):
+            return
+        previous = self.state.get("variantId")
+        self.state["variantId"] = self.variant.id
+        self.state["variantName"] = self.variant.name
+        self.store.write_state(self.state)
+        self.store.append_timeline({
+            "type": "variant_selected",
+            "timestamp": now_iso(),
+            "message": f"{self.variant.id} · {self.variant.name}",
+            "payload": {"variant": self.variant.public_payload(), "previousVariantId": previous},
+        })
+
+    def _require_knowledge_variant(self) -> None:
+        if not self.variant.knowledge_graph:
+            raise RuntimeError(f"Knowledge graph access is disabled by ablation variant {self.variant.id}.")
+
     def _knowledge_graph_llm_config(self) -> LlmConfig:
         main = read_effective_llm_config(self.workspace_path)
         if not self.store.knowledge_graph_llm_path.exists():
@@ -1179,7 +1261,11 @@ class HarnessOrchestrator:
         recommended_action = "enter_node"
         recommended_node: NodeType | None = "problem-contract"
         reason = "No node has completed; start by establishing the problem contract."
-        if active:
+        if not self.variant.node_chain:
+            recommended_action = "direct_tool_use"
+            recommended_node = None
+            reason = f"{self.variant.id} uses one main coding-agent session and disables the node chain."
+        elif active:
             recommended_action = "active_node_in_progress"
             recommended_node = None
             reason = f"Node {active['nodeType']} is currently {active.get('status', 'active')}; do not start another node."
@@ -1215,6 +1301,7 @@ class HarnessOrchestrator:
             "user/final-solution.md",
         )
         return {
+            "variant": self.variant.public_payload(),
             "workspaceId": state.get("workspaceId"),
             "controlMode": state.get("controlMode"),
             "pendingControl": _main_control_snapshot(state.get("pendingControl")),
@@ -1224,7 +1311,7 @@ class HarnessOrchestrator:
             "pipelineComplete": self.node_state.is_pipeline_complete(state),
             "latestNodeSession": _main_node_snapshot(latest),
             "anchorArtifacts": {path: (self.workspace_path / path).exists() for path in anchor_paths},
-            "knowledgeGraphReady": self.store.is_knowledge_graph_ready(),
+            "knowledgeGraphReady": self.variant.knowledge_graph and self.store.is_knowledge_graph_ready(),
             "recommendedAction": recommended_action,
             "recommendedNode": recommended_node,
             "routingReason": reason,
@@ -1233,13 +1320,14 @@ class HarnessOrchestrator:
     def _ensure_main_runner(self) -> None:
         if self.main_runner:
             return
-        knowledge_graph_ready = self.store.is_knowledge_graph_ready()
+        knowledge_graph_ready = self.variant.knowledge_graph and self.store.is_knowledge_graph_ready()
         self.main_runner = build_main_runner(
             workspace_path=self.workspace_path,
             locale=self.locale,
             log_path=self.store.main_log_path,
-            enter_node=self.request_enter_node,
+            enter_node=self.request_enter_node if self.variant.node_chain else None,
             query_knowledge=self.request_query_knowledge if knowledge_graph_ready else None,
+            variant=self.variant,
             on_part=self._emit_main_parts,
         )
         self._main_runner_knowledge_graph_ready = knowledge_graph_ready
@@ -1247,7 +1335,7 @@ class HarnessOrchestrator:
     async def _refresh_main_runner_for_knowledge_graph(self) -> None:
         if not self.main_runner:
             return
-        current = self.store.is_knowledge_graph_ready()
+        current = self.variant.knowledge_graph and self.store.is_knowledge_graph_ready()
         if self._main_runner_knowledge_graph_ready == current:
             return
         await self._close_main_runner(
@@ -1269,10 +1357,12 @@ class HarnessOrchestrator:
             node=node,
             log_path=self.store.node_log_path(node_id),
             finish_node=lambda args: self.request_finish_node_for_node(args, node_id),
-            query_knowledge=self.request_query_knowledge,
+            query_knowledge=self.request_query_knowledge if self.variant.knowledge_graph else None,
             record_artifact=lambda args: self.record_artifact_for_node(args, node_id, node_type),
             record_run=lambda args: self.record_run_for_node(args, node_id, node_type),
             get_runtime_settings=self.get_runtime_settings,
+            sample_random_candidates=self.sample_random_search_candidates if self.variant.random_search else None,
             on_session_id=on_session_id,
             on_part=lambda part: self._emit_node_parts(node_id, part),
+            variant=self.variant,
         )

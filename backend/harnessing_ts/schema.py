@@ -52,6 +52,8 @@ class WorkspaceState(TypedDict):
     contractConfirmed: bool
     finalSummaryConfirmed: bool
     runtimeSettings: "RuntimeSettings"
+    variantId: str
+    variantName: str
 
 
 class RuntimeSettings(TypedDict):

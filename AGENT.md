@@ -10,8 +10,8 @@
 - CLI 子命令、参数、flag 增删（`backend/harnessing_ts/cli.py`）
 - MCP 工具集（`backend/harnessing_ts/mcp/server.py`）增删、schema 变更
 - node native 工具白名单（`backend/harnessing_ts/config/nodes/<node>/native-tools.md`）
-- 关键 prompt 模板（`backend/harnessing_ts/config/prompts/`）
-- 控制模式（`TS_HARNESS_CONTROL_MODE`）、dry-run / debug / max-turns / workspace 等环境变量
+- 关键 prompt 模板（`backend/harnessing_ts/config/prompts/`、`backend/harnessing_ts/variants/prompts/`）
+- 控制模式（`TS_HARNESS_CONTROL_MODE`）、消融变体（`TS_HARNESS_VARIANT`）、dry-run / debug / max-turns / workspace 等环境变量
 - LLM 配置字段（`backend/harnessing_ts/settings/llm.py`、`config.llm.example.json`）
 - 运行时记录 / 工作区布局 / `.gitignore` 变化
 - 新增/废弃的运行命令、启动入口、Web UI 端口
@@ -92,6 +92,14 @@ TS_HARNESS_DRY_RUN=true uv run ts-harness-server
 TS_HARNESS_DEBUG=true uv run ts-harness-server
 ```
 
+消融实验通过启动环境变量选择，默认 `V0`：
+
+```bash
+TS_HARNESS_VARIANT=V4 uv run ts-harness-server
+```
+
+变体定义、V2 固定随机目录和独立 prompt overlay 位于 `backend/harnessing_ts/variants/`。新增或修改消融行为时优先保持差异在该目录内，并通过 capability、工具权限和后端契约实施，不要只依赖 prompt 声明。变体只在进程启动时解析，不得新增运行时切换 API；不同实验应使用不同 `TS_HARNESS_WORKSPACE`。
+
 ## LLM 配置
 
 默认使用 Claude Code SDK 的本机登录态。如果运行时显示 `not login`，可以改用手动 API 配置。
@@ -168,12 +176,16 @@ uv run ts-harness training-template
 - `backend/harnessing_ts/server.py`：FastAPI 装配入口，负责路由注册、后台 task 启停和静态前端托管；不要在这里新增业务规则。
 - `backend/harnessing_ts/api/payloads.py`：`/api/bootstrap`、`/api/live` 等前端聚合响应的组装层，负责稳定 HTTP contract。
 - `backend/harnessing_ts/orchestrator.py`：应用编排 facade，协调主会话、node session、workspace store、知识服务和 runner 生命周期。
-- `backend/harnessing_ts/node_state.py`：node chain 状态机、`loopDecision` / `nextNode` 校验、pipeline 完成判断、iterative-solving 输出路径约束。
+- `backend/harnessing_ts/node_state.py`：node chain 状态机、`loopDecision` / `nextNode` 校验、pipeline 完成判断、variant-aware iterative-solving 输出路径约束和 V6 one-shot 强制停止。
+- `backend/harnessing_ts/variants/profiles.py`：V0-V6 profile、capability、节点 purpose/input/output override 和 overlay 路由的单一事实源。
+- `backend/harnessing_ts/variants/random_search.py`：V2 固定方法/参数目录和带 seed 的后端随机候选 sampler。
+- `backend/harnessing_ts/variants/prompts/`：V1-V6 独立 prompt overlay；V0 不应依赖 overlay，保持基础系统行为不变。
 - `backend/harnessing_ts/agent/sdk_runner.py`：Claude Code SDK client wrapper，处理消息收发、工具调用/结果合并、SDK session id、interrupt/close 和 SDK 异常自恢复。
 - `backend/harnessing_ts/agent/session_factory.py`：主会话和 node 会话的 prompt、allowed tools、MCP server、LLM invocation config 组装。
-- `backend/harnessing_ts/mcp/server.py`：MCP tool schema 和 callback 绑定；只暴露治理、审计和知识库确定性工具。
+- `backend/harnessing_ts/mcp/server.py`：MCP tool schema 和 callback 绑定；暴露治理、审计、V2 random sampler 和知识库确定性工具。
 - `backend/harnessing_ts/state/workspace_store.py`：workspace 文件/JSON/JSONL repository facade，保留读写状态、日志、运行记录、上传、reset 等外部 API。
 - `backend/harnessing_ts/state/workspace_layout.py`：workspace 目录布局、内置 `tools/read_docx.py`、DOCX reference 文本派生。
+- `backend/harnessing_ts/runtime_base.py`：项目级 torch/numpy/scikit-learn 基础环境、硬件探测、uv backend 选择、验证和共享 cache metadata。
 - `backend/harnessing_ts/knowledge_graph.py`：文件型知识库表、确定性工具、graph view/search/cards、builder/reasoner 调用逻辑。
 - `backend/harnessing_ts/knowledge_prompts.py`：Knowledge Builder / Reasoning Agent prompt 文本与知识图谱构建请求文本。
 - `backend/harnessing_ts/chain_summary.py`：独立 chain builder agent，读取 runtime workspace 的 logs/reports/runs/tools/user 工件，输出结构化思维链总结和 metric series。
@@ -194,14 +206,16 @@ uv run ts-harness training-template
   - `feat(frontend): incremental live rendering to preserve scroll positions`
   - `fix(backend): correct loopDecision validation for iterative-solving`
   - `docs(architecture): add MCP boundary design notes`
-- 提交前确保代码通过编译/语法检查：
+- 提交前确保完整验证通过：
   - 后端：`uv run python -m compileall backend/harnessing_ts`
+  - 测试：`uv run pytest -q`
   - 前端：`cd frontend && bun run build`
+- `tests/conftest.py` 会自动设置 `TS_HARNESS_SKIP_WORKSPACE_UV=true`，禁止普通单元测试为每个 `tmp_path` 构建完整 `.venv`；runtime-base 必须使用 mock/fake subprocess 做单元测试。
 - **禁止提交**：API key、密码、token、`.env` 文件、运行时产物（见下方禁止提交清单）。
 - 修改前先 `git status` 确认当前分支和已有改动，避免意外覆盖他人工作。
 - 不要提交调试用的临时日志打印、注释掉的代码块、或仅用于本地测试的临时文件。
 
-## 当前 Node Chain
+## 当前 Node Chain（V0 基线）
 
 ```text
 problem-contract
@@ -214,6 +228,15 @@ problem-contract
 - `final-summary`：迭代结束才进。基于 timeline、runs、tools、problem-contract、data-spec 总结整个优化历程、最终工具使用方案、最终结果和系统边界，产出 `reports/final-summary.md` 和 `user/final-solution.md`。如果进入后发现 `user/iteration-state.md` 的 `recommend_exit` 或 contract 指向继续迭代，应标记失败并要求回到 `iterative-solving`。
 
 每个 node 都是独立 Claude Code SDK session，拥有自己的 system prompt、native-tools 白名单和 node 日志。所有节点流转（`enter_node` / `finish_node`）一律走 MCP `mcp__ts_harness__*` 工具，禁止用 JSON 文本块或 `harnessControl.action=…` 等替代控制协议。
+
+消融变体必须保持以下硬差异：
+
+- V1：不创建 node session；main runner 直接获得 Read/Write/Edit/Bash/Web 工具，不提供 node-control、knowledge 或 Task。
+- V2：必须调用后端 `mcp__ts_harness__sample_random_candidates` 获取 seed 和恰好 k 个候选；LLM 不得替换或额外重采样。
+- V3：不注入 knowledge MCP，禁止 builder 和知识 API 内容，并通过 overlay 禁止读取 reference-derived knowledge。
+- V4：从 iterative-solving 的实际 allowed-tools 中移除 `Task`，相同 k 顺序执行。
+- V5：后端不要求 case-review outputPath，prompt 禁止 bad/good-case、统计归因和 case visualization。
+- V6：后端拒绝 `loopDecision=continue` 以及任何第二次 iterative-solving entry；第一轮仍保留 V0 的完整执行要求。
 
 所有 agent 工具调用都必须在参数中包含 `intend` 字段，用一句简短的话说明本次调用的直接意图。Harness MCP 工具 schema 会强制要求该字段；Claude Code 内置工具也必须按 shared role prompt 的要求尽量携带该字段。后端日志会把同一 `toolUseId` 的工具调用和工具结果合并成一条 `tool_call` 消息；前端默认折叠展示，主标题显示 `intend`，展开后显示详细参数和返回结果。
 

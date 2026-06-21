@@ -39,6 +39,7 @@ def create_harness_mcp_server(
     record_artifact: Callable[[dict[str, Any]], Any] | None = None,
     record_run: Callable[[dict[str, Any]], Any] | None = None,
     get_runtime_settings: Callable[[], Any] | None = None,
+    sample_random_candidates: Callable[[dict[str, Any]], Any] | None = None,
     knowledge_base_tools: dict[str, Callable[[dict[str, Any]], Any]] | None = None,
 ) -> Any:
     try:
@@ -172,6 +173,17 @@ def create_harness_mcp_server(
             return text_result(await _maybe_await(get_runtime_settings()))
 
         tools.append(_get_runtime_settings)
+
+    if session_role == "node" and sample_random_candidates:
+        @tool(
+            name="sample_random_candidates",
+            description="V2-only deterministic sampler. Returns exactly the configured k random-search candidates plus the backend-generated seed and catalog version. Execute these candidates without replacing them.",
+            input_schema=_require_intend({"type": "object", "properties": {}}),
+        )
+        async def _sample_random_candidates(args: dict[str, Any]) -> dict[str, Any]:
+            return text_result(await _maybe_await(sample_random_candidates(_without_intend(args))))
+
+        tools.append(_sample_random_candidates)
 
     return create_sdk_mcp_server(name="ts_harness", version="0.1.0", tools=tools)
 

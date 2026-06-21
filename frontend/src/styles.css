@@ -747,6 +747,21 @@ details[open] > summary.panel-heading::after {
   overflow-wrap: anywhere;
 }
 
+.variant-pill {
+  min-height: 28px;
+  border: 1px solid rgba(15, 124, 124, 0.38);
+  background: linear-gradient(135deg, rgba(15, 124, 124, 0.16), rgba(48, 112, 186, 0.14));
+  color: var(--accent-dark);
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.variant-pill:not(.variant-v0) {
+  border-color: rgba(217, 119, 6, 0.48);
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.20), rgba(220, 38, 38, 0.10));
+  color: #9a4d05;
+}
+
 .mini-pill,
 .badge {
   min-height: 24px;

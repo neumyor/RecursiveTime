@@ -5,14 +5,16 @@ import re
 from typing import Any
 
 from harnessing_ts.schema import NODE_SPECS, NodeSession, NodeType, WorkspaceState, get_next_node
+from harnessing_ts.variants import AblationVariant, get_variant
 
 
 NODE_SPECS_BY_TYPE = {spec.type: spec for spec in NODE_SPECS}
 
 
 class NodeStateMachine:
-    def __init__(self, workspace_path: Path) -> None:
+    def __init__(self, workspace_path: Path, variant: AblationVariant | None = None) -> None:
         self.workspace_path = workspace_path
+        self.variant = variant or get_variant("V0")
 
     def is_pipeline_complete(self, state: WorkspaceState | None) -> bool:
         if not state:
@@ -87,6 +89,11 @@ class NodeStateMachine:
         if loop_decision == "exit" and next_node not in {None, "final-summary"}:
             raise RuntimeError("iterative-solving loopDecision=exit requires nextNode=final-summary.")
         route_decision = self.iterative_route_decision(next_node, loop_decision)
+        if success and self.variant.max_iterations == 1 and route_decision != "exit":
+            raise RuntimeError(
+                f"{self.variant.id} permits exactly one iterative-solving round; "
+                "finish with loopDecision=exit and nextNode=final-summary."
+            )
         if success and route_decision == "continue" and goal_met is True:
             raise RuntimeError("iterative-solving cannot set goalMet=true while loopDecision=continue.")
         if success:
@@ -109,10 +116,11 @@ class NodeStateMachine:
         normalized = [_workspace_relative_path(path, self.workspace_path) for path in output_paths]
         requirements = {
             "candidate review": r"^reports/iterations/.+-candidate-review\.md$",
-            "case review": r"^reports/iterations/.+-case-review\.md$",
             "iteration summary": r"^reports/iterations/.+-summary\.md$",
             "iteration state": r"^user/iteration-state\.md$",
         }
+        if self.variant.case_review:
+            requirements["case review"] = r"^reports/iterations/.+-case-review\.md$"
         missing = [
             label
             for label, pattern in requirements.items()

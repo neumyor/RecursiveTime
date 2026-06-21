@@ -19,6 +19,7 @@ def build_bootstrap_payload(
     task_running: TaskRunning,
 ) -> dict[str, Any]:
     return {
+        "variant": orchestrator.get_variant(),
         "state": orchestrator.get_state(),
         "timeline": orchestrator.get_timeline(),
         "mainParts": orchestrator.get_main_parts(),
@@ -48,6 +49,7 @@ def build_live_payload(
     task_running: TaskRunning,
 ) -> dict[str, Any]:
     return {
+        "variant": orchestrator.get_variant(),
         "state": orchestrator.get_state(),
         "timeline": orchestrator.get_timeline(),
         "mainParts": orchestrator.get_main_parts(),

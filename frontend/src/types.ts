@@ -9,6 +9,7 @@ export type FileTreeNode = {
 };
 
 export type Bootstrap = {
+  variant?: JsonMap;
   state: JsonMap;
   timeline: JsonMap[];
   mainParts: JsonMap[];

@@ -57,7 +57,16 @@ backend/harnessing_ts/orchestrator.py
   Application facade coordinating workspace state, main/node sessions, control requests, knowledge operations, and runner lifecycle.
 
 backend/harnessing_ts/node_state.py
-  Node-chain routing, loopDecision/nextNode validation, pipeline-complete guard, and iterative-solving output-path requirements.
+  Node-chain routing, loopDecision/nextNode validation, pipeline-complete guard, variant-aware iterative output requirements, and V6 one-shot enforcement.
+
+backend/harnessing_ts/variants/profiles.py
+  Startup-only V0-V6 profile registry, public capability metadata, node purpose/input/output overrides, and variant prompt routing.
+
+backend/harnessing_ts/variants/random_search.py
+  V2 fixed method/parameter catalog and seeded backend candidate sampler.
+
+backend/harnessing_ts/variants/prompts/
+  Isolated prompt overlays for V1-V6; V0 continues to use the base prompts unchanged.
 
 backend/harnessing_ts/agent/sdk_runner.py
   Claude Code SDK client wrapper, message translation, tool-call/result merging, interrupt/close behavior, and SDK failure recovery.
@@ -66,7 +75,10 @@ backend/harnessing_ts/agent/session_factory.py
   Main/node SDK runner construction: prompts, allowed tools, MCP server wiring, and LLM invocation config.
 
 backend/harnessing_ts/mcp/server.py
-  MCP governance, audit, runtime-settings, knowledge-query, and deterministic knowledge-base tool schemas.
+  MCP governance, audit, runtime-settings, V2 random-candidate sampling, knowledge-query, and deterministic knowledge-base tool schemas.
+
+backend/harnessing_ts/runtime_base.py
+  Machine-local torch/numpy/scikit-learn runtime-base preparation, hardware detection, verification, and shared uv-cache metadata.
 
 backend/harnessing_ts/state/workspace_store.py
   Workspace repository facade for JSON/JSONL state, logs, file reads, uploads, reset behavior, runtime settings, and run/artifact records.
@@ -93,9 +105,11 @@ frontend/src/types.ts
   Shared frontend DTO types.
 ```
 
-Keep new behavior inside these boundaries. Routing rules belong in `node_state.py`; SDK session construction belongs in `agent/session_factory.py`; aggregate API response shape belongs in `api/payloads.py`; workspace layout details belong in `state/workspace_layout.py`.
+Keep new behavior inside these boundaries. Routing rules belong in `node_state.py`; ablation definitions, catalogs, and prompt differences belong in `variants/`; SDK session construction belongs in `agent/session_factory.py`; aggregate API response shape belongs in `api/payloads.py`; workspace layout details belong in `state/workspace_layout.py`. Variant behavior must be enforced by capabilities, tool availability, or backend contracts where possible; prompt text alone is not a sufficient guard.
 
 The browser receives main-session, node-session, knowledge-graph-builder, chain-summary-builder, runtime-status, and workspace-file updates through the `/api/events` Server-Sent Events stream. The frontend does not poll `/api/live`: the SSE bootstrap event supplies initial/reconnect state, and keyed DOM reconciliation only inserts, moves, updates, or removes messages whose stable ids changed. `/api/live` is retained for API compatibility and diagnostics only.
+
+The following node table describes the V0 full-system baseline. V1 removes the chain entirely; V2-V6 apply the enforced differences documented under Ablation variants.
 
 | Node | Responsibility | Produces | Native tools |
 |---|---|---|---|
@@ -262,6 +276,28 @@ Claude Code SDK turn budget defaults to `80`. Override it if a node still hits `
 TS_HARNESS_MAX_TURNS=120 uv run ts-harness-server
 ```
 
+### Ablation variants
+
+Select one immutable experiment profile when starting the server. `V0` is the default, so existing launches retain the full system behavior:
+
+```bash
+TS_HARNESS_VARIANT=V3 uv run ts-harness-server
+```
+
+| ID | Profile | Enforced behavior |
+|---|---|---|
+| `V0` | Full HarnessingTS | Full node chain, knowledge graph, k candidates, independent subagents, candidate/case review, tool standardization, iteration memory, and adaptive stopping. |
+| `V1` | Single-Agent Tool Use | One main coding-agent session with read/write/bash access. Node control, knowledge graph, Task subagents, structured case review, and iteration state are unavailable. |
+| `V2` | Random Search | The backend-only `mcp__ts_harness__sample_random_candidates` tool generates a seed and exactly k unique configurations from a fixed catalog; the LLM may execute but may not replace them. |
+| `V3` | No Knowledge Graph | Removes knowledge tools, builder operations, API graph contents, and reference-derived knowledge from problem framing, candidate generation, and error attribution. |
+| `V4` | No Independent Subagents | Removes `Task` from iterative-solving; the same k candidates are implemented and reviewed sequentially by the node agent. |
+| `V5` | No Case Review | Removes case-review artifacts, bad/good-case analysis, statistical error attribution, and case visualizations. |
+| `V6` | One-Shot Harness | Keeps the full first iteration, but the backend rejects `continue` and any second iterative-solving entry. |
+
+The selected profile is parsed once during process startup, recorded in workspace state/timeline, exposed by bootstrap/live APIs, and highlighted in the left-side Workspace card. Invalid values fail fast. Use a separate `TS_HARNESS_WORKSPACE` per experiment to prevent artifacts from different variants from sharing state. V6 uses the current `iterativeCandidateCount`; set that value to the desired one-shot total candidate budget before the iteration begins when matching V0's average total candidate count.
+
+There is intentionally no runtime variant-switch API. Restart the process to select another variant. V4 removes `Task` from the actual SDK allowed-tools list, V5 removes case review from backend `finish_node` output validation, and V6 rejects both iterative `continue` and any second iterative node entry.
+
 Runtime iteration and knowledge extraction settings are stored in workspace state and can be changed from the UI:
 
 - `iterativeCandidateCount`: number of candidates proposed by each `iterative-solving` round, bounded from 1 to 8.
@@ -291,6 +327,18 @@ uv run python scripts/prepare_runtime_base.py
 This creates the git-ignored `.runtime-base/` environment and cache. The script detects the host OS, CPU architecture, and available NVIDIA CUDA, AMD ROCm, or Apple MPS acceleration; asks `uv` to select the best supported PyTorch backend; resolves compatible versions of `torch`, `numpy`, and `scikit-learn`; verifies the imports and actual PyTorch device backend; and records the exact result in `.runtime-base/runtime-base.json`. Native `uv` progress is displayed while packages are resolved and installed. Set `TS_HARNESS_TORCH_BACKEND` (for example, `cpu` or `cu128`) only when automatic selection must be overridden.
 
 New workspaces pin the verified versions and reuse `.runtime-base/uv-cache`. Package files are materialized through uv's hard-link or copy-on-write cache modes where the filesystem supports them, avoiding repeated downloads and builds while preserving an independent workspace `.venv`, `uv.lock`, and `uv add` workflow. Re-run the command after changing the host GPU/driver, Python version, or when intentionally upgrading the shared package set. Existing workspace projects are not rewritten automatically.
+
+## Verification
+
+Run backend and frontend verification before committing behavior changes:
+
+```bash
+uv run python -m compileall backend/harnessing_ts
+uv run pytest -q
+cd frontend && bun run build
+```
+
+Tests set `TS_HARNESS_SKIP_WORKSPACE_UV=true` automatically through `tests/conftest.py`; unit tests must not create a full `.venv` for every temporary workspace. Runtime-base behavior is covered with mocked uv commands in `tests/test_runtime_base.py`, while V0-V6 capabilities, contracts, prompts, and sampler behavior are covered in `tests/test_ablation_variants.py`.
 
 When a runtime workspace is initialized, HarnessingTS automatically makes that folder an isolated `uv` Python project:
 
@@ -415,11 +463,14 @@ uv run ts-harness training-template
 ## Project Layout
 
 ```text
-backend/harnessing_ts/      Python backend, CLI, Claude Code SDK runner, MCP tools
-frontend/                  Static browser UI served by FastAPI
-examples/training/         Agent Lightning rollout/training scaffold
-docs/                      Design notes and architecture docs
-_reference_project/        Upstream reference project used for comparison only
+backend/harnessing_ts/           Python backend, CLI, Claude Code SDK runner, MCP tools
+backend/harnessing_ts/variants/  V0-V6 profiles, random catalog, and prompt overlays
+scripts/prepare_runtime_base.py  Direct project runtime-base preparation entrypoint
+frontend/                        Static browser UI served by FastAPI
+tests/                           Backend contracts, variant enforcement, and API tests
+examples/training/               Agent Lightning rollout/training scaffold
+docs/                            Design notes and architecture docs
+_reference_project/              Upstream reference project used for comparison only
 ```
 
 ## Runtime Records
