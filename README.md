@@ -211,7 +211,7 @@ uv run ts-harness setup-server
 HOST=0.0.0.0 PORT=4327 TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/v0 TS_HARNESS_VARIANT=V0 uv run ts-harness-server
 ```
 
-`setup-server` runs the frozen Bun install, builds `frontend/dist`, detects the machine accelerator, and prepares the shared PyTorch plus workspace dependency runtime base. The server creates and initializes `TS_HARNESS_WORKSPACE` automatically on first start, so separate `uv sync`, frontend build, `prepare-runtime-base`, or workspace `init` commands are not required.
+`setup-server` runs the frozen Bun install, builds `frontend/dist`, detects the machine accelerator, and prepares the shared PyTorch plus workspace dependency runtime base. The server creates and initializes `TS_HARNESS_WORKSPACE` automatically on first start, so separate `uv sync`, frontend build, `prepare-runtime-base`, or workspace `init` commands are not required. During startup, the terminal prints workspace initialization progress and prints the Web UI URL only after initialization is complete.
 
 Use a different workspace path for each ablation variant. Replace `V0` and `/v0` together, for example with `V3` and `/v3`. To use a manual LLM endpoint, add `TS_HARNESS_LLM_*` variables to the launch environment or configure the workspace from the UI.
 

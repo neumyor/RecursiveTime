@@ -75,8 +75,8 @@ class HarnessOrchestrator:
         self._realtime_event_sink: Callable[[str, dict[str, Any]], None] | None = None
         self._realtime_parts_cache: dict[str, list[Part]] = {}
 
-    def initialize(self) -> WorkspaceState:
-        self.state = self.store.initialize(self.mode)
+    def initialize(self, reporter: Callable[[str], None] | None = None) -> WorkspaceState:
+        self.state = self.store.initialize(self.mode, reporter=reporter)
         self._stamp_variant_state()
         return self.state
 

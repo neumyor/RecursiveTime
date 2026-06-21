@@ -6,7 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from harnessing_ts import runtime_base
-from harnessing_ts.workspace_runtime import _ensure_pyproject, _uv_sync_env
+from harnessing_ts import workspace_runtime
+from harnessing_ts.workspace_runtime import _ensure_pyproject, _uv_sync_env, ensure_workspace_uv_environment
 
 
 def _machine() -> dict[str, str]:
@@ -140,3 +141,27 @@ def test_runtime_base_is_rejected_for_wrong_python_or_machine(tmp_path, monkeypa
     assert runtime_base.read_runtime_base(tmp_path, python_version="3.12") is None
     monkeypatch.setattr(runtime_base, "detect_machine", lambda: {**_machine(), "machine": "aarch64"})
     assert runtime_base.read_runtime_base(tmp_path, python_version="3.11") is None
+
+
+def test_workspace_uv_environment_reports_sync_progress(tmp_path, monkeypatch):
+    monkeypatch.delenv("TS_HARNESS_SKIP_WORKSPACE_UV", raising=False)
+    monkeypatch.setattr(workspace_runtime.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr(workspace_runtime, "read_runtime_base", lambda: None)
+
+    def fake_run(command, **kwargs):
+        assert command == ["/usr/bin/uv", "sync", "--python", "3.11"]
+        (tmp_path / ".venv" / "bin").mkdir(parents=True)
+        (tmp_path / ".venv" / "bin" / "python").touch()
+        (tmp_path / "uv.lock").write_text("", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(workspace_runtime.subprocess, "run", fake_run)
+    messages: list[str] = []
+
+    status = ensure_workspace_uv_environment(tmp_path, reporter=messages.append)
+
+    assert status["state"] == "ready"
+    assert any("checking" in message for message in messages)
+    assert any("created isolated uv project files" in message for message in messages)
+    assert any("running /usr/bin/uv sync --python 3.11" in message for message in messages)
+    assert any("Workspace UV setup complete" in message for message in messages)

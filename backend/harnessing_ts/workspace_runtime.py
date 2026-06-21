@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from harnessing_ts.state.jsonl import write_json
 from harnessing_ts.runtime_base import DEFAULT_WORKSPACE_DEPENDENCIES, apply_runtime_base_env, read_runtime_base, workspace_base_dependencies, workspace_torch_source
@@ -15,33 +15,41 @@ DEFAULT_PYTHON_VERSION = "3.11"
 DEFAULT_DEPENDENCIES = DEFAULT_WORKSPACE_DEPENDENCIES
 
 
-def ensure_workspace_uv_environment(root: Path) -> dict[str, Any]:
+def ensure_workspace_uv_environment(root: Path, reporter: Callable[[str], None] | None = None) -> dict[str, Any]:
     root.mkdir(parents=True, exist_ok=True)
     status_path = root / "state" / "runtime.json"
     status_path.parent.mkdir(parents=True, exist_ok=True)
 
     if os.getenv("TS_HARNESS_SKIP_WORKSPACE_UV") == "true":
+        _report(reporter, "Workspace UV setup skipped by TS_HARNESS_SKIP_WORKSPACE_UV=true.")
         status = _status(root, "skipped", "TS_HARNESS_SKIP_WORKSPACE_UV=true")
         write_json(status_path, status)
         return status
 
     uv = shutil.which("uv")
     if not uv:
+        _report(reporter, "Workspace UV setup failed: uv executable not found in PATH.")
         status = _status(root, "failed", "uv executable not found in PATH")
         write_json(status_path, status)
         return status
 
+    _report(reporter, f"Workspace UV setup: checking {root}.")
     runtime_base = read_runtime_base()
     created_pyproject = _ensure_pyproject(root, runtime_base)
+    if created_pyproject:
+        _report(reporter, "Workspace UV setup: created isolated uv project files.")
     _ensure_python_version(root)
 
     should_sync = created_pyproject or _should_sync(root)
     if not should_sync:
+        _report(reporter, "Workspace UV setup: existing .venv and uv.lock are already synchronized.")
         status = _status(root, "ready", "workspace uv environment already synchronized")
         write_json(status_path, status)
         return status
 
     command = [uv, "sync", "--python", DEFAULT_PYTHON_VERSION]
+    base_note = " using project runtime base" if runtime_base else ""
+    _report(reporter, f"Workspace UV setup: running {' '.join(command)}{base_note}.")
     result = subprocess.run(
         command,
         cwd=root,
@@ -57,8 +65,10 @@ def ensure_workspace_uv_environment(root: Path) -> dict[str, Any]:
         if runtime_base:
             message += " from project runtime base"
         status = _status(root, "ready", message)
+        _report(reporter, f"Workspace UV setup complete: {message}.")
     else:
         status = _status(root, "failed", "uv sync failed")
+        _report(reporter, "Workspace UV setup failed: uv sync failed; see state/runtime.json for details.")
     status.update({
         "command": " ".join(command),
         "returncode": result.returncode,
@@ -127,3 +137,8 @@ def _status(root: Path, state: str, message: str) -> dict[str, Any]:
         "pythonVersion": DEFAULT_PYTHON_VERSION,
         "updatedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
+
+
+def _report(reporter: Callable[[str], None] | None, message: str) -> None:
+    if reporter:
+        reporter(message)

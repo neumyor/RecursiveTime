@@ -82,7 +82,8 @@ def create_app() -> FastAPI:
     frontend = frontend_root()
     web_root = frontend / "dist" if (frontend / "dist").exists() else frontend
     orchestrator = HarnessOrchestrator(workspace_path, dry_run=dry_run, locale="zh", mode=control_mode)
-    orchestrator.initialize()
+    orchestrator.initialize(reporter=_startup_report)
+    _print_ready_urls()
     app = FastAPI(title="HarnessingTS")
     realtime = RealtimeEventBroker()
     orchestrator.set_realtime_event_sink(realtime.publish)
@@ -605,11 +606,6 @@ def _format_exception(exc: Exception) -> str:
 def main() -> None:
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "4327"))
-    print(f"HarnessingTS web UI: http://{host}:{port}")
-    if host in {"0.0.0.0", "::"}:
-        lan_host = _best_effort_lan_host()
-        if lan_host:
-            print(f"LAN access URL: http://{lan_host}:{port}")
     print(f"Workspace: {default_workspace_path()}")
     print(f"Control mode: {os.getenv('TS_HARNESS_CONTROL_MODE', 'auto')}")
     variant = resolve_variant()
@@ -618,7 +614,22 @@ def main() -> None:
         print("Dry-run mode enabled")
     if os.getenv("TS_HARNESS_DEBUG") == "true":
         print("Debug actions enabled")
+    print("Initializing backend and runtime workspace. The web UI URL will be printed when ready.")
     uvicorn.run("harnessing_ts.server:create_app", host=host, port=port, factory=True)
+
+
+def _startup_report(message: str) -> None:
+    print(message, flush=True)
+
+
+def _print_ready_urls() -> None:
+    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "4327"))
+    print(f"HarnessingTS web UI ready: http://{host}:{port}", flush=True)
+    if host in {"0.0.0.0", "::"}:
+        lan_host = _best_effort_lan_host()
+        if lan_host:
+            print(f"LAN access URL: http://{lan_host}:{port}", flush=True)
 
 
 def _best_effort_lan_host() -> str | None:

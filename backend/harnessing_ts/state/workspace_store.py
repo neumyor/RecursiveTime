@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 import shutil
 import time
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from harnessing_ts.agent.translate import collapse_tool_parts, filter_display_parts
@@ -43,10 +43,10 @@ class WorkspaceStore:
         self.node_log_dir = root / "logs" / "nodes"
         self.node_meta_dir = root / "state" / "nodes"
 
-    def initialize(self, mode: str = "manual") -> WorkspaceState:
+    def initialize(self, mode: str = "manual", reporter: Callable[[str], None] | None = None) -> WorkspaceState:
         self.ensure_layout()
         control_mode = "auto" if mode == "auto" else "manual"
-        runtime_status = ensure_workspace_uv_environment(self.root)
+        runtime_status = ensure_workspace_uv_environment(self.root, reporter=reporter)
         if runtime_status.get("state") == "failed":
             self.append_timeline({
                 "type": "workspace_runtime_failed",
