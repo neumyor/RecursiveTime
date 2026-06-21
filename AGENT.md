@@ -28,6 +28,12 @@
 uv sync
 ```
 
+首次在一台机器上创建 runtime workspace 前，准备可复用的计算依赖基础环境：
+
+```bash
+uv run ts-harness prepare-runtime-base
+```
+
 初始化工作区：
 
 ```bash

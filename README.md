@@ -280,6 +280,18 @@ TS_HARNESS_WORKSPACE=/path/to/time-series-workspace uv run ts-harness-server
 uv run ts-harness --workspace /path/to/time-series-workspace init
 ```
 
+Before creating runtime workspaces on a machine, prepare the project-level runtime base once from the HarnessingTS source root:
+
+```bash
+uv run ts-harness prepare-runtime-base
+# Equivalent direct script:
+uv run python scripts/prepare_runtime_base.py
+```
+
+This creates the git-ignored `.runtime-base/` environment and cache. The script detects the host OS, CPU architecture, and available NVIDIA CUDA, AMD ROCm, or Apple MPS acceleration; asks `uv` to select the best supported PyTorch backend; resolves compatible versions of `torch`, `numpy`, and `scikit-learn`; verifies the imports and actual PyTorch device backend; and records the exact result in `.runtime-base/runtime-base.json`. Native `uv` progress is displayed while packages are resolved and installed. Set `TS_HARNESS_TORCH_BACKEND` (for example, `cpu` or `cu128`) only when automatic selection must be overridden.
+
+New workspaces pin the verified versions and reuse `.runtime-base/uv-cache`. Package files are materialized through uv's hard-link or copy-on-write cache modes where the filesystem supports them, avoiding repeated downloads and builds while preserving an independent workspace `.venv`, `uv.lock`, and `uv add` workflow. Re-run the command after changing the host GPU/driver, Python version, or when intentionally upgrading the shared package set. Existing workspace projects are not rewritten automatically.
+
 When a runtime workspace is initialized, HarnessingTS automatically makes that folder an isolated `uv` Python project:
 
 ```text
@@ -291,7 +303,7 @@ When a runtime workspace is initialized, HarnessingTS automatically makes that f
   state/runtime.json
 ```
 
-This workspace environment is separate from the `uv` environment used to run the HarnessingTS backend. Claude Code SDK sessions run with `cwd` set to the runtime workspace, and the prompts require agents to execute Python and shell work through the workspace project:
+This workspace environment is separate from the `uv` environment used to run the HarnessingTS backend. When a prepared runtime base is available, the workspace inherits its verified package versions and shared uv cache rather than downloading or rebuilding them. Claude Code SDK sessions run with `cwd` set to the runtime workspace, and the prompts require agents to execute Python and shell work through the workspace project:
 
 ```bash
 uv run python script.py

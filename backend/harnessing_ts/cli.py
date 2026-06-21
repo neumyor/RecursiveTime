@@ -9,6 +9,7 @@ from typing import Any
 
 from harnessing_ts.orchestrator import HarnessOrchestrator
 from harnessing_ts.paths import default_workspace_path
+from harnessing_ts.runtime_base import prepare_runtime_base
 from harnessing_ts.schema import NODE_TYPES
 from harnessing_ts.settings.llm import build_sdk_invocation_config, mask_llm_config, mask_sdk_invocation_config, read_effective_llm_config
 from harnessing_ts.training.lightning import write_training_template
@@ -27,6 +28,8 @@ async def _main() -> None:
     sub.add_parser("init")
     sub.add_parser("state")
     sub.add_parser("llm-config")
+    prepare_base = sub.add_parser("prepare-runtime-base")
+    prepare_base.add_argument("--python", default="3.11")
 
     send = sub.add_parser("send")
     send.add_argument("text", nargs="+")
@@ -52,8 +55,16 @@ async def _main() -> None:
     control_mode = os.getenv("TS_HARNESS_CONTROL_MODE", "auto").strip().lower()
     if control_mode not in {"auto", "manual"}:
         control_mode = "auto"
-    orchestrator = HarnessOrchestrator(workspace, dry_run=args.dry_run, locale="zh", mode=control_mode)
     command = args.command or "init"
+
+    if command == "prepare-runtime-base":
+        status = prepare_runtime_base(python_version=args.python)
+        if status.get("state") != "ready":
+            print_json(status)
+            raise SystemExit(1)
+        return
+
+    orchestrator = HarnessOrchestrator(workspace, dry_run=args.dry_run, locale="zh", mode=control_mode)
 
     if command == "init":
         print_json(orchestrator.initialize())

@@ -4,6 +4,7 @@ dist/
 .bun-cache/
 .DS_Store
 .venv/
+.runtime-base/
 _reference_project/
 __pycache__/
 *.pyc

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from harnessing_ts.state.jsonl import write_json
+from harnessing_ts.runtime_base import apply_runtime_base_env, read_runtime_base, workspace_base_dependencies, workspace_torch_source
 
 
 DEFAULT_PYTHON_VERSION = "3.11"
@@ -38,7 +39,8 @@ def ensure_workspace_uv_environment(root: Path) -> dict[str, Any]:
         write_json(status_path, status)
         return status
 
-    created_pyproject = _ensure_pyproject(root)
+    runtime_base = read_runtime_base()
+    created_pyproject = _ensure_pyproject(root, runtime_base)
     _ensure_python_version(root)
 
     should_sync = created_pyproject or _should_sync(root)
@@ -51,7 +53,7 @@ def ensure_workspace_uv_environment(root: Path) -> dict[str, Any]:
     result = subprocess.run(
         command,
         cwd=root,
-        env=_uv_sync_env(root),
+        env=_uv_sync_env(root, runtime_base),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -59,7 +61,10 @@ def ensure_workspace_uv_environment(root: Path) -> dict[str, Any]:
         check=False,
     )
     if result.returncode == 0:
-        status = _status(root, "ready", "workspace uv environment synchronized")
+        message = "workspace uv environment synchronized"
+        if runtime_base:
+            message += " from project runtime base"
+        status = _status(root, "ready", message)
     else:
         status = _status(root, "failed", "uv sync failed")
     status.update({
@@ -68,15 +73,21 @@ def ensure_workspace_uv_environment(root: Path) -> dict[str, Any]:
         "stdout": result.stdout[-4000:],
         "stderr": result.stderr[-4000:],
     })
+    if runtime_base:
+        status["runtimeBase"] = runtime_base.get("root")
+        status["inheritedPackages"] = runtime_base.get("packages", {})
     write_json(status_path, status)
     return status
 
 
-def _ensure_pyproject(root: Path) -> bool:
+def _ensure_pyproject(root: Path, runtime_base: dict[str, Any] | None = None) -> bool:
     path = root / "pyproject.toml"
     if path.exists():
         return False
-    deps = "\n".join(f'  "{dep}",' for dep in DEFAULT_DEPENDENCIES)
+    base_dependencies = workspace_base_dependencies(runtime_base)
+    base_names = {dependency.split("==", 1)[0] for dependency in base_dependencies}
+    dependencies = [dep for dep in DEFAULT_DEPENDENCIES if dep.split(">=", 1)[0] not in base_names]
+    deps = "\n".join(f'  "{dep}",' for dep in [*base_dependencies, *dependencies])
     path.write_text(f'''[project]
 name = "harnessing-ts-workspace"
 version = "0.1.0"
@@ -88,7 +99,7 @@ dependencies = [
 
 [tool.uv]
 package = false
-''', encoding="utf-8")
+{workspace_torch_source(runtime_base)}''', encoding="utf-8")
     return True
 
 
@@ -107,11 +118,11 @@ def _should_sync(root: Path) -> bool:
     return pyproject.stat().st_mtime > lock.stat().st_mtime
 
 
-def _uv_sync_env(root: Path) -> dict[str, str]:
+def _uv_sync_env(root: Path, runtime_base: dict[str, Any] | None = None) -> dict[str, str]:
     env = dict(os.environ)
     env.pop("VIRTUAL_ENV", None)
     env["UV_PROJECT"] = str(root)
-    return env
+    return apply_runtime_base_env(env, runtime_base)
 
 
 def _status(root: Path, state: str, message: str) -> dict[str, Any]:
