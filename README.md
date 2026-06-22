@@ -259,7 +259,7 @@ Useful launch flags:
 ```bash
 TS_HARNESS_DRY_RUN=true uv run ts-harness-server
 TS_HARNESS_DEBUG=true uv run ts-harness-server
-TS_HARNESS_MAX_TURNS=120 uv run ts-harness-server
+TS_HARNESS_MAX_TURNS=300 uv run ts-harness-server
 ```
 
 ### Ablation variants

@@ -64,7 +64,7 @@ class SdkRunner:
             "system_prompt": self.config.system_prompt,
             "allowed_tools": self.config.allowed_tools,
             "disallowed_tools": self.config.disallowed_tools or build_disallowed_tools(self.config.allowed_tools),
-            "max_turns": int(os.getenv("TS_HARNESS_MAX_TURNS", "80")),
+            "max_turns": int(os.getenv("TS_HARNESS_MAX_TURNS", "300")),
             "env": self._runtime_env(),
         }
         if self.config.model:
