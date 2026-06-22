@@ -24,6 +24,7 @@ BUILDER_SYSTEM_PROMPT_BASE = """你是 HarnessingTS 的 Agent 1：Literature Kno
 不要做 RDF/OWL 或数据库导入。第一版用 CSV 表模拟数据库即可。
 不要回答在线问题；只负责构建和更新知识库。
 不要编造没有 evidence 支持的 knowledge/class/relation。证据不足时，在 notes 中写明 uncertainty，不要写成确定关系。
+完整保留来源文档中的中文和其他 Unicode 文本。中文 class label、alias、topic、description 和 quoted_fragments 可以直接写入，不要为了兼容工具而翻译、拼音化或删除；concept_type 使用工具定义的英文枚举，relation_type 优先使用稳定的英文 snake_case。
 """
 
 

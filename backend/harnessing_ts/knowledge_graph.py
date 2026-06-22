@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import subprocess
+import unicodedata
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -65,6 +66,7 @@ async def build_knowledge_graph(
     uploaded_paths: list[str] | None = None,
     on_part: Any | None = None,
     on_runner: Any | None = None,
+    on_change: Any | None = None,
 ) -> list[Part]:
     ensure_knowledge_base_layout(store.root)
     _ensure_domain_brief(store.root)
@@ -76,7 +78,7 @@ async def build_knowledge_graph(
 
     mcp_server = create_harness_mcp_server(
         session_role="knowledge_builder",
-        knowledge_base_tools=build_knowledge_base_tool_callbacks(store.root),
+        knowledge_base_tools=build_knowledge_base_tool_callbacks(store.root, on_change=on_change),
     )
     runner = SdkRunner(SdkRunnerConfig(
         cwd=workspace_path,
@@ -99,6 +101,8 @@ async def build_knowledge_graph(
             on_runner(None)
         await runner.close()
     finalize_knowledge_base(store.root)
+    if on_change:
+        on_change()
     return parts
 
 
@@ -176,8 +180,8 @@ def ensure_knowledge_base_layout(root: Path) -> None:
     _ensure_csv_header(root / "knowledge_base" / "tables" / "relations.csv", RELATION_FIELDS)
 
 
-def build_knowledge_base_tool_callbacks(root: Path) -> dict[str, Any]:
-    return {
+def build_knowledge_base_tool_callbacks(root: Path, on_change: Any | None = None) -> dict[str, Any]:
+    callbacks = {
         "scan_references": lambda args: scan_references(root, bool(args.get("include_processed", False))),
         "extract_reference_text": lambda args: extract_reference_text(root, args),
         "update_reference_brief": lambda args: update_reference_brief(
@@ -202,6 +206,26 @@ def build_knowledge_base_tool_callbacks(root: Path) -> dict[str, Any]:
         "validate_knowledge_base": lambda args: validate_knowledge_base_report(root),
         "finalize_knowledge_base": lambda args: finalize_knowledge_base(root),
     }
+    mutating_tools = {
+        "scan_references",
+        "update_reference_brief",
+        "add_evidence",
+        "add_knowledge",
+        "upsert_class",
+        "upsert_relation",
+        "finalize_knowledge_base",
+    }
+    if on_change:
+        for name in mutating_tools:
+            callback = callbacks[name]
+
+            def notify_after(args: dict[str, Any], callback: Any = callback) -> Any:
+                result = callback(args)
+                on_change()
+                return result
+
+            callbacks[name] = notify_after
+    return callbacks
 
 
 def scan_references(root: Path, include_processed: bool = False) -> dict[str, Any]:
@@ -384,7 +408,7 @@ def search_classes(root: Path, query: str, top_k: int = 5) -> list[dict[str, Any
     scored: list[tuple[int, dict[str, str]]] = []
     for row in read_class_rows(root):
         aliases = " ".join(_split_ids(row.get("aliases", "")))
-        haystack = " ".join([row.get("class_id", ""), row.get("label", ""), row.get("normalized_label", ""), row.get("concept_type", ""), aliases, row.get("description", "")]).lower()
+        haystack = _fold_text(" ".join([row.get("class_id", ""), row.get("label", ""), row.get("normalized_label", ""), row.get("concept_type", ""), aliases, row.get("description", "")]))
         score = sum(haystack.count(term) for term in terms)
         if row.get("normalized_label") == normalized_query:
             score += 100
@@ -417,7 +441,7 @@ def upsert_class(root: Path, args: dict[str, Any]) -> dict[str, Any]:
     if row is None:
         row = {
             "class_id": _next_id(classes, "class_id", "C"),
-            "label": normalized,
+            "label": label,
             "normalized_label": normalized,
             "concept_level": str(concept_level),
             "concept_type": concept_type,
@@ -428,7 +452,7 @@ def upsert_class(root: Path, args: dict[str, Any]) -> dict[str, Any]:
         }
         classes.append(row)
         created = True
-    row["label"] = row.get("label") or normalized
+    row["label"] = row.get("label") or label
     row["concept_level"] = str(min(_bounded_int(row.get("concept_level"), default=concept_level, minimum=1, maximum=4), concept_level))
     row["concept_type"] = row.get("concept_type") or concept_type
     row["description"] = _merge_text(row.get("description", ""), str(args.get("description_addition", "") or ""))
@@ -753,7 +777,7 @@ def search_knowledge_notes(root: Path, query: str, top_k: int = 5) -> list[dict[
     terms = _terms(query)
     scored: list[tuple[int, dict[str, Any]]] = []
     for row in read_knowledge_rows(root):
-        haystack = " ".join(str(row.get(key, "")) for key in ("knowledge_id", "topic", "summary", "description", "notes", "evidence_ids", "class_ids", "relation_ids")).lower()
+        haystack = _fold_text(" ".join(str(row.get(key, "")) for key in ("knowledge_id", "topic", "summary", "description", "notes", "evidence_ids", "class_ids", "relation_ids")))
         score = sum(haystack.count(term) for term in terms)
         if score:
             scored.append((score, row))
@@ -764,7 +788,7 @@ def search_evidence_notes(root: Path, query: str, top_k: int = 5) -> list[dict[s
     terms = _terms(query)
     scored: list[tuple[int, dict[str, Any]]] = []
     for row in read_evidence_rows(root):
-        haystack = " ".join(str(row.get(key, "")) for key in EVIDENCE_FIELDS).lower()
+        haystack = _fold_text(" ".join(str(row.get(key, "")) for key in EVIDENCE_FIELDS))
         score = sum(haystack.count(term) for term in terms)
         if score:
             scored.append((score, row))
@@ -773,14 +797,15 @@ def search_evidence_notes(root: Path, query: str, top_k: int = 5) -> list[dict[s
 
 def search_graph(root: Path, query: str, relation_type: str | None = None, top_k: int = 10) -> list[dict[str, Any]]:
     terms = _terms(query)
+    normalized_relation_type = _normalize_relation_type(relation_type) if relation_type else None
     matches: list[tuple[int, dict[str, Any]]] = []
     class_labels = {row.get("class_id", ""): row.get("label", "") for row in read_class_rows(root)}
     for row in read_relation_rows(root):
-        if relation_type and row.get("relation_type") != relation_type:
+        if normalized_relation_type and row.get("relation_type") != normalized_relation_type:
             continue
-        haystack = " ".join([
+        haystack = _fold_text(" ".join([
             str(row.get(key, "")) for key in RELATION_FIELDS
-        ] + [class_labels.get(row.get("source_class_id", ""), ""), class_labels.get(row.get("target_class_id", ""), "")]).lower()
+        ] + [class_labels.get(row.get("source_class_id", ""), ""), class_labels.get(row.get("target_class_id", ""), "")]))
         score = sum(1 for term in terms if term in haystack)
         if score:
             matches.append((score, row))
@@ -788,7 +813,15 @@ def search_graph(root: Path, query: str, relation_type: str | None = None, top_k
 
 
 def get_neighbors(root: Path, concept: str, depth: int = 1) -> dict[str, Any]:
-    frontier = {concept.lower()}
+    normalized_concept = _normalize_label(concept)
+    matched_class = next((
+        row for row in read_class_rows(root)
+        if row.get("class_id", "").casefold() == concept.casefold()
+        or row.get("normalized_label", "") == normalized_concept
+        or normalized_concept in {_normalize_label(alias) for alias in _split_ids(row.get("aliases", ""))}
+    ), None)
+    resolved_concept = matched_class.get("class_id", concept) if matched_class else concept
+    frontier = {resolved_concept.casefold()}
     seen = set(frontier)
     edges_out: list[dict[str, Any]] = []
     for _ in range(max(1, depth)):
@@ -804,7 +837,7 @@ def get_neighbors(root: Path, concept: str, depth: int = 1) -> dict[str, Any]:
                         seen.add(lowered)
                         next_frontier.add(lowered)
         frontier = next_frontier
-    return {"concept": concept, "neighbors": sorted(seen - {concept.lower()}), "edges": edges_out}
+    return {"concept": concept, "resolvedClassId": resolved_concept, "neighbors": sorted(seen - {resolved_concept.casefold()}), "edges": edges_out}
 
 
 def get_supporting_evidence(root: Path, note_or_edge_id: str, top_k: int = 8) -> list[dict[str, Any]]:
@@ -1055,12 +1088,15 @@ def _merge_text(existing: str, addition: str) -> str:
 
 
 def _normalize_label(value: str) -> str:
-    normalized = re.sub(r"[^A-Za-z0-9]+", "-", value.strip().upper()).strip("-")
+    normalized = "".join(
+        character.upper() if character.isalnum() else "-"
+        for character in unicodedata.normalize("NFKC", value).strip()
+    ).strip("-")
     return re.sub(r"-+", "-", normalized)
 
 
 def _normalize_relation_type(value: str) -> str:
-    rel = re.sub(r"[^a-zA-Z0-9]+", "_", value.strip().lower()).strip("_")
+    rel = _normalize_unicode_key(value)
     aliases = {
         "is_a": "subclass_of",
         "type_of": "subclass_of",
@@ -1069,12 +1105,22 @@ def _normalize_relation_type(value: str) -> str:
         "suggests": "supports",
         "may_be_confused_with": "confounds",
         "should_check": "requires_check",
+        "属于": "subclass_of",
+        "是一种": "subclass_of",
+        "组成部分": "part_of",
+        "支持": "supports",
+        "提示": "supports",
+        "导致": "causes",
+        "引起": "causes",
+        "相关": "related_to",
+        "混淆": "confounds",
+        "需要检查": "requires_check",
     }
     return aliases.get(rel, rel or "related_to")
 
 
 def _normalize_concept_type(value: str) -> str:
-    normalized = re.sub(r"[^a-zA-Z0-9]+", "_", value.strip().lower()).strip("_")
+    normalized = _normalize_unicode_key(value)
     aliases = {
         "pattern": "abnormality_pattern",
         "abnormality": "abnormality_pattern",
@@ -1083,6 +1129,20 @@ def _normalize_concept_type(value: str) -> str:
         "paper": "evidence_source",
         "reference": "evidence_source",
         "check": "next_check",
+        "实体": "entity",
+        "异常模式": "abnormality_pattern",
+        "信号特征": "signal_feature",
+        "波形": "waveform",
+        "间期": "interval",
+        "阈值": "threshold",
+        "条件": "condition",
+        "混杂因素": "confounder",
+        "任务": "task",
+        "数据集": "dataset",
+        "方法": "method",
+        "证据来源": "evidence_source",
+        "机制": "mechanism",
+        "下一步检查": "next_check",
     }
     normalized = aliases.get(normalized, normalized or "entity")
     if normalized not in CONCEPT_TYPES:
@@ -1567,8 +1627,33 @@ def _compact_knowledge_query_answer(answer: dict[str, Any]) -> dict[str, Any]:
 
 
 def _terms(query: str) -> list[str]:
-    terms = re.findall(r"[\w\-]+", query.lower())
-    return [term for term in terms if len(term) > 1][:20]
+    folded = _fold_text(query)
+    chunks = re.findall(r"[a-z0-9]+|[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+", folded)
+    terms: list[str] = []
+    for chunk in chunks:
+        if _contains_cjk(chunk):
+            terms.append(chunk)
+            if len(chunk) > 2:
+                terms.extend(chunk[index:index + 2] for index in range(len(chunk) - 1))
+        elif len(chunk) > 1:
+            terms.append(chunk)
+    return list(dict.fromkeys(terms))[:20]
+
+
+def _fold_text(value: str) -> str:
+    return unicodedata.normalize("NFKC", value).casefold()
+
+
+def _contains_cjk(value: str) -> bool:
+    return any("\u3400" <= character <= "\u4dbf" or "\u4e00" <= character <= "\u9fff" or "\uf900" <= character <= "\ufaff" for character in value)
+
+
+def _normalize_unicode_key(value: str) -> str:
+    normalized = "".join(
+        character if character.isalnum() else "_"
+        for character in _fold_text(value).strip()
+    ).strip("_")
+    return re.sub(r"_+", "_", normalized)
 
 
 def _read_text(path: Path) -> str:

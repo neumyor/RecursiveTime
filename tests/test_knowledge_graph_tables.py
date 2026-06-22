@@ -7,11 +7,16 @@ from harnessing_ts.knowledge_graph import (
     _compact_knowledge_query_answer,
     add_evidence,
     add_knowledge,
+    build_knowledge_base_tool_callbacks,
     extract_reference_text,
     finalize_knowledge_base,
+    get_neighbors,
     read_graph_view,
     read_knowledge_base_cards,
     scan_references,
+    search_classes,
+    search_evidence_notes,
+    search_graph,
     search_knowledge_notes,
     upsert_class,
     upsert_relation,
@@ -185,6 +190,77 @@ def test_deterministic_tools_add_and_upsert_knowledge_base(tmp_path):
     assert qrs["class_id"] == "C-00001"
     assert relation["relation_id"] == "R-00001"
     assert graph["nodes"][0]["evidence"][0]["evidenceId"] == "E-00001"
+
+
+def test_chinese_knowledge_labels_types_relations_and_search_are_preserved(tmp_path):
+    (tmp_path / "knowledge_base").mkdir()
+    (tmp_path / "knowledge_base" / "domain-brief.md").write_text("# 心电知识库\n", encoding="utf-8")
+    (tmp_path / "references").mkdir()
+    (tmp_path / "references" / "心电指南.md").write_text("室性早搏常表现为提前出现的宽大 QRS 波群。\n", encoding="utf-8")
+
+    scan_references(tmp_path)
+    evidence = add_evidence(tmp_path, {
+        "reference_file": "心电指南.md",
+        "section": "诊断特征",
+        "quoted_fragments": ["室性早搏常表现为提前出现的宽大 QRS 波群。"],
+        "notes": "中文证据",
+    })
+    knowledge = add_knowledge(tmp_path, {
+        "topic": "室性早搏",
+        "description": "提前出现的宽大 QRS 波群提示室性早搏。",
+        "evidence_ids": [evidence["evidence_id"]],
+    })
+    waveform = upsert_class(tmp_path, {
+        "label": "宽大 QRS 波群",
+        "concept_level": 2,
+        "concept_type": "波形",
+        "description_addition": "一种心电波形特征。",
+        "source_knowledge_ids": [knowledge["knowledge_id"]],
+    })
+    abnormality = upsert_class(tmp_path, {
+        "label": "室性早搏",
+        "concept_level": 1,
+        "concept_type": "异常模式",
+        "description_addition": "一种异常心律模式。",
+        "source_knowledge_ids": [knowledge["knowledge_id"]],
+    })
+    relation = upsert_relation(tmp_path, {
+        "source_class_id": waveform["class_id"],
+        "relation_type": "提示",
+        "target_class_id": abnormality["class_id"],
+        "description_addition": "宽大 QRS 波群提示室性早搏。",
+        "source_knowledge_ids": [knowledge["knowledge_id"]],
+    })
+
+    graph = read_graph_view(tmp_path)
+
+    assert waveform["label"] == "宽大 QRS 波群"
+    assert waveform["concept_type"] == "waveform"
+    assert abnormality["label"] == "室性早搏"
+    assert abnormality["concept_type"] == "abnormality_pattern"
+    assert relation["relation_id"] == "R-00001"
+    assert search_classes(tmp_path, "室性早搏")[0]["label"] == "室性早搏"
+    assert search_knowledge_notes(tmp_path, "早搏")[0]["topic"] == "室性早搏"
+    assert search_evidence_notes(tmp_path, "宽大波群")[0]["note_id"] == evidence["evidence_id"]
+    assert search_graph(tmp_path, "室性早搏", relation_type="提示")[0]["relation_type"] == "supports"
+    assert get_neighbors(tmp_path, "室性早搏")["neighbors"] == [waveform["class_id"].casefold()]
+    assert {node["label"] for node in graph["nodes"]} == {"宽大 QRS 波群", "室性早搏"}
+
+
+def test_knowledge_base_mutations_notify_realtime_snapshot_callback(tmp_path):
+    (tmp_path / "knowledge_base").mkdir()
+    (tmp_path / "references").mkdir()
+    (tmp_path / "references" / "资料.md").write_text("中文资料\n", encoding="utf-8")
+    notifications: list[str] = []
+    callbacks = build_knowledge_base_tool_callbacks(tmp_path, on_change=lambda: notifications.append("changed"))
+
+    callbacks["scan_references"]({})
+    callbacks["add_evidence"]({
+        "reference_file": "资料.md",
+        "quoted_fragments": ["中文资料"],
+    })
+
+    assert notifications == ["changed", "changed"]
 
 
 def test_evidence_cards_resolve_reference_ids_to_pdf_preview(tmp_path):

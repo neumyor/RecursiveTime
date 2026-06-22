@@ -25,3 +25,12 @@ def test_chat_uses_keyed_incremental_dom_reconciliation() -> None:
     assert "function createMessageElement" in source
     assert "function renderStable" in source
     assert "els.chatStream.innerHTML = renderedParts.map" not in source
+
+
+def test_knowledge_graph_sse_snapshot_updates_all_live_panels() -> None:
+    source = MAIN_TS.read_text()
+
+    assert "eventType === 'knowledge_graph_snapshot'" in source
+    assert "state.bootstrap.knowledgeGraph = payload.knowledgeGraph" in source
+    assert "state.bootstrap.knowledgeBaseSummary = payload.knowledgeBaseSummary" in source
+    assert "state.bootstrap.knowledgeGraphBuild = payload.knowledgeGraphBuild" in source

@@ -787,6 +787,13 @@ function applyRealtimeEvent(eventType: string, payload: JsonMap) {
     render();
     return;
   }
+  if (eventType === 'knowledge_graph_snapshot') {
+    if (payload.knowledgeGraph) state.bootstrap.knowledgeGraph = payload.knowledgeGraph;
+    if (payload.knowledgeBaseSummary) state.bootstrap.knowledgeBaseSummary = payload.knowledgeBaseSummary;
+    if (payload.knowledgeGraphBuild) state.bootstrap.knowledgeGraphBuild = payload.knowledgeGraphBuild;
+    render();
+    return;
+  }
   if (eventType === 'chain_summary_parts') {
     state.bootstrap.chainSummaryParts = payload.chainSummaryParts || [];
     render();

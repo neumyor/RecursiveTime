@@ -97,6 +97,13 @@ class HarnessOrchestrator:
             self.get_knowledge_graph_parts(),
         )
 
+    def _emit_knowledge_graph_snapshot(self) -> None:
+        self._emit_realtime("knowledge_graph_snapshot", {
+            "knowledgeGraph": self.get_knowledge_graph(),
+            "knowledgeBaseSummary": self.get_knowledge_base_summary(),
+            "knowledgeGraphBuild": self.get_knowledge_graph_build_status(),
+        })
+
     def _emit_node_parts(self, node_id: str, _part: Part) -> None:
         parts = self.get_node_parts(node_id)
         cache_key = f"node_parts:{node_id}"
@@ -710,6 +717,7 @@ class HarnessOrchestrator:
             "message": trigger,
             "payload": {"uploadedPaths": uploaded_paths or []},
         })
+        self._emit_knowledge_graph_snapshot()
         try:
             await build_knowledge_graph(
                 workspace_path=self.workspace_path,
@@ -719,6 +727,7 @@ class HarnessOrchestrator:
                 uploaded_paths=uploaded_paths,
                 on_part=self._emit_knowledge_graph_parts,
                 on_runner=lambda runner: setattr(self, "_knowledge_graph_runner", runner),
+                on_change=self._emit_knowledge_graph_snapshot,
             )
         except Exception as exc:
             finished = now_iso()
@@ -735,6 +744,7 @@ class HarnessOrchestrator:
                     "message": "paused",
                     "payload": {"trigger": trigger},
                 })
+                self._emit_knowledge_graph_snapshot()
                 return {"ok": False, "paused": True, "knowledgeGraph": self.get_knowledge_graph(), "status": self.get_knowledge_graph_build_status()}
             self.store.write_knowledge_graph_build_status({
                 "running": False,
@@ -748,6 +758,7 @@ class HarnessOrchestrator:
                 "message": str(exc),
                 "payload": {"trigger": trigger},
             })
+            self._emit_knowledge_graph_snapshot()
             raise
         finished = now_iso()
         if getattr(self, "_knowledge_graph_pause_requested", False):
@@ -763,6 +774,7 @@ class HarnessOrchestrator:
                 "message": "paused",
                 "payload": {"trigger": trigger},
             })
+            self._emit_knowledge_graph_snapshot()
             return {"ok": False, "paused": True, "knowledgeGraph": self.get_knowledge_graph(), "status": self.get_knowledge_graph_build_status()}
         self.store.write_knowledge_graph_build_status({
             "running": False,
@@ -776,6 +788,7 @@ class HarnessOrchestrator:
             "message": "knowledge_base",
             "payload": {"trigger": trigger},
         })
+        self._emit_knowledge_graph_snapshot()
         return {"ok": True, "knowledgeGraph": self.get_knowledge_graph(), "status": self.get_knowledge_graph_build_status()}
 
     async def pause_knowledge_graph_build(self, reason: str | None = None) -> dict[str, Any]:
@@ -793,6 +806,7 @@ class HarnessOrchestrator:
                 "timestamp": now_iso(),
                 "message": message,
             })
+            self._emit_knowledge_graph_snapshot()
             return {"paused": True, "status": status}
         status = self.store.write_knowledge_graph_build_status({
             "running": False,
@@ -805,6 +819,7 @@ class HarnessOrchestrator:
             "timestamp": status["finishedAt"],
             "message": message,
         })
+        self._emit_knowledge_graph_snapshot()
         return {"paused": True, "status": status}
 
     async def build_chain_summary(self, trigger: str = "manual") -> dict[str, Any]:
