@@ -12,6 +12,152 @@ The harness is designed to help an agent solve time-series analysis tasks by com
 
 It is not a research agent and does not center on method comparison or model leaderboard optimization.
 
+## Quick Start
+
+### 1. Install prerequisites
+
+HarnessingTS requires Python 3.11+, Git, [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh/), and the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/getting-started). The Python Claude Code SDK starts the CLI as a subprocess, so installing only the Python dependencies is not sufficient. Anthropic's generic documentation shows npm; this project standardizes on Bun's compatible global package installation.
+
+Run these commands in order on a new machine:
+
+```bash
+# Install uv and Bun if they are not already available.
+curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -fsSL https://bun.sh/install | bash
+
+# Make Bun and Bun-installed global commands visible in this shell.
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+
+# Claude Code must be installed after Bun is available.
+bun install --global @anthropic-ai/claude-code
+
+# Verify all required executables before continuing.
+uv --version
+bun --version
+claude --version
+claude doctor
+```
+
+Persist the following lines in `~/.zshrc`, `~/.bashrc`, or the service account's shell profile; otherwise `claude` may disappear from `PATH` after opening a new terminal:
+
+```bash
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+```
+
+### 2. Clone and prepare HarnessingTS
+
+```bash
+git clone https://github.com/neumyor/RecursiveTime.git
+cd RecursiveTime
+
+# Install the backend and build the frontend/runtime base.
+uv sync
+uv run ts-harness setup-server
+```
+
+`setup-server` runs the frozen frontend Bun install, builds `frontend/dist`, detects the available accelerator, and prepares the shared PyTorch/workspace runtime base. It does **not** install the global Claude Code CLI, which is why the preceding Bun installation step is mandatory.
+
+### 3. Configure Claude Code and environment variables
+
+Choose exactly one authentication mode.
+
+Option A — use Claude Code's own login state:
+
+```bash
+# Start Claude Code once and complete its interactive login.
+claude
+
+export TS_HARNESS_LLM_AUTH_MODE=sdk-default
+```
+
+Option B — use an Anthropic-compatible API endpoint:
+
+```bash
+export TS_HARNESS_LLM_AUTH_MODE=manual
+export TS_HARNESS_LLM_PROTOCOL=anthropic
+export TS_HARNESS_LLM_MODEL=qwen3.6-plus
+export TS_HARNESS_LLM_BASE_URL=https://dashscope.aliyuncs.com/api/v2/apps/anthropic
+export TS_HARNESS_LLM_API_KEY=YOUR_API_KEY
+export TS_HARNESS_LLM_CONTEXT_WINDOW=200k
+```
+
+Then set the runtime environment. Use a dedicated workspace for each experiment or ablation variant:
+
+```bash
+export TS_HARNESS_WORKSPACE="$HOME/.harnessingts/workspaces/default"
+export TS_HARNESS_VARIANT=V0
+export TS_HARNESS_CONTROL_MODE=auto
+export HOST=127.0.0.1
+export PORT=4327
+
+# Confirm the effective model configuration without exposing the full API key.
+uv run ts-harness llm-config
+```
+
+These variables must be exported in the same shell that starts the server, or configured in its service manager. `TS_HARNESS_LLM_*` values override `config.llm.json`; workspace UI settings provide another persistent configuration path.
+
+### 4. Start and use the application
+
+```bash
+uv run ts-harness-server
+```
+
+Open [http://127.0.0.1:4327](http://127.0.0.1:4327), then use the UI in this order:
+
+1. Open **Settings** and verify the Main LLM. Configure independent Knowledge Graph and Reference Feature Builder credentials only when they should differ from the defaults.
+2. Upload domain documents with **Reference Files** and task data with **Raw Data Zip**.
+3. Send the task definition in the main conversation. The orchestrator enters `problem-contract`, then iterates through solving and case review.
+4. Build **Knowledge Graph** after references are available.
+5. Build **Reference Features** after `user/problem-contract.md` and `user/data-spec.md` exist. The validated deterministic extractor is then exposed to main/node sessions.
+6. Review node traces, case-review artifacts, tool outputs, and the final summary in the UI and workspace file tree.
+
+### 5. Common development commands
+
+Run commands from the repository root unless the command explicitly changes directory:
+
+```bash
+# Backend tests and static compilation.
+uv run python -m compileall -q backend/harnessing_ts
+uv run pytest -q
+
+# Production frontend build.
+cd frontend
+bun install --frozen-lockfile
+bun run build
+cd ..
+
+# Optional hot-reload frontend; keep ts-harness-server running separately.
+cd frontend
+bun run dev
+```
+
+The Vite development UI is available at `http://127.0.0.1:5173`. The production server automatically serves `frontend/dist/` when it exists.
+
+### Environment variable reference
+
+Set variables before `uv run ts-harness-server`. Shell exports apply only to that shell unless added to a profile or service definition.
+
+| Variable | Typical/default value | Purpose |
+|---|---|---|
+| `BUN_INSTALL` | `$HOME/.bun` | Bun installation directory. |
+| `PATH` | include `$BUN_INSTALL/bin` | Makes `bun` and the Bun-installed `claude` executable available. |
+| `TS_HARNESS_LLM_AUTH_MODE` | `sdk-default` or `manual` | Selects Claude Code login state or explicit API credentials. |
+| `TS_HARNESS_LLM_PROTOCOL` | `anthropic` | Manual endpoint protocol; also supports `openai-compat`. |
+| `TS_HARNESS_LLM_MODEL` | provider model name | Main model and default inherited builder model. |
+| `TS_HARNESS_LLM_BASE_URL` | provider endpoint | Manual API base URL. |
+| `TS_HARNESS_LLM_API_KEY` | secret | Manual API credential; never commit it. |
+| `TS_HARNESS_LLM_CONTEXT_WINDOW` | `200k` or `1m` | Optional context-window mode. |
+| `TS_HARNESS_WORKSPACE` | `~/.harnessingts/workspaces/default` | Runtime data, tools, state, logs, and reports. |
+| `TS_HARNESS_VARIANT` | `V0` | Startup-only ablation profile. |
+| `TS_HARNESS_CONTROL_MODE` | `auto` | `auto` or human-approved `manual` node transitions. |
+| `HOST` / `PORT` | `127.0.0.1` / `4327` | Web server bind address and port. |
+| `TS_HARNESS_DEBUG` | unset | Enables destructive debug/reset controls when `true`; avoid on shared servers. |
+| `TS_HARNESS_DRY_RUN` | unset | Skips live SDK execution when `true`. |
+| `TS_HARNESS_MAX_TURNS` | SDK default | Optional SDK turn limit. |
+| `TS_HARNESS_TORCH_BACKEND` | auto-detected | Override compute backend only when detection is wrong. |
+
 ## Node Chain
 
 ```text
@@ -148,74 +294,28 @@ Global native-tool constraints:
 - Nodes should not read `backend/**`, `frontend/**`, `state/**`, or `_reference_project/**`. `final-summary` may read `logs/timeline.jsonl` because it is an explicit required input.
 - Ordinary domain knowledge should be queried through `mcp__ts_harness__query_knowledge`; nodes should not read `knowledge_base/tables/*.csv`, `knowledge_base/indexes/**`, or `knowledge_base/cache/**` unless explicitly debugging the knowledge base.
 
-## Commands
+## Deploy On A Server
 
-Install dependencies before running real Claude Code SDK sessions:
+HarnessingTS can run on a Linux/macOS server and be opened through the same network, a reverse proxy, or a VPN. Complete the Quick Start prerequisites first, including installing Claude Code globally with Bun and persisting Bun's global binary directory in `PATH` for the service account.
+
+After authentication and LLM variables are configured, use this server-specific sequence:
 
 ```bash
+git clone https://github.com/neumyor/RecursiveTime.git
+cd RecursiveTime
 uv sync
-```
+uv run ts-harness setup-server
 
-Check Python code:
+export HOST=0.0.0.0
+export PORT=4327
+export TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/v0
+export TS_HARNESS_VARIANT=V0
+export TS_HARNESS_CONTROL_MODE=auto
 
-```bash
-uv run python -m compileall backend/harnessing_ts
-```
-
-Start the web UI:
-
-```bash
 uv run ts-harness-server
 ```
 
-Then open:
-
-```text
-http://127.0.0.1:4327
-```
-
-Frontend development is managed by Bun and Vite. Start the backend first, then run the hot-reload frontend in another terminal:
-
-```bash
-cd frontend
-bun install
-bun run dev
-```
-
-Open the Vite dev UI at:
-
-```text
-http://127.0.0.1:5173
-```
-
-Build the production frontend bundle with:
-
-```bash
-cd frontend
-bun run build
-```
-
-When `frontend/dist/` exists, `ts-harness-server` serves the built frontend automatically.
-
-## Deploy On A Server
-
-HarnessingTS can run on a Linux/macOS server and be opened from the same network, reverse proxy, or VPN. Install `git`, `uv`, and Bun first, and make either a Claude Code CLI login or LLM API credentials available to the server account.
-
-Typical setup is clone, prepare, and start:
-
-```bash
-git clone https://github.com/neumyor/RecursiveTime.git && cd RecursiveTime
-```
-
-```bash
-uv run ts-harness setup-server
-```
-
-```bash
-HOST=0.0.0.0 PORT=4327 TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/v0 TS_HARNESS_VARIANT=V0 uv run ts-harness-server
-```
-
-`setup-server` runs the frozen Bun install, builds `frontend/dist`, detects the machine accelerator, and prepares the shared PyTorch plus workspace dependency runtime base. The server creates and initializes `TS_HARNESS_WORKSPACE` automatically on first start, so separate `uv sync`, frontend build, `prepare-runtime-base`, or workspace `init` commands are not required. During startup, the terminal prints workspace initialization progress and prints the Web UI URL only after initialization is complete.
+The server creates and initializes `TS_HARNESS_WORKSPACE` automatically on first start. During startup, the terminal shows initialization progress and prints the Web UI URL only after initialization completes.
 
 Use a different workspace path for each ablation variant. Replace `V0` and `/v0` together, for example with `V3` and `/v3`. To use a manual LLM endpoint, add `TS_HARNESS_LLM_*` variables to the launch environment or configure the workspace from the UI.
 
@@ -244,11 +344,15 @@ For long-running use, run the process under a service manager such as `systemd`,
    After=network.target
 
    [Service]
+   User=harness
    WorkingDirectory=/path/to/HarnessingTS
+   Environment=BUN_INSTALL=/home/harness/.bun
+   Environment=PATH=/home/harness/.bun/bin:/usr/local/bin:/usr/bin:/bin
    Environment=HOST=0.0.0.0
    Environment=PORT=4327
    Environment=TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/v0
    Environment=TS_HARNESS_VARIANT=V0
+   EnvironmentFile=/etc/harnessingts.env
    ExecStart=/usr/bin/env uv run ts-harness-server
    Restart=on-failure
 
@@ -256,23 +360,15 @@ For long-running use, run the process under a service manager such as `systemd`,
    WantedBy=multi-user.target
    ```
 
+Place the selected `TS_HARNESS_LLM_*` variables in `/etc/harnessingts.env` with permissions restricted to the service account. The explicit Bun `PATH` is required so the SDK can find the Bun-installed `claude` executable under a non-interactive service manager.
+
 If the server is reachable from untrusted networks, put it behind authentication, HTTPS, and network allowlisting. Keep `TS_HARNESS_DEBUG` unset in shared or public deployments because debug actions include workspace reset controls.
 
-Useful launch flags:
-
-```bash
-TS_HARNESS_DRY_RUN=true uv run ts-harness-server
-TS_HARNESS_DEBUG=true uv run ts-harness-server
-TS_HARNESS_MAX_TURNS=300 uv run ts-harness-server
-```
+Optional launch behavior is controlled by `TS_HARNESS_DRY_RUN`, `TS_HARNESS_DEBUG`, and `TS_HARNESS_MAX_TURNS`; see the centralized environment-variable table in Quick Start.
 
 ### Ablation variants
 
-Select one immutable experiment profile when starting the server. `V0` is the default, so existing launches retain the full system behavior:
-
-```bash
-TS_HARNESS_VARIANT=V3 uv run ts-harness-server
-```
+Select one immutable experiment profile through `TS_HARNESS_VARIANT` before starting the server. `V0` is the default.
 
 | ID | Profile | Enforced behavior |
 |---|---|---|
@@ -302,12 +398,7 @@ Runtime workspaces are isolated `uv` projects stored outside this source reposit
 ~/.harnessingts/workspaces/default
 ```
 
-Set a different workspace explicitly when needed:
-
-```bash
-TS_HARNESS_WORKSPACE=/path/to/time-series-workspace uv run ts-harness-server
-uv run ts-harness --workspace /path/to/time-series-workspace init
-```
+Set a different workspace by changing `TS_HARNESS_WORKSPACE` in the centralized Quick Start environment block before launching the server. The server initializes a missing workspace automatically.
 
 `setup-server` prepares `.runtime-base/`, a machine-local environment and uv cache. It detects the host accelerator, asks uv to select the PyTorch backend, resolves PyTorch plus the full default workspace dependency set, verifies imports and the actual PyTorch device backend, and records exact versions in `.runtime-base/runtime-base.json`. New workspaces pin those verified versions and reuse `.runtime-base/uv-cache`.
 
@@ -333,13 +424,7 @@ uv run ts-harness setup-server
 
 ## Verification
 
-Run backend and frontend verification before committing behavior changes:
-
-```bash
-uv run python -m compileall backend/harnessing_ts
-uv run pytest -q
-cd frontend && bun run build
-```
+Use the single verification sequence in **Quick Start → Common development commands** before committing behavior changes. Keeping that sequence in one place prevents backend and frontend checks from drifting apart.
 
 Tests set `TS_HARNESS_SKIP_WORKSPACE_UV=true` automatically through `tests/conftest.py`; unit tests must not create a full `.venv` for every temporary workspace. Runtime-base behavior is covered with mocked uv commands in `tests/test_runtime_base.py`, while V0-V7 capabilities, contracts, prompts, and sampler behavior are covered in `tests/test_ablation_variants.py`.
 
@@ -389,17 +474,15 @@ When `final-summary` has completed and no node is active, the backend treats the
 
 ## LLM Configuration
 
-By default the harness uses Claude Code SDK's local login state. If the SDK prints `not login`, either run Claude Code login in your terminal, or configure a manual Anthropic-compatible API endpoint.
+Follow Quick Start step 3 for the actual authentication and environment-variable commands. The effective configuration precedence is:
 
-Create a local `config.llm.json` from the example:
+1. `TS_HARNESS_LLM_*` environment variables.
+2. `config.llm.json` in the workspace, current directory, or project root.
+3. Claude Code's local login state when `authMode` is `sdk-default`.
 
-```bash
-cp config.llm.example.json config.llm.json
-```
+The web Settings page persists the Main LLM configuration in the active workspace. Knowledge Graph and Reference Feature Builder agents can each override it independently; otherwise they inherit the documented fallback configuration.
 
-`config.llm.json` may live in the workspace, the shell working directory, or this project root. Environment variables still take precedence.
-
-For DashScope's Anthropic-compatible API, use:
+`config.llm.example.json` contains an Anthropic-compatible manual configuration:
 
 ```json
 {
@@ -413,42 +496,6 @@ For DashScope's Anthropic-compatible API, use:
 ```
 
 `config.llm.json` is ignored by git.
-
-You can also configure it with environment variables:
-
-```bash
-export TS_HARNESS_LLM_AUTH_MODE=manual
-export TS_HARNESS_LLM_PROTOCOL=anthropic
-export TS_HARNESS_LLM_MODEL=qwen3.6-plus
-export TS_HARNESS_LLM_BASE_URL=https://dashscope.aliyuncs.com/api/v2/apps/anthropic
-export TS_HARNESS_LLM_API_KEY=YOUR_API_KEY
-```
-
-Inspect the effective SDK config without printing the full API key:
-
-```bash
-uv run ts-harness llm-config
-```
-
-Initialize workspace layout and state:
-
-```bash
-uv run ts-harness init
-```
-
-Send a main-session message:
-
-```bash
-uv run ts-harness send "请基于 ECG5000 设计异常样本分类的工具使用流程"
-```
-
-Dry-run state transitions without calling Claude Code SDK:
-
-```bash
-uv run ts-harness --dry-run init
-uv run ts-harness --dry-run start-node problem-contract --input-summary "ECG5000 abnormal sample classification"
-uv run ts-harness --dry-run finish-node --summary "Wrote user/problem-contract.md and user/data-spec.md" --goal-met true --output-path user/problem-contract.md --output-path user/data-spec.md
-```
 
 ## Agent Lightning Training
 
