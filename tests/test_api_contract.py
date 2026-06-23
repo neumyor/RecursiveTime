@@ -31,6 +31,10 @@ def test_bootstrap_contract_includes_full_static_payload(tmp_path, monkeypatch) 
         "knowledgeGraphParts",
         "knowledgeGraphBuild",
         "knowledgeGraphLlmConfig",
+        "referenceFeatureBuild",
+        "referenceFeatureTool",
+        "referenceFeatureParts",
+        "referenceFeatureLlmConfig",
         "chainSummary",
         "chainSummaryBuild",
         "chainSummaryParts",
@@ -38,7 +42,7 @@ def test_bootstrap_contract_includes_full_static_payload(tmp_path, monkeypatch) 
         "debugEnabled",
         "runtime",
     }.issubset(payload)
-    assert {"running", "knowledgeGraphRunning", "chainSummaryRunning", "workspaceUv"}.issubset(payload["runtime"])
+    assert {"running", "knowledgeGraphRunning", "chainSummaryRunning", "referenceFeatureRunning", "workspaceUv"}.issubset(payload["runtime"])
     assert payload["variant"]["id"] == "V0"
 
 
@@ -67,6 +71,10 @@ def test_live_contract_is_incremental_subset(tmp_path, monkeypatch) -> None:
         "knowledgeGraphParts",
         "knowledgeGraphBuild",
         "knowledgeGraphLlmConfig",
+        "referenceFeatureBuild",
+        "referenceFeatureTool",
+        "referenceFeatureParts",
+        "referenceFeatureLlmConfig",
         "chainSummary",
         "chainSummaryBuild",
         "chainSummaryParts",
@@ -84,3 +92,8 @@ def test_realtime_sse_endpoint_is_registered(tmp_path, monkeypatch) -> None:
     routes = {getattr(route, "path", "") for route in app.routes}
 
     assert "/api/events" in routes
+    assert "/api/reference-features/build" in routes
+    assert "/api/reference-features/status" in routes
+    assert "/api/reference-features/tool" in routes
+    assert "/api/reference-features/run" in routes
+    assert "/api/reference-features/llm-config" in routes

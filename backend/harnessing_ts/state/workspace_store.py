@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,13 +34,16 @@ class WorkspaceStore:
         self.knowledge_graph_log_path = root / "logs" / "knowledge-graph-builder.jsonl"
         self.knowledge_reasoning_log_path = root / "logs" / "knowledge-reasoning.jsonl"
         self.chain_summary_log_path = root / "logs" / "chain-builder.jsonl"
+        self.reference_feature_log_path = root / "logs" / "reference-feature-builder.jsonl"
         self.runtime_path = root / "state" / "runtime.json"
         self.runtime_settings_path = root / "state" / "runtime-settings.json"
         self.knowledge_graph_llm_path = root / "state" / "knowledge-graph-llm.json"
+        self.reference_feature_llm_path = root / "state" / "reference-feature-llm.json"
         self.knowledge_graph_status_path = root / "state" / "knowledge-graph-build.json"
         self.knowledge_graph_path = root / "artifacts" / "knowledge-graph.json"
         self.chain_summary_status_path = root / "state" / "chain-summary-build.json"
         self.chain_summary_path = root / "artifacts" / "chain-summary.json"
+        self.reference_feature_status_path = root / "state" / "reference-feature-build.json"
         self.node_log_dir = root / "logs" / "nodes"
         self.node_meta_dir = root / "state" / "nodes"
 
@@ -190,6 +194,31 @@ class WorkspaceStore:
         write_json(self.chain_summary_status_path, current)
         return current
 
+    def read_reference_feature_status(self) -> dict[str, Any]:
+        return read_json(self.reference_feature_status_path) or {
+            "running": False,
+            "status": "idle",
+            "startedAt": None,
+            "finishedAt": None,
+            "trigger": None,
+            "message": "Reference feature builder has not run yet.",
+        }
+
+    def write_reference_feature_status(self, status: dict[str, Any]) -> dict[str, Any]:
+        current = self.read_reference_feature_status()
+        current.update(status)
+        write_json(self.reference_feature_status_path, current)
+        return current
+
+    def is_reference_feature_extractor_ready(self) -> bool:
+        if self.read_reference_feature_status().get("status") != "completed":
+            return False
+        try:
+            from harnessing_ts.reference_feature_extractor import validate_reference_feature_extractor
+            return bool(validate_reference_feature_extractor(self.root).get("ready"))
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+            return False
+
     @property
     def main_llm_path(self) -> Path:
         return self.root / "config.llm.json"
@@ -242,6 +271,33 @@ class WorkspaceStore:
             "payload": _mask_llm_config_dict(sanitized),
         })
         return sanitized
+
+    def read_reference_feature_llm_config(self) -> dict[str, Any]:
+        raw = read_json(self.reference_feature_llm_path) or {}
+        return _sanitize_llm_config(raw, default_auth_mode="manual")
+
+    def write_reference_feature_llm_config(self, values: dict[str, Any]) -> dict[str, Any]:
+        current = self.read_reference_feature_llm_config()
+        merged = dict(current)
+        for key in ("authMode", "protocol", "model", "apiKey", "baseUrl", "contextWindow"):
+            if key not in values:
+                continue
+            value = values[key]
+            if key == "apiKey" and (value is None or value == "" or _looks_masked_secret(str(value))):
+                continue
+            merged[key] = value
+        sanitized = _sanitize_llm_config(merged, default_auth_mode="manual")
+        write_json(self.reference_feature_llm_path, sanitized)
+        self.append_timeline({
+            "type": "reference_feature_llm_updated",
+            "timestamp": now_iso(),
+            "message": f"model={sanitized.get('model') or 'inherited'}",
+            "payload": _mask_llm_config_dict(sanitized),
+        })
+        return sanitized
+
+    def read_reference_feature_parts(self) -> list[Part]:
+        return filter_display_parts(collapse_tool_parts(read_jsonl(self.reference_feature_log_path)))
 
     def read_runtime_settings(self) -> RuntimeSettings:
         raw = read_json(self.runtime_settings_path) or {}
@@ -553,7 +609,6 @@ class WorkspaceStore:
             "user",
             "data/processed",
             "plots",
-            "tools",
             "runs",
             "reports",
             "training",
@@ -561,6 +616,13 @@ class WorkspaceStore:
             "state/nodes",
         ):
             _remove_path(self.root / rel)
+
+        tools_root = self.root / "tools"
+        if tools_root.exists():
+            for child in tools_root.iterdir():
+                if child.name == "reference-feature-extractor":
+                    continue
+                _remove_path(child)
 
         for path in (self.state_path, self.main_log_path, self.timeline_path):
             path.unlink(missing_ok=True)
@@ -592,6 +654,9 @@ class WorkspaceStore:
                     "logs/knowledge-graph-builder.jsonl",
                     "logs/knowledge-reasoning.jsonl",
                     "logs/chain-builder.jsonl",
+                    "tools/reference-feature-extractor",
+                    "state/reference-feature-build.json",
+                    "logs/reference-feature-builder.jsonl",
                 ],
                 "cleared": [
                     "logs/main.jsonl",
@@ -601,7 +666,7 @@ class WorkspaceStore:
                     "data/processed",
                     "artifacts/* except knowledge-graph.json",
                     "plots",
-                    "tools",
+                    "tools/* except reference-feature-extractor",
                     "runs",
                     "reports",
                     "training",
@@ -636,6 +701,7 @@ class WorkspaceStore:
             path.unlink(missing_ok=True)
         for path in (self.chain_summary_status_path, self.chain_summary_path):
             path.unlink(missing_ok=True)
+        self.reference_feature_status_path.unlink(missing_ok=True)
 
         self.ensure_layout()
         ts = now_iso()

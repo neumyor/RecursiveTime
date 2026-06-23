@@ -60,13 +60,13 @@ backend/harnessing_ts/node_state.py
   Node-chain routing, loopDecision/nextNode validation, pipeline-complete guard, variant-aware iterative output requirements, and V6 one-shot enforcement.
 
 backend/harnessing_ts/variants/profiles.py
-  Startup-only V0-V6 profile registry, public capability metadata, node purpose/input/output overrides, and variant prompt routing.
+  Startup-only V0-V7 profile registry, public capability metadata, node purpose/input/output overrides, and variant prompt routing.
 
 backend/harnessing_ts/variants/random_search.py
   V2 fixed method/parameter catalog and seeded backend candidate sampler.
 
 backend/harnessing_ts/variants/prompts/
-  Isolated prompt overlays for V1-V6; V0 continues to use the base prompts unchanged.
+  Isolated prompt overlays for V1-V7; V0 continues to use the base prompts unchanged.
 
 backend/harnessing_ts/agent/sdk_runner.py
   Claude Code SDK client wrapper, message translation, tool-call/result merging, interrupt/close behavior, and SDK failure recovery.
@@ -98,6 +98,9 @@ backend/harnessing_ts/knowledge_prompts.py
 backend/harnessing_ts/chain_summary.py
   Independent chain builder agent for reading runtime logs/reports/runs and producing a structured, frontend-renderable decision-chain summary.
 
+backend/harnessing_ts/reference_feature_extractor.py
+  Independent reference feature builder, deterministic source validator/executor, reference-evidence checker, and main-session inspection contract.
+
 frontend/src/main.ts
   Static UI rendering and event binding.
 
@@ -110,9 +113,9 @@ frontend/src/types.ts
 
 Keep new behavior inside these boundaries. Routing rules belong in `node_state.py`; ablation definitions, catalogs, and prompt differences belong in `variants/`; SDK session construction belongs in `agent/session_factory.py`; aggregate API response shape belongs in `api/payloads.py`; workspace layout details belong in `state/workspace_layout.py`. Variant behavior must be enforced by capabilities, tool availability, or backend contracts where possible; prompt text alone is not a sufficient guard.
 
-The browser receives main-session, node-session, knowledge-graph-builder, chain-summary-builder, runtime-status, and workspace-file updates through the `/api/events` Server-Sent Events stream. The frontend does not poll `/api/live`: the SSE bootstrap event supplies initial/reconnect state, and keyed DOM reconciliation only inserts, moves, updates, or removes messages whose stable ids changed. `/api/live` is retained for API compatibility and diagnostics only.
+The browser receives main-session, node-session, knowledge-graph-builder, reference-feature-builder, chain-summary-builder, runtime-status, and workspace-file updates through the `/api/events` Server-Sent Events stream. The frontend does not poll `/api/live`: the SSE bootstrap event supplies initial/reconnect state, and keyed DOM reconciliation only inserts, moves, updates, or removes messages whose stable ids changed. `/api/live` is retained for API compatibility and diagnostics only.
 
-The following node table describes the V0 full-system baseline. V1 removes the chain entirely; V2-V6 apply the enforced differences documented under Ablation variants.
+The following node table describes the V0 full-system baseline. V1 removes the chain entirely; V2-V7 apply the enforced differences documented under Ablation variants.
 
 | Node | Responsibility | Produces | Native tools |
 |---|---|---|---|
@@ -125,6 +128,7 @@ Case review and summary have separate roles:
 - Candidate review records the k source, candidate hypotheses, subagent results, metrics, bad-case review summaries, relation to knowledge graph findings, and the unified retain/drop/compose decision.
 - Case review centers on bad cases. If there are fewer than 10 bad cases, every bad case must be analyzed. If there are many, the node must define a task-appropriate sampling strategy and deeply analyze 5-20 bad cases.
 - Every reviewed sample must include a visualization path, raw input evidence, current-method evidence, comparison to a good case/prototype/reference case, and an explicit explanation level.
+- When the validated reference feature extractor is available, case review must inspect its contract/source and call it for every analyzed bad case and every comparison case. Visual or LLM-only judgment cannot replace its numeric, reference-backed result.
 - All case-review images live under `runs/iterations/<iteration-id>/case-review/visualizations/` and must be generated at 250 DPI. After per-case analysis and statistical synthesis, the node must create one or more sample-inspired summary PNGs named with the `summary_` prefix, using a 16:9 canvas and blue/orange/green/red as the preferred emphasis palette.
 - Case review ends with statistical analysis over all bad cases or the largest computable bad-case set.
 - Iteration summary should not duplicate per-case analysis. It should describe the tool/method change, execution command, aggregate metrics, target gap, 3-5 high-level case-review findings, and next-node decision.
@@ -279,6 +283,7 @@ TS_HARNESS_VARIANT=V3 uv run ts-harness-server
 | `V4` | No Independent Subagents | Removes `Task` from iterative-solving; the same k candidates are implemented and reviewed sequentially by the node agent. |
 | `V5` | No Case Review | Removes case-review artifacts, bad/good-case analysis, statistical error attribution, and case visualizations. |
 | `V6` | One-Shot Harness | Keeps the full first iteration, but the backend rejects `continue` and any second iterative-solving entry. |
+| `V7` | No Reference Feature Extractor | Keeps the full workflow but removes the independent builder and both reference-feature MCP tools. |
 
 The selected profile is parsed once during process startup, recorded in workspace state/timeline, exposed by bootstrap/live APIs, and highlighted in the left-side Workspace card. Invalid values fail fast. Use a separate `TS_HARNESS_WORKSPACE` per experiment to prevent artifacts from different variants from sharing state. V6 uses the current `iterativeCandidateCount`; set that value to the desired one-shot total candidate budget before the iteration begins when matching V0's average total candidate count.
 
@@ -336,7 +341,7 @@ uv run pytest -q
 cd frontend && bun run build
 ```
 
-Tests set `TS_HARNESS_SKIP_WORKSPACE_UV=true` automatically through `tests/conftest.py`; unit tests must not create a full `.venv` for every temporary workspace. Runtime-base behavior is covered with mocked uv commands in `tests/test_runtime_base.py`, while V0-V6 capabilities, contracts, prompts, and sampler behavior are covered in `tests/test_ablation_variants.py`.
+Tests set `TS_HARNESS_SKIP_WORKSPACE_UV=true` automatically through `tests/conftest.py`; unit tests must not create a full `.venv` for every temporary workspace. Runtime-base behavior is covered with mocked uv commands in `tests/test_runtime_base.py`, while V0-V7 capabilities, contracts, prompts, and sampler behavior are covered in `tests/test_ablation_variants.py`.
 
 Runtime workspace layout:
 
@@ -364,9 +369,10 @@ The browser UI uses this split:
 - Left rail: process audit panel. It shows workspace status, node activation state, the node chain, selected-node artifacts, node sessions, node logs, and the timeline.
 - Center: main orchestrator chat. The transcript selector above the chat can show all sessions, only the main session, or one specific node session.
 - Center toolbar: `Interrupt` pauses the currently running main turn or active node. If a node is paused, you can add guidance and resume it from the composer.
-- Center toolbar: `Reset Chat` clears chat logs, node sessions, workflow state, generated tools, reports, runs, and processed data while preserving `data/raw/`, `references/`, and the built knowledge graph. `Reset Workspace` performs the full destructive reset and also removes raw data, references, and knowledge graph state.
-- Settings panels: configure main-session LLM settings, knowledge-graph LLM settings, `iterativeCandidateCount`, and `knowledgeGraphExtractionDepth`.
+- Center toolbar: `Reset Chat` clears chat logs, node sessions, workflow state, ordinary generated tools, reports, runs, and processed data while preserving `data/raw/`, `references/`, the built knowledge graph, and the validated `tools/reference-feature-extractor/`. `Reset Workspace` performs the full destructive reset and also removes those reference-derived artifacts.
+- Settings panels: configure main-session, knowledge-graph, and reference-feature-builder LLM settings plus `iterativeCandidateCount` and `knowledgeGraphExtractionDepth`. The feature builder has its own persisted credentials and defaults to the Knowledge Graph/Chain Builder configuration.
 - Knowledge workbench: build/pause/continue the independent literature knowledge graph, inspect knowledge/evidence/class/relation cards, and query the graph through natural language.
+- Reference Features workbench: build/pause the independent deterministic extractor and inspect its trace, schemas, reference rules, README, and complete source. Successful builds write `tools/reference-feature-extractor/{extractor.py,manifest.json,reference-rules.json,README.md,test-cases.json}`.
 - Chain summary page: open from the right rail CTA under Knowledge Graph, run the independent chain builder, inspect metric-over-iteration charts, and read the evidence-based decision chain with sample visualizations.
 - Right rail: current workspace file tree. This is where node artifacts, data files, generated tools, run outputs, logs, and state files appear.
 - Right rail upload: use `Reference Files` to upload PDFs, markdown, text, CSV, or other reference files into `references/`. The upload is recorded in `logs/timeline.jsonl`.
@@ -462,7 +468,7 @@ uv run ts-harness training-template
 
 ```text
 backend/harnessing_ts/           Python backend, CLI, Claude Code SDK runner, MCP tools
-backend/harnessing_ts/variants/  V0-V6 profiles, random catalog, and prompt overlays
+backend/harnessing_ts/variants/  V0-V7 profiles, random catalog, and prompt overlays
 scripts/prepare_runtime_base.py  Direct project runtime-base preparation entrypoint
 frontend/                        Static browser UI served by FastAPI
 tests/                           Backend contracts, variant enforcement, and API tests
@@ -496,13 +502,16 @@ The harness records process state inside the active runtime workspace, not insid
   state/runtime-settings.json
   state/knowledge-graph-build.json
   state/chain-summary-build.json
+  state/reference-feature-build.json
   state/knowledge-graph-llm.json
+  state/reference-feature-llm.json
   state/nodes/<node-session-id>.json
   logs/main.jsonl
   logs/nodes/<node-session-id>.jsonl
   logs/timeline.jsonl
   logs/knowledge-graph-builder.jsonl
   logs/knowledge-reasoning.jsonl
+  logs/reference-feature-builder.jsonl
   logs/chain-builder.jsonl
   artifacts/chain-summary.json
 ```

@@ -19,6 +19,12 @@ from harnessing_ts.knowledge_graph import (
     suggest_next_checks,
 )
 from harnessing_ts.node_state import NodeStateMachine
+from harnessing_ts.reference_feature_extractor import (
+    build_reference_feature_extractor,
+    execute_reference_feature_extractor,
+    inspect_reference_feature_extractor,
+    validate_reference_feature_extractor,
+)
 from harnessing_ts.prompts.compose import PromptContext, build_main_attachment
 from harnessing_ts.schema import NODE_SPECS, ControlRequest, NodeSession, NodeType, Part, RunRecord, WorkspaceState
 from harnessing_ts.settings.llm import LlmConfig, mask_llm_config, read_effective_llm_config
@@ -70,6 +76,7 @@ class HarnessOrchestrator:
         self.state: WorkspaceState | None = None
         self.main_runner: SdkRunner | None = None
         self._main_runner_knowledge_graph_ready: bool | None = None
+        self._main_runner_reference_feature_ready: bool | None = None
         self.active_node_runner: SdkRunner | None = None
         self.active_node_session: NodeSession | None = None
         self._realtime_event_sink: Callable[[str, dict[str, Any]], None] | None = None
@@ -124,6 +131,13 @@ class HarnessOrchestrator:
             self.get_chain_summary_parts(),
         )
 
+    def _emit_reference_feature_parts(self, _part: Part) -> None:
+        self._emit_parts_if_changed(
+            "reference_feature_parts",
+            "referenceFeatureParts",
+            self.get_reference_feature_parts(),
+        )
+
     def _emit_parts_if_changed(self, event_type: str, payload_key: str, parts: list[Part]) -> None:
         if self._realtime_parts_cache.get(event_type) == parts:
             return
@@ -150,7 +164,7 @@ class HarnessOrchestrator:
             part = system_text_part("\n".join(dry_run_lines))
             self.store.append_main_part(part)
             return [user_part, part]
-        await self._refresh_main_runner_for_knowledge_graph()
+        await self._refresh_main_runner_for_dynamic_tools()
         self._ensure_main_runner()
         assert self.main_runner
         parts = await self.main_runner.send_with_user_echo(
@@ -369,6 +383,24 @@ class HarnessOrchestrator:
             observations=args.get("observations") if isinstance(args.get("observations"), list) else None,
             include_evidence=bool(args.get("includeEvidence", False)),
         )
+
+    def request_extract_reference_features(self, args: dict[str, Any]) -> dict[str, Any]:
+        if not self.variant.reference_feature_extractor:
+            raise RuntimeError(f"Reference feature extraction is disabled by ablation variant {self.variant.id}.")
+        if not self.store.is_reference_feature_extractor_ready():
+            raise RuntimeError("Reference feature extractor is not ready. Build and validate it first.")
+        output = execute_reference_feature_extractor(self.workspace_path, args.get("input"))
+        self.store.append_timeline({
+            "type": "reference_features_extracted",
+            "timestamp": now_iso(),
+            "message": f"features={len(output.get('features', []))}",
+        })
+        return output
+
+    def request_inspect_reference_feature_extractor(self, _args: dict[str, Any]) -> dict[str, Any]:
+        if not self.variant.reference_feature_extractor:
+            raise RuntimeError(f"Reference feature extraction is disabled by ablation variant {self.variant.id}.")
+        return inspect_reference_feature_extractor(self.workspace_path)
 
     async def interrupt_current(self, reason: str | None = None) -> dict[str, Any]:
         self._ensure_initialized()
@@ -615,6 +647,30 @@ class HarnessOrchestrator:
         self._ensure_initialized()
         return self.store.read_chain_summary_parts()
 
+    def get_reference_feature_status(self) -> dict[str, Any]:
+        self._ensure_initialized()
+        status = self.store.read_reference_feature_status()
+        if status.get("status") == "completed":
+            try:
+                status = {**status, **validate_reference_feature_extractor(self.workspace_path)}
+            except (OSError, RuntimeError, ValueError) as exc:
+                status = {**status, "ready": False, "validationError": str(exc)}
+        return status
+
+    def get_reference_feature_parts(self) -> list[Part]:
+        self._ensure_initialized()
+        return self.store.read_reference_feature_parts()
+
+    def get_reference_feature_llm_config(self) -> dict[str, Any]:
+        self._ensure_initialized()
+        return {"config": mask_llm_config(self._reference_feature_llm_config()), "sdk": {}}
+
+    def get_reference_feature_tool(self) -> dict[str, Any]:
+        self._ensure_initialized()
+        if not self.store.is_reference_feature_extractor_ready():
+            return {}
+        return inspect_reference_feature_extractor(self.workspace_path)
+
     def get_knowledge_graph_llm_config(self) -> dict[str, Any]:
         self._ensure_initialized()
         cfg = self._knowledge_graph_llm_config()
@@ -690,6 +746,11 @@ class HarnessOrchestrator:
         self.store.write_knowledge_graph_llm_config(values)
         cfg = self._knowledge_graph_llm_config()
         return {"config": mask_llm_config(cfg), "sdk": {}}
+
+    def update_reference_feature_llm_config(self, values: dict[str, Any]) -> dict[str, Any]:
+        self._ensure_initialized()
+        self.store.write_reference_feature_llm_config(values)
+        return {"config": mask_llm_config(self._reference_feature_llm_config()), "sdk": {}}
 
     def update_main_llm_config(self, values: dict[str, Any]) -> dict[str, Any]:
         self._ensure_initialized()
@@ -820,6 +881,78 @@ class HarnessOrchestrator:
             "message": message,
         })
         self._emit_knowledge_graph_snapshot()
+        return {"paused": True, "status": status}
+
+    async def build_reference_features(self, trigger: str = "manual") -> dict[str, Any]:
+        self._ensure_initialized()
+        if not self.variant.reference_feature_extractor:
+            raise RuntimeError(f"Reference feature builder is disabled by ablation variant {self.variant.id}.")
+        setattr(self, "_reference_feature_pause_requested", False)
+        clear_file(self.store.reference_feature_log_path)
+        status = self.store.write_reference_feature_status({
+            "running": True,
+            "status": "running",
+            "startedAt": now_iso(),
+            "finishedAt": None,
+            "trigger": trigger,
+            "message": "Reference feature builder is running.",
+        })
+        self.store.append_timeline({"type": "reference_feature_build_started", "timestamp": status["startedAt"], "message": trigger})
+        try:
+            result = await build_reference_feature_extractor(
+                workspace_path=self.workspace_path,
+                store=self.store,
+                llm_config=self._reference_feature_llm_config(),
+                on_part=self._emit_reference_feature_parts,
+                on_runner=lambda runner: setattr(self, "_reference_feature_runner", runner),
+            )
+        except Exception as exc:
+            finished = now_iso()
+            paused = bool(getattr(self, "_reference_feature_pause_requested", False))
+            self.store.write_reference_feature_status({
+                "running": False,
+                "status": "paused" if paused else "failed",
+                "finishedAt": finished,
+                "message": "Reference feature builder paused." if paused else str(exc),
+            })
+            self.store.append_timeline({
+                "type": "reference_feature_build_paused" if paused else "reference_feature_build_failed",
+                "timestamp": finished,
+                "message": "paused" if paused else str(exc),
+            })
+            if paused:
+                return {"ok": False, "paused": True, "status": self.get_reference_feature_status()}
+            raise
+        finished = now_iso()
+        self.store.write_reference_feature_status({
+            "running": False,
+            "status": "completed",
+            "finishedAt": finished,
+            "message": "Reference feature extractor built and validated.",
+            **result,
+        })
+        self.store.append_timeline({
+            "type": "reference_feature_build_completed",
+            "timestamp": finished,
+            "message": result.get("sourcePath", "tools/reference-feature-extractor/extractor.py"),
+            "payload": result,
+        })
+        await self._refresh_main_runner_for_dynamic_tools()
+        return {"ok": True, "status": self.get_reference_feature_status(), "tool": self.get_reference_feature_tool()}
+
+    async def pause_reference_feature_build(self, reason: str | None = None) -> dict[str, Any]:
+        message = reason or "Paused from reference feature UI."
+        setattr(self, "_reference_feature_pause_requested", True)
+        runner = getattr(self, "_reference_feature_runner", None)
+        if runner is not None:
+            await runner.interrupt()
+        status = self.store.write_reference_feature_status({
+            "running": False,
+            "status": "paused",
+            "finishedAt": now_iso(),
+            "message": message,
+        })
+        self.store.append_timeline({"type": "reference_feature_build_paused", "timestamp": status["finishedAt"], "message": message})
         return {"paused": True, "status": status}
 
     async def build_chain_summary(self, trigger: str = "manual") -> dict[str, Any]:
@@ -1097,6 +1230,7 @@ class HarnessOrchestrator:
             return
         self.main_runner = None
         self._main_runner_knowledge_graph_ready = None
+        self._main_runner_reference_feature_ready = None
         if runner.is_running:
             try:
                 await runner.interrupt()
@@ -1254,6 +1388,20 @@ class HarnessOrchestrator:
             contextWindow=graph.get("contextWindow") or main.contextWindow,
         )
 
+    def _reference_feature_llm_config(self) -> LlmConfig:
+        fallback = self._knowledge_graph_llm_config()
+        if not self.store.reference_feature_llm_path.exists():
+            return fallback
+        raw = self.store.read_reference_feature_llm_config()
+        return LlmConfig(
+            authMode=raw.get("authMode") if raw.get("authMode") in {"manual", "sdk-default"} else fallback.authMode,
+            model=raw.get("model") or fallback.model,
+            apiKey=raw.get("apiKey") or fallback.apiKey,
+            baseUrl=raw.get("baseUrl") or fallback.baseUrl,
+            protocol=raw.get("protocol") or fallback.protocol,
+            contextWindow=raw.get("contextWindow") or fallback.contextWindow,
+        )
+
     def _llm_config_from_dict(self, raw: dict[str, Any]) -> LlmConfig:
         protocol = raw.get("protocol") if raw.get("protocol") in {"anthropic", "openai-compat"} else None
         context = raw.get("contextWindow") if raw.get("contextWindow") in {"200k", "1m"} else None
@@ -1335,6 +1483,7 @@ class HarnessOrchestrator:
             "latestNodeSession": _main_node_snapshot(latest),
             "anchorArtifacts": {path: (self.workspace_path / path).exists() for path in anchor_paths},
             "knowledgeGraphReady": self.variant.knowledge_graph and self.store.is_knowledge_graph_ready(),
+            "referenceFeatureExtractorReady": self.variant.reference_feature_extractor and self.store.is_reference_feature_extractor_ready(),
             "recommendedAction": recommended_action,
             "recommendedNode": recommended_node,
             "routingReason": reason,
@@ -1344,27 +1493,35 @@ class HarnessOrchestrator:
         if self.main_runner:
             return
         knowledge_graph_ready = self.variant.knowledge_graph and self.store.is_knowledge_graph_ready()
+        reference_feature_ready = self.variant.reference_feature_extractor and self.store.is_reference_feature_extractor_ready()
         self.main_runner = build_main_runner(
             workspace_path=self.workspace_path,
             locale=self.locale,
             log_path=self.store.main_log_path,
             enter_node=self.request_enter_node if self.variant.node_chain else None,
             query_knowledge=self.request_query_knowledge if knowledge_graph_ready else None,
+            extract_reference_features=self.request_extract_reference_features if reference_feature_ready else None,
+            inspect_reference_feature_extractor=self.request_inspect_reference_feature_extractor if reference_feature_ready else None,
             variant=self.variant,
             on_part=self._emit_main_parts,
         )
         self._main_runner_knowledge_graph_ready = knowledge_graph_ready
+        self._main_runner_reference_feature_ready = reference_feature_ready
 
-    async def _refresh_main_runner_for_knowledge_graph(self) -> None:
+    async def _refresh_main_runner_for_dynamic_tools(self) -> None:
         if not self.main_runner:
             return
-        current = self.variant.knowledge_graph and self.store.is_knowledge_graph_ready()
-        if self._main_runner_knowledge_graph_ready == current:
+        graph_ready = self.variant.knowledge_graph and self.store.is_knowledge_graph_ready()
+        feature_ready = self.variant.reference_feature_extractor and self.store.is_reference_feature_extractor_ready()
+        if self._main_runner_knowledge_graph_ready == graph_ready and self._main_runner_reference_feature_ready == feature_ready:
             return
         await self._close_main_runner(
-            reason="knowledge_graph_availability_changed",
-            message="Main runner closed because query_knowledge availability changed; the next turn will use a fresh tool set.",
+            reason="dynamic_tool_availability_changed",
+            message="Main runner closed because reference tool availability changed; the next turn will use a fresh tool set.",
         )
+
+    async def _refresh_main_runner_for_knowledge_graph(self) -> None:
+        await self._refresh_main_runner_for_dynamic_tools()
 
     def _spawn_node_runner(self, node: NodeSession) -> None:
         node_id = node["id"]
@@ -1381,6 +1538,8 @@ class HarnessOrchestrator:
             log_path=self.store.node_log_path(node_id),
             finish_node=lambda args: self.request_finish_node_for_node(args, node_id),
             query_knowledge=self.request_query_knowledge if self.variant.knowledge_graph else None,
+            extract_reference_features=self.request_extract_reference_features if self.variant.reference_feature_extractor and self.store.is_reference_feature_extractor_ready() else None,
+            inspect_reference_feature_extractor=self.request_inspect_reference_feature_extractor if self.variant.reference_feature_extractor and self.store.is_reference_feature_extractor_ready() else None,
             record_artifact=lambda args: self.record_artifact_for_node(args, node_id, node_type),
             record_run=lambda args: self.record_run_for_node(args, node_id, node_type),
             get_runtime_settings=self.get_runtime_settings,

@@ -10,12 +10,12 @@ from harnessing_ts.variants import get_variant, resolve_variant
 from harnessing_ts.variants.random_search import sample_candidates
 
 
-def test_variant_registry_exposes_all_seven_profiles(monkeypatch) -> None:
+def test_variant_registry_exposes_all_eight_profiles(monkeypatch) -> None:
     monkeypatch.delenv("TS_HARNESS_VARIANT", raising=False)
     assert resolve_variant().id == "V0"
-    assert [get_variant(f"v{index}").id for index in range(7)] == [f"V{index}" for index in range(7)]
+    assert [get_variant(f"v{index}").id for index in range(8)] == [f"V{index}" for index in range(8)]
     with pytest.raises(RuntimeError, match="Invalid TS_HARNESS_VARIANT"):
-        get_variant("V7")
+        get_variant("V8")
 
 
 def test_variant_capabilities_change_actual_tool_permissions() -> None:

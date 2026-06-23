@@ -25,6 +25,8 @@ def build_main_runner(
     log_path: Path,
     enter_node: Callable[[dict[str, Any]], Any] | None,
     query_knowledge: Callable[[dict[str, Any]], Any] | None,
+    extract_reference_features: Callable[[dict[str, Any]], Any] | None = None,
+    inspect_reference_feature_extractor: Callable[[dict[str, Any]], Any] | None = None,
     variant: AblationVariant | None = None,
     on_part: Callable[[Part], None] | None = None,
 ) -> SdkRunner:
@@ -35,6 +37,8 @@ def build_main_runner(
         session_role="main",
         enter_node=enter_node,
         query_knowledge=query_knowledge,
+        extract_reference_features=extract_reference_features,
+        inspect_reference_feature_extractor=inspect_reference_feature_extractor,
     )
     if mcp_server is None:
         raise RuntimeError("Claude Code SDK Harness MCP server could not be created.")
@@ -42,7 +46,11 @@ def build_main_runner(
         cwd=workspace_path,
         system_prompt=build_main_system_prompt(ctx, variant),
         attachment_text=None,
-        allowed_tools=build_main_allowed_tools(knowledge_graph_ready=query_knowledge is not None, variant=variant),
+        allowed_tools=build_main_allowed_tools(
+            knowledge_graph_ready=query_knowledge is not None,
+            reference_feature_extractor_ready=extract_reference_features is not None,
+            variant=variant,
+        ),
         model=sdk_config.model,
         env=sdk_config.env,
         extra_args=sdk_config.extra_args,
@@ -60,6 +68,8 @@ def build_node_runner(
     log_path: Path,
     finish_node: Callable[[dict[str, Any]], Any],
     query_knowledge: Callable[[dict[str, Any]], Any] | None,
+    extract_reference_features: Callable[[dict[str, Any]], Any] | None = None,
+    inspect_reference_feature_extractor: Callable[[dict[str, Any]], Any] | None = None,
     record_artifact: Callable[[dict[str, Any]], Any],
     record_run: Callable[[dict[str, Any]], Any],
     get_runtime_settings: Callable[[], Any],
@@ -76,6 +86,8 @@ def build_node_runner(
         session_role="node",
         finish_node=finish_node,
         query_knowledge=query_knowledge,
+        extract_reference_features=extract_reference_features,
+        inspect_reference_feature_extractor=inspect_reference_feature_extractor,
         record_artifact=record_artifact,
         record_run=record_run,
         get_runtime_settings=get_runtime_settings,
@@ -87,7 +99,11 @@ def build_node_runner(
         cwd=workspace_path,
         system_prompt=build_node_system_prompt(node_type, ctx, variant),
         attachment_text=build_node_attachment(node_type, node.get("inputSummary")),
-        allowed_tools=build_node_allowed_tools(node_type, variant=variant),
+        allowed_tools=build_node_allowed_tools(
+            node_type,
+            reference_feature_extractor_ready=extract_reference_features is not None,
+            variant=variant,
+        ),
         model=sdk_config.model,
         env=sdk_config.env,
         extra_args=sdk_config.extra_args,

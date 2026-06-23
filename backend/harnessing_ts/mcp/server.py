@@ -35,6 +35,8 @@ def create_harness_mcp_server(
     session_role: str,
     enter_node: Callable[[dict[str, Any]], Any] | None = None,
     query_knowledge: Callable[[dict[str, Any]], Any] | None = None,
+    extract_reference_features: Callable[[dict[str, Any]], Any] | None = None,
+    inspect_reference_feature_extractor: Callable[[dict[str, Any]], Any] | None = None,
     finish_node: Callable[[dict[str, Any]], Any] | None = None,
     record_artifact: Callable[[dict[str, Any]], Any] | None = None,
     record_run: Callable[[dict[str, Any]], Any] | None = None,
@@ -91,6 +93,36 @@ def create_harness_mcp_server(
             return text_result(await _maybe_await(query_knowledge(_without_intend(args))))
 
         tools.append(_query_knowledge)
+
+    if (session_role == "main" or session_role == "node") and extract_reference_features:
+        @tool(
+            name="extract_reference_features",
+            description="Run the validated deterministic program built strictly from the current task definition and references. Pass one case in exactly the task data format. Returns reference-defined feature values, units, judgments, rules, evidence, and warnings. Case review must call this for every analyzed case when the tool is available; do not replace it with visual or LLM-only judgment.",
+            input_schema=_require_intend({
+                "type": "object",
+                "properties": {
+                    "input": {
+                        "description": "One case encoded exactly as documented by the generated extractor inputSchema. Use inspect_reference_feature_extractor first when the format is unclear."
+                    },
+                },
+                "required": ["input"],
+            }),
+        )
+        async def _extract_reference_features(args: dict[str, Any]) -> dict[str, Any]:
+            return text_result(await _maybe_await(extract_reference_features(_without_intend(args))))
+
+        tools.append(_extract_reference_features)
+
+    if (session_role == "main" or session_role == "node") and inspect_reference_feature_extractor:
+        @tool(
+            name="inspect_reference_feature_extractor",
+            description="Read the complete generated deterministic extractor contract and implementation: manifest, reference rules, README, and source code. Use this to learn the exact reference-backed feature definitions, thresholds, limitations, input/output rules, and implementation details before calling extract_reference_features.",
+            input_schema=_require_intend({"type": "object", "properties": {}}),
+        )
+        async def _inspect_reference_feature_extractor(args: dict[str, Any]) -> dict[str, Any]:
+            return text_result(await _maybe_await(inspect_reference_feature_extractor(_without_intend(args))))
+
+        tools.append(_inspect_reference_feature_extractor)
 
     if session_role == "node" and finish_node:
         @tool(

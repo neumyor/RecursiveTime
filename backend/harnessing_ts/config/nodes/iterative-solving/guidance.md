@@ -35,6 +35,7 @@
 - 形成当前轮解决方案，写入或更新 `user/solution-plan.md`。方案中必须引用本轮候选综合结论，并明确哪些候选被保留、组合或放弃。
 - 执行方案，记录工具调用、训练/推理/验证命令、结果文件、指标和关键观察。所有本轮输出放入 `runs/iterations/<iteration-id>/`。
 - 在写 summary 之前，必须先做整体结果分析和 case review。case review 的核心对象是 bad case；good case、边界样本和工具冲突样本只作为 bad case 归因的对照证据出现。
+- 若系统提供 `mcp__ts_harness__extract_reference_features`，开始 case review 前必须先调用 `mcp__ts_harness__inspect_reference_feature_extractor` 核对输入输出契约和源码；随后必须对每个被分析的 bad case 以及用于对照的每个 good/prototype case 分别调用 `mcp__ts_harness__extract_reference_features`。报告必须记录返回的 feature value、unit、judgment、rule 和 evidence。不得用肉眼或 LLM 自行判断替代该确定性工具；工具返回 `indeterminate` 时必须如实保留。
 - case review 必须产出完整报告 `reports/iterations/<iteration-id>-case-review.md`，至少包含：
   - **Case review scope**：定义本轮什么算作bad case。
   - **Sampling policy**：
@@ -45,10 +46,11 @@
   - **Per-case visualization**：
     - 每个被分析样本都必须有样本可视化结果。若数据形态不支持，必须提供等价可解释视图并说明原因。时间序列任务应展示原始序列局部窗口、目标点/片段、预测结果、真实标签/参考答案、关键工具特征或 score；分类任务应展示原始样本或可解释视图、预测类别、真实类别和关键证据。
     - 所有可视化图片必须以 250 DPI 生成，保存到 `runs/iterations/<iteration-id>/case-review/visualizations/`，并在报告中使用正确的 Markdown 图片格式逐一引用，确保 case review 中能正确显示。
-  - **Per-case analysis**：每个样本必须单独成节，包含：
+    - **Per-case analysis**：每个样本必须单独成节，包含：
     - 样本 ID、错误类型、真实结果、预测结果、score/confidence/rank 或其他当前方法输出。
     - 原始输入证据：从 `user/data-spec.md` 定义的原始字段读取并展示，不允许只看模型 score。
     - 当前方法证据：当前工具使用的特征、阈值、检索结果、模型中间输出、规则命中情况或训练/推理状态。
+    - Reference feature evidence：若 reference feature extractor 可用，列出该 case 的完整工具调用结果；若不可用，明确标注 `reference feature extractor unavailable`，不得伪造对应判断。
     - 其他可能有用的信息：reference/domain knowledge、邻近样本、同类 prototype、nearest good case、历史轮次结果、工具冲突结果等。
     - 归因链路：按照“原始数据证据 → 当前方法行为 → 错误机制 → 领域/背景解释”的顺序分析为什么当前方法在该样本上失败。
     - 对照检查：至少和一个 good case、prototype 或 nearest reference case 等进行比较。如果提出某个特征是失败原因，必须检查该特征是否也大量出现在 good case 中。

@@ -17,6 +17,7 @@ class AblationVariant:
     node_chain: bool = True
     knowledge_graph: bool = True
     reference_knowledge: bool = True
+    reference_feature_extractor: bool = True
     independent_subagents: bool = True
     case_review: bool = True
     random_search: bool = False
@@ -44,6 +45,7 @@ class AblationVariant:
                 "nodeChain": self.node_chain,
                 "knowledgeGraph": self.knowledge_graph,
                 "referenceKnowledge": self.reference_knowledge,
+                "referenceFeatureExtractor": self.reference_feature_extractor,
                 "independentSubagents": self.independent_subagents,
                 "caseReview": self.case_review,
                 "randomSearch": self.random_search,
@@ -81,6 +83,7 @@ VARIANTS: dict[str, AblationVariant] = {
         node_chain=False,
         knowledge_graph=False,
         reference_knowledge=False,
+        reference_feature_extractor=False,
         independent_subagents=False,
         case_review=False,
         main_prompt="v1-single-agent.md",
@@ -99,6 +102,7 @@ VARIANTS: dict[str, AblationVariant] = {
         description="Full workflow without query_knowledge or reference-derived knowledge; decisions use contracts, history, results, and data evidence only.",
         knowledge_graph=False,
         reference_knowledge=False,
+        reference_feature_extractor=False,
         node_prompts={
             "problem-contract": "v3-no-knowledge-problem-contract.md",
             "iterative-solving": "v3-no-knowledge-iterative.md",
@@ -134,6 +138,13 @@ VARIANTS: dict[str, AblationVariant] = {
         max_iterations=1,
         node_prompts={"iterative-solving": "v6-one-shot.md"},
         node_purposes={"iterative-solving": "执行唯一一轮完整 HarnessingTS 候选、subagent 和 case review，随后强制进入 final-summary。"},
+    ),
+    "V7": AblationVariant(
+        id="V7",
+        name="No Reference Feature Extractor",
+        description="Full workflow without the independently generated deterministic reference feature extractor; case review must rely on other numeric tools and evidence.",
+        reference_feature_extractor=False,
+        node_prompts={"iterative-solving": "v7-no-reference-feature-extractor.md"},
     ),
 }
 
