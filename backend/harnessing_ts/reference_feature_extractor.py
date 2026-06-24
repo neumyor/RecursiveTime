@@ -8,13 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from harnessing_ts.agent.sdk_runner import SdkRunner, SdkRunnerConfig
 from harnessing_ts.config.markdown import read_prompt_text
-from harnessing_ts.schema import Part
-from harnessing_ts.settings.llm import LlmConfig, build_sdk_invocation_config
 from harnessing_ts.state.jsonl import read_json
-from harnessing_ts.state.message_log import MessageLog
-from harnessing_ts.state.workspace_store import WorkspaceStore
 
 
 TOOL_DIR = Path("tools/reference-feature-extractor")
@@ -23,7 +18,17 @@ SOURCE_PATH = TOOL_DIR / "extractor.py"
 RULES_PATH = TOOL_DIR / "reference-rules.json"
 README_PATH = TOOL_DIR / "README.md"
 TEST_CASES_PATH = TOOL_DIR / "test-cases.json"
-BUILDER_TOOLS = ["Read", "LS", "Glob", "Grep", "Write", "Edit", "Bash"]
+
+# The reference feature extractor is now built directly by the main
+# session during the knowledge-to-tools node. The prompt below is the
+# authoritative build instructions; the main agent reads it (or its
+# inlined summary in the node guidance) and writes the artifacts with
+# Read/LS/Glob/Grep/Write/Edit/Bash. After writing, the main session
+# calls the validate_reference_feature_extractor MCP tool, which
+# invokes validate_reference_feature_extractor() below. The actual
+# build is not driven from this module anymore.
+BUILDER_SYSTEM_PROMPT_PATH = "reference-feature-extractor/system.md"
+BUILDER_BUILD_PROMPT_PATH = "reference-feature-extractor/build.md"
 
 _ALLOWED_IMPORTS = {
     "json", "sys", "math", "statistics", "decimal", "fractions", "collections",
@@ -33,60 +38,12 @@ _FORBIDDEN_CALLS = {"eval", "exec", "compile", "open", "input", "breakpoint", "_
 _FORBIDDEN_ATTRS = {"system", "popen", "spawn", "fork", "urandom", "random", "default_rng", "rand", "randn"}
 
 
-async def build_reference_feature_extractor(
-    *,
-    workspace_path: Path,
-    store: WorkspaceStore,
-    llm_config: LlmConfig,
-    on_part: Any | None = None,
-    on_runner: Any | None = None,
-) -> dict[str, Any]:
-    missing_task_files = [
-        path for path in ("user/problem-contract.md", "user/data-spec.md")
-        if not (workspace_path / path).is_file()
-    ]
-    if missing_task_files:
-        raise RuntimeError("Reference feature builder requires task definition files: " + ", ".join(missing_task_files))
-    if not any(path.is_file() for path in (workspace_path / "references").glob("**/*")):
-        raise RuntimeError("Reference feature builder requires at least one file under references/.")
-    sdk_config = build_sdk_invocation_config(llm_config)
-    if llm_config.authMode == "manual" and not llm_config.apiKey:
-        raise RuntimeError("Reference feature builder LLM config requires apiKey when authMode=manual.")
-
-    runner = SdkRunner(SdkRunnerConfig(
-        cwd=workspace_path,
-        system_prompt=read_prompt_text("reference-feature-extractor/system.md"),
-        attachment_text=None,
-        allowed_tools=BUILDER_TOOLS,
-        model=sdk_config.model,
-        env=sdk_config.env,
-        extra_args=sdk_config.extra_args,
-        log=MessageLog(store.reference_feature_log_path),
-        on_part=on_part,
-    ))
-    if on_runner:
-        on_runner(runner)
-    try:
-        await runner.send_with_user_echo(_builder_prompt(workspace_path))
-    finally:
-        if on_runner:
-            on_runner(None)
-        await runner.close()
-
-    return validate_reference_feature_extractor(workspace_path, run_tests=True)
+def builder_system_prompt() -> str:
+    return read_prompt_text(BUILDER_SYSTEM_PROMPT_PATH)
 
 
-def _builder_prompt(workspace_path: Path) -> str:
-    references = sorted(
-        str(path.relative_to(workspace_path))
-        for path in (workspace_path / "references").glob("**/*")
-        if path.is_file()
-    ) if (workspace_path / "references").exists() else []
-    task_files = [
-        path for path in ("user/problem-contract.md", "user/data-spec.md", "artifacts/reference-knowledge.md")
-        if (workspace_path / path).exists()
-    ]
-    template = read_prompt_text("reference-feature-extractor/build.md")
+def builder_build_prompt(*, task_files: list[str], references: list[str]) -> str:
+    template = read_prompt_text(BUILDER_BUILD_PROMPT_PATH)
     return template.replace("{references_json}", json.dumps(references, ensure_ascii=False, indent=2)).replace(
         "{task_files_json}", json.dumps(task_files, ensure_ascii=False, indent=2)
     )

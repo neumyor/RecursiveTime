@@ -190,7 +190,7 @@ uv run ts-harness training-template
 - `backend/harnessing_ts/knowledge_graph.py`：文件型知识库表、确定性工具、graph view/search/cards、builder/reasoner 调用逻辑。
 - `backend/harnessing_ts/knowledge_prompts.py`：Knowledge Builder / Reasoning Agent prompt 文本与知识图谱构建请求文本。
 - `backend/harnessing_ts/chain_summary.py`：独立 chain builder agent，读取 runtime workspace 的 logs/reports/runs/tools/user 工件，输出结构化思维链总结和 metric series。
-- `backend/harnessing_ts/reference_feature_extractor.py`：独立 Reference Feature Builder、确定性 Python AST 校验、reference evidence 校验、重复执行一致性测试、受控执行和源码/规则检查接口。
+- `backend/harnessing_ts/reference_feature_extractor.py`：主会话构建出的 reference feature extractor 的强校验、确定性 Python AST 校验、reference evidence 校验、重复执行一致性测试和源码/规则检查接口；`builder_system_prompt` / `builder_build_prompt` 暴露 build prompt 文本，backend 自身不再运行独立 builder。
 - `backend/harnessing_ts/config/`：Markdown prompt、node spec、guidance、native-tools 配置，Python 只读取、解析和校验。
 - `frontend/src/main.ts`：当前仍是主要 UI 渲染和事件绑定入口。
 - `frontend/src/api.ts`：前端 JSON/Form API client 和错误消息规范。
@@ -221,13 +221,15 @@ uv run ts-harness training-template
 
 ```text
 problem-contract
+→ knowledge-to-tools
 → iterative-solving
 → final-summary
 ```
 
 - `problem-contract`：用用户输入和 `references/**` 拉取/处理数据、exploration、明确真实任务，产出 `user/problem-contract.md`、`user/data-spec.md`，并为独立 Literature Knowledge Builder 写 `knowledge_base/domain-brief.md`。
+- `knowledge-to-tools`：由主会话直接负责，不再有独立 Reference Feature Builder 子会话。主会话用其 native 工具读取 task contract、data spec、`references/**`、（若已构建）知识图谱并结合领域常识，写出 `tools/reference-feature-extractor/{extractor.py,manifest.json,reference-rules.json,README.md,test-cases.json}`，然后调用 `mcp__ts_harness__validate_reference_feature_extractor` 让后端做强校验（AST 白名单、reference 原文引用、I/O contract、重复执行一致性测试）。校验通过后，`extract_reference_features` 和 `inspect_reference_feature_extractor` 才会被后续 session 视为可用数值证据。该 node 通过 `mcp__ts_harness__finish_node` 交还控制权，`outputPaths` 至少要包含上述五个文件路径以及 `state/reference-feature-build.json`。
 - `iterative-solving`：可重复执行。每轮先用 `mcp__ts_harness__get_runtime_settings` 读取 `iterativeCandidateCount` 作为 k，提出 k 个候选，用 `Task` subagent 分别做可行性测试和 case review，统一综合后把本轮保留或执行的方法落盘为 `tools/<tool-name>/`，更新 `tools/registry.json` / `user/toolset-spec.md` / `user/solution-plan.md`，执行并把结果写入 `runs/iterations/<iteration-id>/`，最后**先写** `reports/iterations/<iteration-id>-case-review.md`、**再写** `reports/iterations/<iteration-id>-summary.md`、更新 `user/iteration-state.md`。通过 `mcp__ts_harness__finish_node(loopDecision=continue|exit, nextNode=iterative-solving|final-summary, outputPaths=…)` 交还控制权。
-- Reference Feature Extractor 构建独立于 node chain。builder 只能依据 task contract、data spec 和 `references/**` 生成 `tools/reference-feature-extractor/`。后端完成 AST 禁用项、reference 原文引用、I/O contract 和重复执行一致性校验后才注入 inspection/extraction MCP。Case review 在工具可用时必须对每个分析 case 和对照 case 调用它，不能用 LLM 目测替代。
+- Reference Feature Extractor 由 `knowledge-to-tools` 节点的主会话负责生成；后端只负责强校验、deterministic executor 和 reference-evidence 检查。Case review 在该工具可用时必须对每个分析 case 和对照 case 调用 `extract_reference_features`，不能用 LLM 目测替代。
 - `final-summary`：迭代结束才进。基于 timeline、runs、tools、problem-contract、data-spec 总结整个优化历程、最终工具使用方案、最终结果和系统边界，产出 `reports/final-summary.md` 和 `user/final-solution.md`。如果进入后发现 `user/iteration-state.md` 的 `recommend_exit` 或 contract 指向继续迭代，应标记失败并要求回到 `iterative-solving`。
 
 每个 node 都是独立 Claude Code SDK session，拥有自己的 system prompt、native-tools 白名单和 node 日志。所有节点流转（`enter_node` / `finish_node`）一律走 MCP `mcp__ts_harness__*` 工具，禁止用 JSON 文本块或 `harnessControl.action=…` 等替代控制协议。
@@ -240,7 +242,7 @@ problem-contract
 - V4：从 iterative-solving 的实际 allowed-tools 中移除 `Task`，相同 k 顺序执行。
 - V5：后端不要求 case-review outputPath，prompt 禁止 bad/good-case、统计归因和 case visualization。
 - V6：后端拒绝 `loopDecision=continue` 以及任何第二次 iterative-solving entry；第一轮仍保留 V0 的完整执行要求。
-- V7：禁用独立 Reference Feature Builder，并从 main/node 的实际 MCP allowed-tools 中移除 inspection/extraction 工具。
+- V7：跳过 `knowledge-to-tools` 节点；chain 退化为 `problem-contract → iterative-solving → final-summary`，主会话不在该节点构建 reference feature extractor；`validate_reference_feature_extractor`、`extract_reference_features` 与 `inspect_reference_feature_extractor` 三个 MCP 工具都不会被注入。
 
 所有 agent 工具调用都必须在参数中包含 `intend` 字段，用一句简短的话说明本次调用的直接意图。Harness MCP 工具 schema 会强制要求该字段；Claude Code 内置工具也必须按 shared role prompt 的要求尽量携带该字段。后端日志会把同一 `toolUseId` 的工具调用和工具结果合并成一条 `tool_call` 消息；前端默认折叠展示，主标题显示 `intend`，展开后显示详细参数和返回结果。
 
@@ -255,16 +257,17 @@ logs/main.jsonl
 logs/nodes/<node-session-id>.jsonl
 logs/timeline.jsonl
 logs/chain-builder.jsonl
-logs/reference-feature-builder.jsonl
 runs/registry.jsonl
 artifacts/chain-summary.json
 state/chain-summary-build.json
 state/reference-feature-build.json
 ```
 
+`knowledge-to-tools` 节点没有独立的 builder 日志；其 agent 行为、写入与 `validate_reference_feature_extractor` 调用全部记录在 `logs/main.jsonl` 中；`state/reference-feature-build.json` 只记录后端强校验结果。
+
 这些目录是运行产物，默认在 `.gitignore` 中。
 
-前端 `Reset Chat` 重置聊天记录和 agent 工作流记忆，但保留 `data/raw/`、`references/`、`knowledge_base/`、知识图谱以及已验证的 `tools/reference-feature-extractor/`、对应构建状态与 builder 日志。`Reset Workspace` 才清除这些 reference 派生产物；独立 LLM 配置继续保留。
+前端 `Reset Chat` 重置聊天记录和 agent 工作流记忆，但保留 `data/raw/`、`references/`、`knowledge_base/`、知识图谱以及已验证的 `tools/reference-feature-extractor/` 与 `state/reference-feature-build.json`。`Reset Workspace` 才清除这些 reference 派生产物；独立 LLM 配置继续保留。
 
 ## 禁止提交
 

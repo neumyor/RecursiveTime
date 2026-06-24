@@ -42,7 +42,10 @@ class NodeStateMachine:
             return None
         if latest.get("nextNode"):
             return latest.get("nextNode")
-        return get_next_node(latest["nodeType"])
+        next_node = get_next_node(latest["nodeType"])
+        if next_node == "knowledge-to-tools" and not self.variant.knowledge_to_tools:
+            return "iterative-solving"
+        return next_node
 
     def normalize_next_node(self, value: Any) -> NodeType | None:
         if value is None:

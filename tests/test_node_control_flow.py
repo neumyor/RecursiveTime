@@ -207,7 +207,7 @@ def test_omitted_next_node_uses_node_spec_default(tmp_path) -> None:
 
     persisted = orchestrator.store.read_node_session(node["id"])
     assert persisted["nextNodeSpecified"] is False
-    assert result["nextNode"] == "iterative-solving"
+    assert result["nextNode"] == "knowledge-to-tools"
 
 
 def test_null_next_node_uses_node_spec_default(tmp_path) -> None:
@@ -224,7 +224,7 @@ def test_null_next_node_uses_node_spec_default(tmp_path) -> None:
 
     persisted = orchestrator.store.read_node_session(node["id"])
     assert persisted["nextNodeSpecified"] is False
-    assert result["nextNode"] == "iterative-solving"
+    assert result["nextNode"] == "knowledge-to-tools"
 
 
 def test_explicit_none_next_node_stops_successful_ordinary_node(tmp_path) -> None:

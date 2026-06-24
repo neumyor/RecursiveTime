@@ -27,6 +27,7 @@ def build_main_runner(
     query_knowledge: Callable[[dict[str, Any]], Any] | None,
     extract_reference_features: Callable[[dict[str, Any]], Any] | None = None,
     inspect_reference_feature_extractor: Callable[[dict[str, Any]], Any] | None = None,
+    validate_reference_feature_extractor: Callable[[dict[str, Any]], Any] | None = None,
     variant: AblationVariant | None = None,
     on_part: Callable[[Part], None] | None = None,
 ) -> SdkRunner:
@@ -39,6 +40,7 @@ def build_main_runner(
         query_knowledge=query_knowledge,
         extract_reference_features=extract_reference_features,
         inspect_reference_feature_extractor=inspect_reference_feature_extractor,
+        validate_reference_feature_extractor=validate_reference_feature_extractor,
     )
     if mcp_server is None:
         raise RuntimeError("Claude Code SDK Harness MCP server could not be created.")

@@ -103,7 +103,6 @@ def create_app() -> FastAPI:
     app.state.run_task = None
     app.state.knowledge_graph_task = None
     app.state.chain_summary_task = None
-    app.state.reference_feature_task = None
 
     @app.middleware("http")
     async def no_store_cache(request: Any, call_next: Any) -> Any:
@@ -323,33 +322,9 @@ def create_app() -> FastAPI:
     async def reference_feature_tool() -> dict[str, Any]:
         return orchestrator.get_reference_feature_tool()
 
-    @app.get("/api/reference-features/log")
-    async def reference_feature_log() -> list[dict[str, Any]]:
-        return orchestrator.get_reference_feature_parts()
-
-    @app.post("/api/reference-features/build")
-    async def trigger_reference_feature_build(request: ReferenceFeatureBuildRequest) -> dict[str, Any]:
-        accepted = _start_reference_feature_build(app, orchestrator, realtime, request.trigger or "manual")
-        return {"accepted": accepted, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
-
-    @app.post("/api/reference-features/pause")
-    async def pause_reference_feature_build(request: InterruptRequest) -> dict[str, Any]:
-        await orchestrator.pause_reference_feature_build(request.reason)
-        realtime.publish("live_snapshot", {"snapshot": _live(orchestrator)})
-        return {"bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
-
     @app.post("/api/reference-features/run")
     async def run_reference_feature_tool(request: ReferenceFeatureRunRequest) -> dict[str, Any]:
         return orchestrator.request_extract_reference_features({"input": request.input})
-
-    @app.get("/api/reference-features/llm-config")
-    async def reference_feature_llm_config() -> dict[str, Any]:
-        return orchestrator.get_reference_feature_llm_config()
-
-    @app.post("/api/reference-features/llm-config")
-    async def update_reference_feature_llm_config(request: KnowledgeGraphLlmConfigRequest) -> dict[str, Any]:
-        config = orchestrator.update_reference_feature_llm_config(request.model_dump(exclude_none=True))
-        return {"config": config, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
     @app.get("/api/files/tree")
     async def file_tree() -> dict[str, Any]:
@@ -466,7 +441,7 @@ def create_app() -> FastAPI:
         if request.scope in {"chat", "all"}:
             if not request.confirmReset:
                 raise HTTPException(status_code=400, detail="reset confirmation required")
-            if _task_running(app.state.run_task) or _task_running(app.state.knowledge_graph_task) or _task_running(app.state.chain_summary_task) or _task_running(app.state.reference_feature_task):
+            if _task_running(app.state.run_task) or _task_running(app.state.knowledge_graph_task) or _task_running(app.state.chain_summary_task):
                 raise HTTPException(status_code=409, detail="cannot reset workspace while a run is active")
         await orchestrator.clear_debug_logs(request.scope)
         return {"ok": True, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
@@ -606,42 +581,6 @@ async def _run_chain_summary_build(
         pass
     finally:
         setattr(orchestrator, "_server_chain_summary_task", None)
-        realtime.publish("live_snapshot", {"snapshot": _live(orchestrator)})
-
-
-def _start_reference_feature_build(
-    app: FastAPI,
-    orchestrator: HarnessOrchestrator,
-    realtime: RealtimeEventBroker,
-    trigger: str,
-) -> bool:
-    current = getattr(app.state, "reference_feature_task", None)
-    if current is not None and not current.done():
-        orchestrator.store.append_timeline({
-            "type": "reference_feature_build_skipped",
-            "timestamp": now_iso_for_server(),
-            "message": "Reference feature builder is already running.",
-            "payload": {"trigger": trigger},
-        })
-        return False
-    app.state.reference_feature_task = asyncio.create_task(_run_reference_feature_build(orchestrator, realtime, trigger))
-    setattr(orchestrator, "_server_reference_feature_task", app.state.reference_feature_task)
-    realtime.publish("live_snapshot", {"snapshot": _live(orchestrator)})
-    return True
-
-
-async def _run_reference_feature_build(
-    orchestrator: HarnessOrchestrator,
-    realtime: RealtimeEventBroker,
-    trigger: str,
-) -> None:
-    setattr(orchestrator, "_server_reference_feature_task", asyncio.current_task())
-    try:
-        await orchestrator.build_reference_features(trigger)
-    except Exception:
-        pass
-    finally:
-        setattr(orchestrator, "_server_reference_feature_task", None)
         realtime.publish("live_snapshot", {"snapshot": _live(orchestrator)})
 
 

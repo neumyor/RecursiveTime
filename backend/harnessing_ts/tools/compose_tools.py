@@ -7,6 +7,7 @@ from harnessing_ts.variants import AblationVariant, get_variant
 READ_ONLY = ["Read", "LS", "Glob", "Grep"]
 DIRECT_TOOL_USE = [*READ_ONLY, "WebFetch", "WebSearch", "Write", "Edit", "Bash"]
 MAIN_POOL = ["mcp__ts_harness__enter_node"]
+VALIDATE_REFERENCE_FEATURE_TOOL = "mcp__ts_harness__validate_reference_feature_extractor"
 REFERENCE_FEATURE_TOOLS = ["mcp__ts_harness__extract_reference_features", "mcp__ts_harness__inspect_reference_feature_extractor"]
 NODE_POOL = ["mcp__ts_harness__finish_node", "mcp__ts_harness__get_runtime_settings", "mcp__ts_harness__record_artifact", "mcp__ts_harness__record_run", "mcp__ts_harness__query_knowledge", *REFERENCE_FEATURE_TOOLS]
 
@@ -23,6 +24,8 @@ def build_main_allowed_tools(
     tools = [*READ_ONLY, *MAIN_POOL]
     if knowledge_graph_ready and variant.knowledge_graph:
         tools.append("mcp__ts_harness__query_knowledge")
+    if variant.knowledge_to_tools:
+        tools.append(VALIDATE_REFERENCE_FEATURE_TOOL)
     if reference_feature_extractor_ready and variant.reference_feature_extractor:
         tools.extend(REFERENCE_FEATURE_TOOLS)
     return sorted(set(tools))

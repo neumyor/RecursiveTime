@@ -46,14 +46,14 @@ def test_initial_progress_recommends_problem_contract(tmp_path) -> None:
     assert snapshot["knowledgeGraphReady"] is False
 
 
-def test_completed_problem_contract_recommends_iterative_solving(tmp_path) -> None:
+def test_completed_problem_contract_recommends_knowledge_to_tools(tmp_path) -> None:
     orchestrator = _orchestrator(tmp_path)
     _complete_node(orchestrator, "problem-contract")
 
     snapshot = orchestrator._main_progress_snapshot()
 
     assert snapshot["recommendedAction"] == "enter_node"
-    assert snapshot["recommendedNode"] == "iterative-solving"
+    assert snapshot["recommendedNode"] == "knowledge-to-tools"
     assert snapshot["latestNodeSession"]["nodeType"] == "problem-contract"
 
 

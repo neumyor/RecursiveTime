@@ -1,0 +1,9 @@
+- Read
+- LS
+- Glob
+- Grep
+- WebFetch
+- WebSearch
+- Write
+- Edit
+- Bash

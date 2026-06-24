@@ -98,22 +98,6 @@ def test_tools_are_only_exposed_when_ready_and_enabled() -> None:
     assert "mcp__ts_harness__inspect_reference_feature_extractor" in node_available
 
 
-def test_feature_builder_has_independent_config_and_defaults_to_graph(tmp_path) -> None:
-    orchestrator = HarnessOrchestrator(tmp_path)
-    orchestrator.initialize()
-    orchestrator.store.write_main_llm_config({"model": "main", "apiKey": "main-key"})
-    orchestrator.store.write_knowledge_graph_llm_config({"model": "graph", "apiKey": "graph-key"})
-
-    inherited = orchestrator._reference_feature_llm_config()
-    orchestrator.update_reference_feature_llm_config({"model": "feature", "apiKey": "feature-key"})
-    independent = orchestrator._reference_feature_llm_config()
-
-    assert inherited.model == "graph"
-    assert inherited.apiKey == "graph-key"
-    assert independent.model == "feature"
-    assert independent.apiKey == "feature-key"
-
-
 def test_reset_chat_preserves_built_reference_feature_tool(tmp_path) -> None:
     orchestrator = HarnessOrchestrator(tmp_path)
     orchestrator.initialize()
@@ -124,3 +108,35 @@ def test_reset_chat_preserves_built_reference_feature_tool(tmp_path) -> None:
 
     assert (tmp_path / "tools" / "reference-feature-extractor" / "extractor.py").exists()
     assert orchestrator.store.is_reference_feature_extractor_ready() is True
+
+
+def test_validate_mcp_tool_publishes_status_for_main_session(tmp_path) -> None:
+    import asyncio
+
+    orchestrator = HarnessOrchestrator(tmp_path, mode="auto")
+    orchestrator.initialize()
+    _write_extractor(tmp_path)
+
+    result = asyncio.run(orchestrator.request_validate_reference_feature_extractor({"runTests": True}))
+
+    assert result["status"] == "completed"
+    assert result["ready"] is True
+    assert result["featureCount"] == 1
+    assert orchestrator.store.is_reference_feature_extractor_ready() is True
+
+
+def test_validate_mcp_tool_reports_failures_for_incomplete_artifacts(tmp_path) -> None:
+    import asyncio
+
+    orchestrator = HarnessOrchestrator(tmp_path, mode="auto")
+    orchestrator.initialize()
+    (tmp_path / "references").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "tools" / "reference-feature-extractor").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "tools" / "reference-feature-extractor" / "extractor.py").write_text("import json\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="missing required files"):
+        asyncio.run(orchestrator.request_validate_reference_feature_extractor({"runTests": True}))
+
+    assert orchestrator.store.is_reference_feature_extractor_ready() is False
+    status = orchestrator.store.read_reference_feature_status()
+    assert status["status"] == "failed"

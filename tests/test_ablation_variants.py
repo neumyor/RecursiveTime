@@ -134,6 +134,86 @@ def test_v3_backend_rejects_knowledge_operations(tmp_path, monkeypatch) -> None:
         orchestrator.search_knowledge_notes("test")
 
 
+def test_v7_skips_knowledge_to_tools_node_and_disables_validate_tool(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("TS_HARNESS_VARIANT", "V7")
+    from harnessing_ts.orchestrator import HarnessOrchestrator
+
+    orchestrator = HarnessOrchestrator(tmp_path, dry_run=True)
+    orchestrator.initialize()
+
+    capabilities = orchestrator.get_variant()["capabilities"]
+    assert capabilities["knowledgeToTools"] is False
+    assert capabilities["referenceFeatureExtractor"] is False
+
+    node_types = {spec["type"] for spec in orchestrator.get_node_specs()}
+    assert "knowledge-to-tools" in node_types
+
+    problem_spec = next(spec for spec in orchestrator.get_node_specs() if spec["type"] == "problem-contract")
+    # When the variant is loaded, the capability is what determines the
+    # effective chain; the problem-contract spec's required inputs are
+    # gated to empty for the knowledge-to-tools node, and the
+    # node_state machinery skips it during routing.
+    assert "knowledge-to-tools" in node_types
+
+    with pytest.raises(RuntimeError, match="disables the knowledge-to-tools node"):
+        asyncio.run(orchestrator.enter_node({"nodeType": "knowledge-to-tools", "rationale": "should be blocked"}))
+
+    with pytest.raises(RuntimeError, match="disabled by ablation variant V7"):
+        asyncio.run(orchestrator.request_validate_reference_feature_extractor({}))
+
+    # Main session must not receive the validate tool under V7.
+    from harnessing_ts.tools.compose_tools import build_main_allowed_tools
+    main_tools = build_main_allowed_tools(variant=orchestrator.variant)
+    assert "mcp__ts_harness__validate_reference_feature_extractor" not in main_tools
+    assert "mcp__ts_harness__extract_reference_features" not in main_tools
+    assert "mcp__ts_harness__inspect_reference_feature_extractor" not in main_tools
+
+
+def test_v7_routes_problem_contract_directly_to_iterative_solving(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("TS_HARNESS_VARIANT", "V7")
+    from harnessing_ts.orchestrator import HarnessOrchestrator
+    from harnessing_ts.node_state import NodeStateMachine
+
+    state = NodeStateMachine(tmp_path, get_variant("V7"))
+    node: dict = {
+        "id": "pc-1",
+        "nodeType": "problem-contract",
+        "status": "completed",
+        "success": True,
+        "nextNode": None,
+        "nextNodeSpecified": False,
+        "loopDecision": None,
+        "goalMet": False,
+    }
+    assert state.next_node_after_completion(node) == "iterative-solving"
+
+
+def test_v0_routes_problem_contract_to_knowledge_to_tools(tmp_path) -> None:
+    from harnessing_ts.node_state import NodeStateMachine
+    from harnessing_ts.variants import get_variant
+
+    state = NodeStateMachine(tmp_path, get_variant("V0"))
+    node: dict = {
+        "id": "pc-1",
+        "nodeType": "problem-contract",
+        "status": "completed",
+        "success": True,
+        "nextNode": None,
+        "nextNodeSpecified": False,
+        "loopDecision": None,
+        "goalMet": False,
+    }
+    assert state.next_node_after_completion(node) == "knowledge-to-tools"
+
+
+def test_v0_main_session_includes_validate_reference_feature_tool() -> None:
+    from harnessing_ts.tools.compose_tools import build_main_allowed_tools
+    from harnessing_ts.variants import get_variant
+
+    tools = build_main_allowed_tools(variant=get_variant("V0"))
+    assert "mcp__ts_harness__validate_reference_feature_extractor" in tools
+
+
 def test_v6_backend_rejects_second_iterative_entry(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("TS_HARNESS_VARIANT", "V6")
     from harnessing_ts.orchestrator import HarnessOrchestrator

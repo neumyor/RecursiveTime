@@ -34,11 +34,9 @@ class WorkspaceStore:
         self.knowledge_graph_log_path = root / "logs" / "knowledge-graph-builder.jsonl"
         self.knowledge_reasoning_log_path = root / "logs" / "knowledge-reasoning.jsonl"
         self.chain_summary_log_path = root / "logs" / "chain-builder.jsonl"
-        self.reference_feature_log_path = root / "logs" / "reference-feature-builder.jsonl"
         self.runtime_path = root / "state" / "runtime.json"
         self.runtime_settings_path = root / "state" / "runtime-settings.json"
         self.knowledge_graph_llm_path = root / "state" / "knowledge-graph-llm.json"
-        self.reference_feature_llm_path = root / "state" / "reference-feature-llm.json"
         self.knowledge_graph_status_path = root / "state" / "knowledge-graph-build.json"
         self.knowledge_graph_path = root / "artifacts" / "knowledge-graph.json"
         self.chain_summary_status_path = root / "state" / "chain-summary-build.json"
@@ -219,6 +217,46 @@ class WorkspaceStore:
         except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
             return False
 
+    def validate_and_store_reference_feature(self, *, run_tests: bool = True) -> dict[str, Any]:
+        """Run the deterministic validator on the on-disk extractor
+        artifacts, update the persisted status, and return the validation
+        summary. Raises on hard validation failure; the caller can decide
+        whether to surface the error to the agent or first call this with
+        ``run_tests=False`` to surface manifest/evidence issues faster."""
+        from harnessing_ts.reference_feature_extractor import validate_reference_feature_extractor
+
+        ts = now_iso()
+        try:
+            summary = validate_reference_feature_extractor(self.root, run_tests=run_tests)
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+            self.write_reference_feature_status({
+                "running": False,
+                "status": "failed",
+                "finishedAt": ts,
+                "message": str(exc),
+            })
+            self.append_timeline({
+                "type": "reference_feature_validation_failed",
+                "timestamp": ts,
+                "message": str(exc),
+            })
+            raise
+        status = {
+            "running": False,
+            "status": "completed",
+            "finishedAt": ts,
+            "message": "Reference feature extractor validated.",
+            **summary,
+        }
+        self.write_reference_feature_status(status)
+        self.append_timeline({
+            "type": "reference_feature_validated",
+            "timestamp": ts,
+            "message": summary.get("sourcePath", "tools/reference-feature-extractor/extractor.py"),
+            "payload": summary,
+        })
+        return status
+
     @property
     def main_llm_path(self) -> Path:
         return self.root / "config.llm.json"
@@ -272,32 +310,11 @@ class WorkspaceStore:
         })
         return sanitized
 
-    def read_reference_feature_llm_config(self) -> dict[str, Any]:
-        raw = read_json(self.reference_feature_llm_path) or {}
-        return _sanitize_llm_config(raw, default_auth_mode="manual")
-
-    def write_reference_feature_llm_config(self, values: dict[str, Any]) -> dict[str, Any]:
-        current = self.read_reference_feature_llm_config()
-        merged = dict(current)
-        for key in ("authMode", "protocol", "model", "apiKey", "baseUrl", "contextWindow"):
-            if key not in values:
-                continue
-            value = values[key]
-            if key == "apiKey" and (value is None or value == "" or _looks_masked_secret(str(value))):
-                continue
-            merged[key] = value
-        sanitized = _sanitize_llm_config(merged, default_auth_mode="manual")
-        write_json(self.reference_feature_llm_path, sanitized)
-        self.append_timeline({
-            "type": "reference_feature_llm_updated",
-            "timestamp": now_iso(),
-            "message": f"model={sanitized.get('model') or 'inherited'}",
-            "payload": _mask_llm_config_dict(sanitized),
-        })
-        return sanitized
-
     def read_reference_feature_parts(self) -> list[Part]:
-        return filter_display_parts(collapse_tool_parts(read_jsonl(self.reference_feature_log_path)))
+        """The reference feature extractor is now built by the main
+        session, so there is no separate builder log; return an empty
+        list for backward compatibility with the bootstrap payload."""
+        return []
 
     def read_runtime_settings(self) -> RuntimeSettings:
         raw = read_json(self.runtime_settings_path) or {}
@@ -656,7 +673,6 @@ class WorkspaceStore:
                     "logs/chain-builder.jsonl",
                     "tools/reference-feature-extractor",
                     "state/reference-feature-build.json",
-                    "logs/reference-feature-builder.jsonl",
                 ],
                 "cleared": [
                     "logs/main.jsonl",

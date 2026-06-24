@@ -106,11 +106,11 @@ uv run ts-harness-server
 
 Open [http://127.0.0.1:4327](http://127.0.0.1:4327), then use the UI in this order:
 
-1. Open **Settings** and verify the Main LLM. Configure independent Knowledge Graph and Reference Feature Builder credentials only when they should differ from the defaults.
+1. Open **Settings** and verify the Main LLM. Configure an independent Knowledge Graph credential only when it should differ from the Main LLM.
 2. Upload domain documents with **Reference Files** and task data with **Raw Data Zip**.
 3. Send the task definition in the main conversation. The orchestrator enters `problem-contract`, then iterates through solving and case review.
 4. Build **Knowledge Graph** after references are available.
-5. Build **Reference Features** after `user/problem-contract.md` and `user/data-spec.md` exist. The validated deterministic extractor is then exposed to main/node sessions.
+5. Run the **knowledge-to-tools** node (or, in `auto` mode, let the orchestrator enter it) after `user/problem-contract.md` and `user/data-spec.md` exist. The main session writes the deterministic extractor under `tools/reference-feature-extractor/` and calls `validate_reference_feature_extractor` to have the backend publish the tool.
 6. Review node traces, case-review artifacts, tool outputs, and the final summary in the UI and workspace file tree.
 
 ### 5. Common development commands
@@ -162,9 +162,12 @@ Set variables before `uv run ts-harness-server`. Shell exports apply only to tha
 
 ```text
 problem-contract
+→ knowledge-to-tools
 → iterative-solving
 → final-summary
 ```
+
+`knowledge-to-tools` runs only for variants that opt in (V0-V3, V5, V6). V7 (`No Knowledge-to-Tools Node`) skips it: the chain becomes `problem-contract → iterative-solving → final-summary` and no reference feature extractor is built.
 
 ## Node Responsibilities And Native Tools
 
@@ -245,7 +248,7 @@ backend/harnessing_ts/chain_summary.py
   Independent chain builder agent for reading runtime logs/reports/runs and producing a structured, frontend-renderable decision-chain summary.
 
 backend/harnessing_ts/reference_feature_extractor.py
-  Independent reference feature builder, deterministic source validator/executor, reference-evidence checker, and main-session inspection contract.
+  Main-session reference feature extractor validator/executor, reference-evidence checker, and main-session inspection contract. The main session writes the artifacts during the `knowledge-to-tools` node; the backend performs the strong validation pass and runs determinism tests on demand.
 
 frontend/src/main.ts
   Static UI rendering and event binding.
@@ -259,13 +262,14 @@ frontend/src/types.ts
 
 Keep new behavior inside these boundaries. Routing rules belong in `node_state.py`; ablation definitions, catalogs, and prompt differences belong in `variants/`; SDK session construction belongs in `agent/session_factory.py`; aggregate API response shape belongs in `api/payloads.py`; workspace layout details belong in `state/workspace_layout.py`. Variant behavior must be enforced by capabilities, tool availability, or backend contracts where possible; prompt text alone is not a sufficient guard.
 
-The browser receives main-session, node-session, knowledge-graph-builder, reference-feature-builder, chain-summary-builder, runtime-status, and workspace-file updates through the `/api/events` Server-Sent Events stream. The frontend does not poll `/api/live`: the SSE bootstrap event supplies initial/reconnect state, and keyed DOM reconciliation only inserts, moves, updates, or removes messages whose stable ids changed. `/api/live` is retained for API compatibility and diagnostics only.
+The browser receives main-session, node-session, knowledge-graph-builder, chain-summary-builder, runtime-status, and workspace-file updates through the `/api/events` Server-Sent Events stream. The frontend does not poll `/api/live`: the SSE bootstrap event supplies initial/reconnect state, and keyed DOM reconciliation only inserts, moves, updates, or removes messages whose stable ids changed. `/api/live` is retained for API compatibility and diagnostics only.
 
 The following node table describes the V0 full-system baseline. V1 removes the chain entirely; V2-V7 apply the enforced differences documented under Ablation variants.
 
 | Node | Responsibility | Produces | Native tools |
 |---|---|---|---|
 | `problem-contract` | Use the user request and references to acquire/process data, explore it, and clarify the real task. It may optionally prepare a domain brief for the independent literature knowledge builder. | `user/problem-contract.md`, `user/data-spec.md` | `Read`, `LS`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Write`, `Edit`, `Bash` |
+| `knowledge-to-tools` | The main session directly writes the deterministic reference feature extractor (`tools/reference-feature-extractor/**`) using task contract, data spec, `references/**`, the knowledge graph (if available) and its own domain knowledge, then calls `mcp__ts_harness__validate_reference_feature_extractor` so the backend performs the strong validation pass. Once validated, `extract_reference_features` and `inspect_reference_feature_extractor` are injected into subsequent sessions. | `tools/reference-feature-extractor/**`, `state/reference-feature-build.json` | `Read`, `LS`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Write`, `Edit`, `Bash` |
 | `iterative-solving` | Repeated iteration node. Each round first calls `mcp__ts_harness__get_runtime_settings` to read `iterativeCandidateCount`, proposes k candidates, assigns `Task` subagents to independently test/review candidates, synthesizes the evidence, standardizes retained methods or combinations under `tools/`, executes the selected solution, writes candidate review, case review, iteration summary, and updates iteration state. | `tools/**`, `runs/iterations/<iteration-id>/**`, `reports/iterations/<iteration-id>-candidate-review.md`, `reports/iterations/<iteration-id>-case-review.md`, `reports/iterations/<iteration-id>-summary.md`, `user/iteration-state.md` | `Read`, `LS`, `Glob`, `Grep`, `Task`, `WebFetch`, `WebSearch`, `Write`, `Edit`, `Bash` |
 | `final-summary` | If iteration is complete, summarize the full optimization trajectory, final tool-use solution, final results, limitations, and evidence. | `reports/final-summary.md`, `user/final-solution.md` | `Read`, `LS`, `Glob`, `Grep`, `Write`, `Edit` |
 
@@ -379,7 +383,7 @@ Select one immutable experiment profile through `TS_HARNESS_VARIANT` before star
 | `V4` | No Independent Subagents | Removes `Task` from iterative-solving; the same k candidates are implemented and reviewed sequentially by the node agent. |
 | `V5` | No Case Review | Removes case-review artifacts, bad/good-case analysis, statistical error attribution, and case visualizations. |
 | `V6` | One-Shot Harness | Keeps the full first iteration, but the backend rejects `continue` and any second iterative-solving entry. |
-| `V7` | No Reference Feature Extractor | Keeps the full workflow but removes the independent builder and both reference-feature MCP tools. |
+| `V7` | No Knowledge-to-Tools Node | Keeps the full workflow but skips the `knowledge-to-tools` node: no reference feature extractor is built, the chain becomes `problem-contract → iterative-solving → final-summary`, and the `validate_reference_feature_extractor`, `extract_reference_features`, and `inspect_reference_feature_extractor` MCP tools are not exposed. |
 
 The selected profile is parsed once during process startup, recorded in workspace state/timeline, exposed by bootstrap/live APIs, and highlighted in the left-side Workspace card. Invalid values fail fast. Use a separate `TS_HARNESS_WORKSPACE` per experiment to prevent artifacts from different variants from sharing state. V6 uses the current `iterativeCandidateCount`; set that value to the desired one-shot total candidate budget before the iteration begins when matching V0's average total candidate count.
 
@@ -455,9 +459,9 @@ The browser UI uses this split:
 - Center: main orchestrator chat. The transcript selector above the chat can show all sessions, only the main session, or one specific node session.
 - Center toolbar: `Interrupt` pauses the currently running main turn or active node. If a node is paused, you can add guidance and resume it from the composer.
 - Center toolbar: `Reset Chat` clears chat logs, node sessions, workflow state, ordinary generated tools, reports, runs, and processed data while preserving `data/raw/`, `references/`, the built knowledge graph, and the validated `tools/reference-feature-extractor/`. `Reset Workspace` performs the full destructive reset and also removes those reference-derived artifacts.
-- Settings panels: configure main-session, knowledge-graph, and reference-feature-builder LLM settings plus `iterativeCandidateCount` and `knowledgeGraphExtractionDepth`. The feature builder has its own persisted credentials and defaults to the Knowledge Graph/Chain Builder configuration.
+- Settings panels: configure main-session and knowledge-graph LLM settings plus `iterativeCandidateCount` and `knowledgeGraphExtractionDepth`. The reference feature extractor is built by the main session during the `knowledge-to-tools` node and reuses the main LLM, so it has no separate credentials.
 - Knowledge workbench: build/pause/continue the independent literature knowledge graph, inspect knowledge/evidence/class/relation cards, and query the graph through natural language.
-- Reference Features workbench: build/pause the independent deterministic extractor and inspect its trace, schemas, reference rules, README, and complete source. Successful builds write `tools/reference-feature-extractor/{extractor.py,manifest.json,reference-rules.json,README.md,test-cases.json}`.
+- Chain summary card: shows iteration and metric counts plus a `features: …` suffix indicating whether the validated reference feature extractor is in place (`ready · N features`, `failed`, or `disabled · <variant>`). The detailed artifacts live under `tools/reference-feature-extractor/` in the workspace file tree.
 - Chain summary page: open from the right rail CTA under Knowledge Graph, run the independent chain builder, inspect metric-over-iteration charts, and read the evidence-based decision chain with sample visualizations.
 - Right rail: current workspace file tree. This is where node artifacts, data files, generated tools, run outputs, logs, and state files appear.
 - Right rail upload: use `Reference Files` to upload PDFs, markdown, text, CSV, or other reference files into `references/`. The upload is recorded in `logs/timeline.jsonl`.
@@ -551,14 +555,12 @@ The harness records process state inside the active runtime workspace, not insid
   state/chain-summary-build.json
   state/reference-feature-build.json
   state/knowledge-graph-llm.json
-  state/reference-feature-llm.json
   state/nodes/<node-session-id>.json
   logs/main.jsonl
   logs/nodes/<node-session-id>.jsonl
   logs/timeline.jsonl
   logs/knowledge-graph-builder.jsonl
   logs/knowledge-reasoning.jsonl
-  logs/reference-feature-builder.jsonl
   logs/chain-builder.jsonl
   artifacts/chain-summary.json
 ```

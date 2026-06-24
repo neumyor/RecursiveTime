@@ -54,13 +54,11 @@ const state = {
     ? 'knowledgeGraph'
     : window.location.pathname === '/chain-summary'
     ? 'chainSummary'
-    : window.location.pathname === '/reference-features'
-    ? 'referenceFeatures'
     : window.location.pathname === '/image-viewer'
     ? 'imageViewer'
     : window.location.pathname === '/settings'
     ? 'settings'
-    : 'chat') as 'chat' | 'knowledgeGraph' | 'chainSummary' | 'referenceFeatures' | 'imageViewer' | 'settings'),
+    : 'chat') as 'chat' | 'knowledgeGraph' | 'chainSummary' | 'imageViewer' | 'settings'),
   selectedImagePath: new URLSearchParams(window.location.search).get('path') || '',
   selectedGraphNodeId: null as string | null,
   selectedKnowledgeBaseKind: null as string | null,
@@ -76,12 +74,6 @@ const state = {
     graphModel: '',
     graphBaseUrl: '',
     graphApiKey: '',
-    featureAuthMode: 'manual',
-    featureProtocol: '',
-    featureContext: '',
-    featureModel: '',
-    featureBaseUrl: '',
-    featureApiKey: '',
     mainAuthMode: 'manual',
     mainProtocol: '',
     mainContext: '',
@@ -97,12 +89,6 @@ const state = {
     graphModel: string;
     graphBaseUrl: string;
     graphApiKey: string;
-    featureAuthMode: string;
-    featureProtocol: string;
-    featureContext: string;
-    featureModel: string;
-    featureBaseUrl: string;
-    featureApiKey: string;
     mainAuthMode: string;
     mainProtocol: string;
     mainContext: string;
@@ -340,27 +326,6 @@ app.innerHTML = `
       <section id="chainSummaryContent" class="chain-content-panel"></section>
     </section>
 
-    <section id="referenceFeatureView" class="chain-summary-view" hidden>
-      <header class="chain-header">
-        <div class="chain-title-block">
-          <div class="eyebrow"><span data-icon="ShieldCheck"></span><span>Reference Features</span></div>
-          <h2>Deterministic Feature Extractor</h2>
-          <p>由独立 Agent 严格依据任务定义和 Reference 生成、验证并向主会话提供的确定性特征程序。</p>
-        </div>
-        <div class="chain-header-actions">
-          <button id="backToChatFromFeatureBtn" type="button" class="chain-back-btn"><span data-icon="ChevronLeft"></span><span>返回主会话</span></button>
-          <button id="pauseFeatureBtn" type="button" class="chain-back-btn"><span data-icon="Pause"></span><span>暂停</span></button>
-          <button id="buildFeatureBtn" type="button" class="chain-generate-btn"><span data-icon="RefreshCw"></span><span>生成特征工具</span></button>
-        </div>
-      </header>
-      <section id="referenceFeatureStatus" class="chain-build-status"></section>
-      <section class="chain-content-panel">
-        <div class="panel-heading"><span data-icon="TerminalSquare"></span><span>Builder Agent Trace</span></div>
-        <div id="referenceFeatureTrace" class="builder-trace"></div>
-      </section>
-      <section id="referenceFeatureContent" class="chain-content-panel"></section>
-    </section>
-
     <section id="imageViewerView" class="image-viewer-view" hidden>
       <header class="image-viewer-header">
         <div>
@@ -404,18 +369,6 @@ app.innerHTML = `
         <div class="kg-cta-meta">
           <span class="kg-cta-pill" id="chainCtaPill">Idle</span>
           <span class="kg-cta-stats" id="chainCtaStats">not generated</span>
-        </div>
-      </div>
-      <div class="kg-cta-arrow"><span data-icon="ChevronRight"></span></div>
-    </button>
-    <button id="featureCta" class="kg-cta chain-cta" type="button" data-state="idle" aria-label="Open Reference Feature Extractor">
-      <div class="kg-cta-icon"><span data-icon="ShieldCheck"></span></div>
-      <div class="kg-cta-body">
-        <div class="kg-cta-eyebrow">Deterministic Reference Tool</div>
-        <div class="kg-cta-title">Reference Features</div>
-        <div class="kg-cta-meta">
-          <span class="kg-cta-pill" id="featureCtaPill">Idle</span>
-          <span class="kg-cta-stats" id="featureCtaStats">not built</span>
         </div>
       </div>
       <div class="kg-cta-arrow"><span data-icon="ChevronRight"></span></div>
@@ -510,13 +463,6 @@ const els = {
   chatStream: query<HTMLElement>('#chatStream'),
   knowledgeGraphView: query<HTMLElement>('#knowledgeGraphView'),
   chainSummaryView: query<HTMLElement>('#chainSummaryView'),
-  referenceFeatureView: query<HTMLElement>('#referenceFeatureView'),
-  referenceFeatureStatus: query<HTMLElement>('#referenceFeatureStatus'),
-  referenceFeatureTrace: query<HTMLElement>('#referenceFeatureTrace'),
-  referenceFeatureContent: query<HTMLElement>('#referenceFeatureContent'),
-  backToChatFromFeatureBtn: query<HTMLButtonElement>('#backToChatFromFeatureBtn'),
-  buildFeatureBtn: query<HTMLButtonElement>('#buildFeatureBtn'),
-  pauseFeatureBtn: query<HTMLButtonElement>('#pauseFeatureBtn'),
   imageViewerView: query<HTMLElement>('#imageViewerView'),
   imageViewerTitle: query<HTMLElement>('#imageViewerTitle'),
   imageViewerImage: query<HTMLImageElement>('#imageViewerImage'),
@@ -565,9 +511,6 @@ const els = {
   chainCta: query<HTMLButtonElement>('#chainCta'),
   chainCtaPill: query<HTMLElement>('#chainCtaPill'),
   chainCtaStats: query<HTMLElement>('#chainCtaStats'),
-  featureCta: query<HTMLButtonElement>('#featureCta'),
-  featureCtaPill: query<HTMLElement>('#featureCtaPill'),
-  featureCtaStats: query<HTMLElement>('#featureCtaStats'),
   stateBtn: query<HTMLButtonElement>('#stateBtn'),
   llmBtn: query<HTMLButtonElement>('#llmBtn'),
   settingsBtn: query<HTMLButtonElement>('#settingsBtn'),
@@ -680,22 +623,6 @@ els.chainCta.addEventListener('click', async () => {
   resetChainRenderSignatures();
   render();
 });
-els.featureCta.addEventListener('click', () => {
-  state.view = 'referenceFeatures';
-  history.pushState({}, '', '/reference-features');
-  render();
-});
-els.backToChatFromFeatureBtn.addEventListener('click', () => {
-  state.view = 'chat';
-  history.pushState({}, '', '/');
-  render();
-});
-els.buildFeatureBtn.addEventListener('click', async () => {
-  await postJson('/api/reference-features/build', { trigger: 'manual' });
-});
-els.pauseFeatureBtn.addEventListener('click', async () => {
-  await postJson('/api/reference-features/pause', { reason: 'Paused from reference feature UI.' });
-});
 els.backToChatFromChainBtn.addEventListener('click', () => {
   state.view = 'chat';
   history.pushState({}, '', '/');
@@ -716,8 +643,6 @@ window.addEventListener('popstate', () => {
     ? 'knowledgeGraph'
     : path === '/chain-summary'
     ? 'chainSummary'
-    : path === '/reference-features'
-    ? 'referenceFeatures'
     : path === '/image-viewer'
     ? 'imageViewer'
     : path === '/settings'
@@ -941,16 +866,14 @@ function render() {
   renderStable('knowledge-workbench', [data.knowledgeBaseSummary, state.selectedKnowledgeBaseKind, state.knowledgeBaseCards, state.knowledgeBaseCardsBusy, state.knowledgeQuestion, state.knowledgeAnswer, state.knowledgeQueryBusy], () => renderKnowledgeWorkbench(data));
   renderStable('builder-trace', data.knowledgeGraphParts || [], () => renderBuilderTrace(data.knowledgeGraphParts || []));
   renderChainSummary(data);
-  renderReferenceFeatures(data);
   renderImageViewer();
-  renderStable('settings', [data.llmConfig, data.knowledgeGraphLlmConfig, data.referenceFeatureLlmConfig, data.runtimeSettings], () => renderSettings(data));
+  renderStable('settings', [data.llmConfig, data.knowledgeGraphLlmConfig, data.runtimeSettings], () => renderSettings(data));
   renderViewState();
   renderStable('timeline', data.timeline, () => renderTimeline(data.timeline));
   renderStable('file-tree', data.fileTree, () => renderFileTree(data.fileTree));
   renderStable('runtime-settings', data.runtimeSettings || ws.runtimeSettings, () => renderRuntimeSettings(data.runtimeSettings || ws.runtimeSettings));
   renderKgCta(data);
   renderChainCta(data);
-  renderFeatureCta(data);
   renderDebugActions(Boolean(data.debugEnabled));
   updateControls(data);
   renderShellState();
@@ -1238,58 +1161,18 @@ function renderChainCta(data: Bootstrap) {
   els.chainCta.dataset.state = ctaState;
   els.chainCtaPill.textContent = label;
   els.chainCtaPill.className = `kg-cta-pill ${ctaState}`;
-  els.chainCtaStats.textContent = iterations || metrics ? `${iterations} iterations · ${metrics} metrics` : 'not generated';
-}
-
-function renderFeatureCta(data: Bootstrap) {
-  const build = data.referenceFeatureBuild || {};
-  const running = Boolean(data.runtime?.referenceFeatureRunning || build.running);
-  const count = Number(build.featureCount || data.referenceFeatureTool?.featureCount || 0);
-  let ctaState: 'idle' | 'building' | 'built' | 'failed' = 'idle';
-  let label = 'Idle';
-  if (build.status === 'failed') { ctaState = 'failed'; label = 'Failed'; }
-  else if (running) { ctaState = 'building'; label = 'Building'; }
-  else if (build.status === 'completed' && build.ready !== false) { ctaState = 'built'; label = 'Ready'; }
-  els.featureCta.dataset.state = ctaState;
-  els.featureCtaPill.textContent = label;
-  els.featureCtaPill.className = `kg-cta-pill ${ctaState}`;
-  els.featureCtaStats.textContent = count ? `${count} features` : 'not built';
-}
-
-function renderReferenceFeatures(data: Bootstrap) {
-  if (state.view !== 'referenceFeatures') return;
-  const build = data.referenceFeatureBuild || {};
-  const tool = data.referenceFeatureTool || {};
-  const running = Boolean(data.runtime?.referenceFeatureRunning || build.running);
-  const enabled = data.variant?.capabilities?.referenceFeatureExtractor !== false;
-  els.buildFeatureBtn.disabled = running || !enabled;
-  els.pauseFeatureBtn.disabled = !running || !enabled;
-  els.referenceFeatureStatus.innerHTML = `
-    <div class="chain-status-main">
-      <span class="mini-pill ${build.status === 'failed' ? 'failed' : running ? 'active' : build.status === 'completed' ? 'ready' : 'pending'}">
-        ${running ? '<span data-icon="Loader2"></span>' : ''}${escapeHtml(!enabled ? `disabled · ${data.variant?.id || 'variant'}` : build.status || 'idle')}
-      </span>
-      <span>${escapeHtml(build.message || '')}</span>
-    </div>`;
-  renderBuilderTrace(data.referenceFeatureParts || [], els.referenceFeatureTrace);
-  if (!tool.manifest) {
-    els.referenceFeatureContent.innerHTML = emptyState('尚未生成通过验证的 Reference Feature Extractor。', 'ShieldCheck');
-    return;
+  const featureBuild = data.referenceFeatureBuild || {};
+  const featureCount = Number(featureBuild.featureCount || data.referenceFeatureTool?.featureCount || 0);
+  let featureLabel: string | null = null;
+  if (featureBuild.status === 'completed' && featureBuild.ready !== false) {
+    featureLabel = `features: ${featureCount}`;
+  } else if (featureBuild.status === 'failed') {
+    featureLabel = 'features: failed';
+  } else if (data.variant?.capabilities?.referenceFeatureExtractor === false) {
+    featureLabel = `features: disabled · ${data.variant?.id || 'variant'}`;
   }
-  const features = Array.isArray(tool.manifest.features) ? tool.manifest.features : [];
-  els.referenceFeatureContent.innerHTML = `
-    <div class="panel-heading"><span data-icon="ShieldCheck"></span><span>Validated Tool Contract</span></div>
-    <div class="chain-overview-grid">
-      <article><span>Features</span><strong>${escapeHtml(features.length)}</strong></article>
-      <article><span>Tests passed</span><strong>${escapeHtml(build.testsPassed ?? '—')}</strong></article>
-      <article><span>Source</span><strong>${escapeHtml(tool.sourcePath || '')}</strong></article>
-    </div>
-    <h3>Feature definitions</h3>
-    ${features.map((feature: JsonMap) => `<article class="chain-iteration-card"><h4>${escapeHtml(feature.name || '')}</h4><p>${escapeHtml(feature.description || '')}</p><pre>${escapeHtml(JSON.stringify(feature.evidence || [], null, 2))}</pre></article>`).join('')}
-    <h3>Input schema</h3><pre>${escapeHtml(JSON.stringify(tool.manifest.inputSchema || {}, null, 2))}</pre>
-    <h3>Output schema</h3><pre>${escapeHtml(JSON.stringify(tool.manifest.outputSchema || {}, null, 2))}</pre>
-    <h3>README</h3><div class="markdown-body">${renderMarkdown(tool.readme || '')}</div>
-    <h3>Source code</h3><pre>${escapeHtml(tool.source || '')}</pre>`;
+  const base = iterations || metrics ? `${iterations} iterations · ${metrics} metrics` : 'not generated';
+  els.chainCtaStats.textContent = featureLabel ? `${base} · ${featureLabel}` : base;
 }
 
 function syncSettingsFromBootstrap(data: Bootstrap) {
@@ -1312,12 +1195,9 @@ function syncSettingsFromBootstrap(data: Bootstrap) {
   state.settings.graphModel = graph.model || '';
   state.settings.graphBaseUrl = graph.baseUrl || '';
 
-  const feature = data.referenceFeatureLlmConfig?.config || {};
-  state.settings.featureAuthMode = feature.authMode || 'manual';
-  state.settings.featureProtocol = feature.protocol || '';
-  state.settings.featureContext = feature.contextWindow || '';
-  state.settings.featureModel = feature.model || '';
-  state.settings.featureBaseUrl = feature.baseUrl || '';
+  // The reference feature extractor is built by the main session; no
+  // independent LLM config is needed. The validated tool status is
+  // surfaced through the node detail panel and the chain CTA.
 }
 
 function renderSettings(data: Bootstrap) {
@@ -1384,7 +1264,6 @@ function renderSettings(data: Bootstrap) {
     </div>
 
     ${renderLlmSection('graph', 'Knowledge Graph Builder LLM', 'Used by the reference knowledge graph builder agent. Leave fields blank to inherit from Main LLM.')}
-    ${renderLlmSection('feature', 'Reference Feature Builder LLM', 'Used only by the deterministic reference feature builder. Blank fields inherit the Knowledge Graph / Chain Builder configuration.')}
     ${renderLlmSection('main', 'Main LLM', 'Used by the orchestrator and all node agents. Saved to <code>&lt;workspace&gt;/config.llm.json</code>; takes effect on the next message.', true)}
   `;
 
@@ -1392,13 +1271,13 @@ function renderSettings(data: Bootstrap) {
   hydrateIcons(els.settingsContent);
 }
 
-function renderLlmSection(prefix: 'graph' | 'feature' | 'main', title: string, description: string, isMain = false): string {
+function renderLlmSection(prefix: 'graph' | 'main', title: string, description: string, isMain = false): string {
   const s = state.settings;
-  const authValue = (isMain ? s.mainAuthMode : prefix === 'feature' ? s.featureAuthMode : s.graphAuthMode) || 'manual';
-  const protocolValue = isMain ? s.mainProtocol : prefix === 'feature' ? s.featureProtocol : s.graphProtocol;
-  const contextValue = isMain ? s.mainContext : prefix === 'feature' ? s.featureContext : s.graphContext;
-  const modelValue = isMain ? s.mainModel : prefix === 'feature' ? s.featureModel : s.graphModel;
-  const baseUrlValue = isMain ? s.mainBaseUrl : prefix === 'feature' ? s.featureBaseUrl : s.graphBaseUrl;
+  const authValue = (isMain ? s.mainAuthMode : s.graphAuthMode) || 'manual';
+  const protocolValue = isMain ? s.mainProtocol : s.graphProtocol;
+  const contextValue = isMain ? s.mainContext : s.graphContext;
+  const modelValue = isMain ? s.mainModel : s.graphModel;
+  const baseUrlValue = isMain ? s.mainBaseUrl : s.graphBaseUrl;
   const authOptions = [
     { value: 'manual', label: 'manual' },
     { value: 'sdk-default', label: 'sdk-default' },
@@ -1416,7 +1295,7 @@ function renderLlmSection(prefix: 'graph' | 'feature' | 'main', title: string, d
   const modelPlaceholder = isMain ? 'e.g. deepseek-v4-pro' : 'inherits main model';
   const baseUrlPlaceholder = isMain ? 'https://api.example.com/anthropic' : 'inherits main endpoint';
   const apiKeyPlaceholder = 'leave blank to keep current';
-  const saveBtnId = isMain ? 'saveMainLlmBtn' : prefix === 'feature' ? 'saveFeatureLlmBtn' : 'saveGraphLlmBtn2';
+  const saveBtnId = isMain ? 'saveMainLlmBtn' : 'saveGraphLlmBtn2';
   const resetBtnId = isMain ? 'resetMainLlmBtn' : '';
   const modelId = `${prefix}Model`;
   const baseUrlId = `${prefix}BaseUrl`;
@@ -1490,9 +1369,6 @@ function bindSettingsHandlers() {
         } else if (name === 'graphAuthMode') state.settings.graphAuthMode = value;
         else if (name === 'graphProtocol') state.settings.graphProtocol = value;
         else if (name === 'graphContext') state.settings.graphContext = value;
-        else if (name === 'featureAuthMode') state.settings.featureAuthMode = value;
-        else if (name === 'featureProtocol') state.settings.featureProtocol = value;
-        else if (name === 'featureContext') state.settings.featureContext = value;
         else if (name === 'mainAuthMode') state.settings.mainAuthMode = value;
         else if (name === 'mainProtocol') state.settings.mainProtocol = value;
         else if (name === 'mainContext') state.settings.mainContext = value;
@@ -1505,9 +1381,6 @@ function bindSettingsHandlers() {
       if (id === 'graphModel') state.settings.graphModel = input.value;
       else if (id === 'graphBaseUrl') state.settings.graphBaseUrl = input.value;
       else if (id === 'graphApiKey') state.settings.graphApiKey = input.value;
-      else if (id === 'featureModel') state.settings.featureModel = input.value;
-      else if (id === 'featureBaseUrl') state.settings.featureBaseUrl = input.value;
-      else if (id === 'featureApiKey') state.settings.featureApiKey = input.value;
       else if (id === 'mainModel') state.settings.mainModel = input.value;
       else if (id === 'mainBaseUrl') state.settings.mainBaseUrl = input.value;
       else if (id === 'mainApiKey') state.settings.mainApiKey = input.value;
@@ -1515,8 +1388,6 @@ function bindSettingsHandlers() {
   }
   const graphSave = els.settingsContent.querySelector<HTMLButtonElement>('#saveGraphLlmBtn2');
   graphSave?.addEventListener('click', () => saveLlmConfig(false));
-  const featureSave = els.settingsContent.querySelector<HTMLButtonElement>('#saveFeatureLlmBtn');
-  featureSave?.addEventListener('click', () => saveFeatureLlmConfig());
   const mainSave = els.settingsContent.querySelector<HTMLButtonElement>('#saveMainLlmBtn');
   mainSave?.addEventListener('click', () => saveLlmConfig(true));
   const mainReset = els.settingsContent.querySelector<HTMLButtonElement>('#resetMainLlmBtn');
@@ -1598,28 +1469,6 @@ async function saveLlmConfig(isMain: boolean) {
   }
 }
 
-async function saveFeatureLlmConfig() {
-  const s = state.settings;
-  try {
-    const result = await postJson('/api/reference-features/llm-config', {
-      authMode: s.featureAuthMode,
-      protocol: s.featureProtocol,
-      model: s.featureModel,
-      apiKey: s.featureApiKey || undefined,
-      baseUrl: s.featureBaseUrl,
-      contextWindow: s.featureContext,
-    });
-    applyBootstrapSnapshot(result.bootstrap);
-    state.settings.featureApiKey = '';
-    const input = document.getElementById('featureApiKey') as HTMLInputElement | null;
-    if (input) input.value = '';
-    const status = els.settingsContent.querySelector<HTMLElement>('#featureSaveStatus');
-    if (status) status.textContent = 'Saved';
-  } catch (error) {
-    showDetail('Save Reference Feature Builder LLM failed', { message: error instanceof Error ? error.message : String(error) });
-  }
-}
-
 async function resetMainLlmConfig() {
   if (!confirm('Reset main LLM to file default? This clears model, endpoint, protocol, and context window saved in <workspace>/config.llm.json. API key is kept.')) return;
   try {
@@ -1640,18 +1489,16 @@ async function resetMainLlmConfig() {
 function renderViewState() {
   const graphMode = state.view === 'knowledgeGraph';
   const chainMode = state.view === 'chainSummary';
-  const featureMode = state.view === 'referenceFeatures';
   const imageMode = state.view === 'imageViewer';
   const settingsMode = state.view === 'settings';
-  els.chatStream.hidden = graphMode || chainMode || featureMode || imageMode || settingsMode;
+  els.chatStream.hidden = graphMode || chainMode || imageMode || settingsMode;
   els.knowledgeGraphView.hidden = !graphMode;
   els.chainSummaryView.hidden = !chainMode;
-  els.referenceFeatureView.hidden = !featureMode;
   els.imageViewerView.hidden = !imageMode;
   els.settingsView.hidden = !settingsMode;
-  els.sendForm.hidden = graphMode || chainMode || featureMode || imageMode || settingsMode;
-  els.transcriptScope.disabled = graphMode || chainMode || featureMode || imageMode;
-  query('#mainTitle').textContent = graphMode ? 'Knowledge Graph' : chainMode ? '思维链总结' : featureMode ? 'Reference Features' : imageMode ? '图片查看' : settingsMode ? 'Settings' : 'Orchestrator';
+  els.sendForm.hidden = graphMode || chainMode || imageMode || settingsMode;
+  els.transcriptScope.disabled = graphMode || chainMode || imageMode;
+  query('#mainTitle').textContent = graphMode ? 'Knowledge Graph' : chainMode ? '思维链总结' : imageMode ? '图片查看' : settingsMode ? 'Settings' : 'Orchestrator';
   document.body.classList.toggle('knowledge-page', graphMode);
   document.body.classList.toggle('chain-page', chainMode);
   document.body.classList.toggle('image-page', imageMode);

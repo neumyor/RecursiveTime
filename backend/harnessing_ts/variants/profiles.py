@@ -17,7 +17,7 @@ class AblationVariant:
     node_chain: bool = True
     knowledge_graph: bool = True
     reference_knowledge: bool = True
-    reference_feature_extractor: bool = True
+    knowledge_to_tools: bool = True
     independent_subagents: bool = True
     case_review: bool = True
     random_search: bool = False
@@ -29,6 +29,14 @@ class AblationVariant:
     @property
     def direct_main_tool_use(self) -> bool:
         return not self.node_chain
+
+    @property
+    def reference_feature_extractor(self) -> bool:
+        """The reference feature extractor is available iff the
+        `knowledge-to-tools` node runs and produces a validated tool.
+        V7 (and any future variant that disables the node) propagates
+        from `knowledge_to_tools`."""
+        return self.knowledge_to_tools
 
     def prompt_overlay(self, scope: str) -> str:
         relative = self.main_prompt if scope == "main" else self.node_prompts.get(scope)
@@ -45,6 +53,7 @@ class AblationVariant:
                 "nodeChain": self.node_chain,
                 "knowledgeGraph": self.knowledge_graph,
                 "referenceKnowledge": self.reference_knowledge,
+                "knowledgeToTools": self.knowledge_to_tools,
                 "referenceFeatureExtractor": self.reference_feature_extractor,
                 "independentSubagents": self.independent_subagents,
                 "caseReview": self.case_review,
@@ -58,6 +67,8 @@ class AblationVariant:
         values = list(paths)
         if not self.reference_knowledge and node_type == "problem-contract":
             values = [value for value in values if "references/" not in value]
+        if not self.knowledge_to_tools and node_type == "knowledge-to-tools":
+            return []
         return values
 
     def node_purpose(self, node_type: str, default: str) -> str:
@@ -67,6 +78,8 @@ class AblationVariant:
         values = list(paths)
         if not self.case_review and node_type == "iterative-solving":
             values = [value for value in values if "case-review" not in value]
+        if not self.knowledge_to_tools and node_type == "knowledge-to-tools":
+            return []
         return values
 
 
@@ -83,7 +96,7 @@ VARIANTS: dict[str, AblationVariant] = {
         node_chain=False,
         knowledge_graph=False,
         reference_knowledge=False,
-        reference_feature_extractor=False,
+        knowledge_to_tools=False,
         independent_subagents=False,
         case_review=False,
         main_prompt="v1-single-agent.md",
@@ -102,7 +115,7 @@ VARIANTS: dict[str, AblationVariant] = {
         description="Full workflow without query_knowledge or reference-derived knowledge; decisions use contracts, history, results, and data evidence only.",
         knowledge_graph=False,
         reference_knowledge=False,
-        reference_feature_extractor=False,
+        knowledge_to_tools=False,
         node_prompts={
             "problem-contract": "v3-no-knowledge-problem-contract.md",
             "iterative-solving": "v3-no-knowledge-iterative.md",
@@ -141,10 +154,15 @@ VARIANTS: dict[str, AblationVariant] = {
     ),
     "V7": AblationVariant(
         id="V7",
-        name="No Reference Feature Extractor",
-        description="Full workflow without the independently generated deterministic reference feature extractor; case review must rely on other numeric tools and evidence.",
-        reference_feature_extractor=False,
-        node_prompts={"iterative-solving": "v7-no-reference-feature-extractor.md"},
+        name="No Knowledge-to-Tools Node",
+        description="Full workflow without the knowledge-to-tools node: the main session never builds a deterministic reference feature extractor, the chain skips the new node, and case review must rely on other numeric tools and evidence.",
+        knowledge_to_tools=False,
+        node_prompts={
+            "iterative-solving": "v7-no-knowledge-to-tools.md",
+        },
+        node_purposes={
+            "knowledge-to-tools": "本变体跳过 knowledge-to-tools 节点；主会话不在该节点构建 reference feature extractor。",
+        },
     ),
 }
 

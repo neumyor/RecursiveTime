@@ -37,7 +37,6 @@ def build_bootstrap_payload(
         "referenceFeatureBuild": orchestrator.get_reference_feature_status(),
         "referenceFeatureTool": orchestrator.get_reference_feature_tool(),
         "referenceFeatureParts": orchestrator.get_reference_feature_parts(),
-        "referenceFeatureLlmConfig": orchestrator.get_reference_feature_llm_config(),
         "chainSummary": orchestrator.get_chain_summary(),
         "chainSummaryBuild": orchestrator.get_chain_summary_status(),
         "chainSummaryParts": orchestrator.get_chain_summary_parts(),
@@ -68,7 +67,6 @@ def build_live_payload(
         "referenceFeatureBuild": orchestrator.get_reference_feature_status(),
         "referenceFeatureTool": orchestrator.get_reference_feature_tool(),
         "referenceFeatureParts": orchestrator.get_reference_feature_parts(),
-        "referenceFeatureLlmConfig": orchestrator.get_reference_feature_llm_config(),
         "chainSummary": orchestrator.get_chain_summary(),
         "chainSummaryBuild": orchestrator.get_chain_summary_status(),
         "chainSummaryParts": orchestrator.get_chain_summary_parts(),
@@ -87,6 +85,5 @@ def _runtime_payload(orchestrator: HarnessOrchestrator, task_running: TaskRunnin
         "running": task_running(getattr(orchestrator, "_server_run_task", None)),
         "knowledgeGraphRunning": task_running(getattr(orchestrator, "_server_knowledge_graph_task", None)),
         "chainSummaryRunning": task_running(getattr(orchestrator, "_server_chain_summary_task", None)),
-        "referenceFeatureRunning": task_running(getattr(orchestrator, "_server_reference_feature_task", None)),
         "workspaceUv": orchestrator.get_runtime_status(),
     }

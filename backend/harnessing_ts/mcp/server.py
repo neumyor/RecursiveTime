@@ -37,6 +37,7 @@ def create_harness_mcp_server(
     query_knowledge: Callable[[dict[str, Any]], Any] | None = None,
     extract_reference_features: Callable[[dict[str, Any]], Any] | None = None,
     inspect_reference_feature_extractor: Callable[[dict[str, Any]], Any] | None = None,
+    validate_reference_feature_extractor: Callable[[dict[str, Any]], Any] | None = None,
     finish_node: Callable[[dict[str, Any]], Any] | None = None,
     record_artifact: Callable[[dict[str, Any]], Any] | None = None,
     record_run: Callable[[dict[str, Any]], Any] | None = None,
@@ -123,6 +124,25 @@ def create_harness_mcp_server(
             return text_result(await _maybe_await(inspect_reference_feature_extractor(_without_intend(args))))
 
         tools.append(_inspect_reference_feature_extractor)
+
+    if session_role == "main" and validate_reference_feature_extractor:
+        @tool(
+            name="validate_reference_feature_extractor",
+            description="Validate the on-disk reference feature extractor built by the main session during the knowledge-to-tools node. The backend checks required files, manifest schema, reference evidence, deterministic-source AST allowlist, and runs duplicate-execution tests. Returns a status object on success or raises an error message pointing at the failing artifact. After a successful call, extract_reference_features and inspect_reference_feature_extractor become available to all sessions.",
+            input_schema=_require_intend({
+                "type": "object",
+                "properties": {
+                    "runTests": {
+                        "type": "boolean",
+                        "description": "Run duplicate-execution determinism tests in addition to manifest/evidence checks. Defaults to true.",
+                    },
+                },
+            }),
+        )
+        async def _validate_reference_feature_extractor(args: dict[str, Any]) -> dict[str, Any]:
+            return text_result(await _maybe_await(validate_reference_feature_extractor(_without_intend(args))))
+
+        tools.append(_validate_reference_feature_extractor)
 
     if session_role == "node" and finish_node:
         @tool(
