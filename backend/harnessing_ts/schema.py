@@ -77,6 +77,8 @@ class NodeSession(TypedDict, total=False):
     nextNodeSpecified: bool
     loopDecision: Literal["continue", "exit", "none"] | None
     outputPaths: list[str]
+    protocolReminders: int
+    protocolReminderReason: str
 
 
 class ControlRequest(TypedDict, total=False):

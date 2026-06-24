@@ -234,6 +234,12 @@ problem-contract
 
 每个 node 都是独立 Claude Code SDK session，拥有自己的 system prompt、native-tools 白名单和 node 日志。所有节点流转（`enter_node` / `finish_node`）一律走 MCP `mcp__ts_harness__*` 工具，禁止用 JSON 文本块或 `harnessControl.action=…` 等替代控制协议。
 
+Node 结束必须显式调用 `mcp__ts_harness__finish_node`。后端提供两层兑底保护以避免节点卡死或下一轮 main 消息被 `activeNode` 锁拒绝：
+
+- SDK 调用本身在节点内崩溃（控制请求超时、子进程错误、网络断开等）时，`enter_node` / `_resume_active_node` 会用 `try/except` 捕获，调用 `_handle_node_runner_return(node, sdk_error=exc)` 把节点标为 `failed`（summary 中包含 SDK 错误），释放 active 锁，并重抛原异常让 HTTP 调用者仍能看见失败。
+- SDK 正常返回但 agent 未调用 `finish_node` 时，后端会发一捯有界 reminder turn 提醒 agent 检查 workspace 并调用 `finish_node`（必要时可以 `success=false`）；超过提醒预算后后端会主动放弃，把节点标为 `failed` 并释放锁，避免下一轮 main turn 被永久锁住。
+- 这两层兑底不会覆盖用户主动 `paused` 的节点或正在 `waiting_approval` 的 `finish_node` 请求。
+
 消融变体必须保持以下硬差异：
 
 - V1：不创建 node session；main runner 直接获得 Read/Write/Edit/Bash/Web 工具，不提供 node-control、knowledge 或 Task。

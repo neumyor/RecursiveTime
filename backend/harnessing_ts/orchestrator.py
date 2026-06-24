@@ -271,7 +271,15 @@ class HarnessOrchestrator:
         prompt = f"请执行 {node_type} node。"
         if args.get("inputSummary"):
             prompt += f"\n\n用户/主会话补充上下文：\n{args['inputSummary']}"
-        node_parts = await self.active_node_runner.send_with_user_echo(prompt)
+        try:
+            node_parts = await self.active_node_runner.send_with_user_echo(prompt)
+        except BaseException as exc:
+            # The SDK call crashed before the node agent could reach
+            # `finish_node`. Release the active-node lock, mark the
+            # session as failed with the SDK error in the summary, and
+            # re-raise so the HTTP caller still observes the failure.
+            await self._handle_node_runner_return(node, sdk_error=exc)
+            raise
         await self._handle_node_runner_return(node)
         return node
 
@@ -506,7 +514,11 @@ class HarnessOrchestrator:
             "",
             "请结合已有 workspace 文件、节点日志和这条补充说明继续推进当前 node。不要重新开始整个 pipeline，除非用户明确要求。",
         ])
-        parts = await self.active_node_runner.send_with_user_echo(prompt)
+        try:
+            parts = await self.active_node_runner.send_with_user_echo(prompt)
+        except BaseException as exc:
+            await self._handle_node_runner_return(node, sdk_error=exc)
+            raise
         await self._handle_node_runner_return(node)
         return parts
 
@@ -1145,9 +1157,58 @@ class HarnessOrchestrator:
             return f"Agent requested finishing node {node_type}: {args.get('summary', '')}"
         return kind
 
-    async def _handle_node_runner_return(self, node: NodeSession) -> None:
+    # Maximum number of reminder turns the harness will send to a node
+    # session that returned without calling finish_node. After this many
+    # reminders the harness gives up and marks the node as failed so
+    # the active-node lock is released and the orchestrator can recover
+    # on the next main turn. A single reminder is enough in practice;
+    # the bound exists only to keep the protocol bounded.
+    _NODE_PROTOCOL_MAX_REMINDERS = 1
+
+    async def _handle_node_runner_return(
+        self,
+        node: NodeSession,
+        *,
+        sdk_error: BaseException | None = None,
+    ) -> None:
+        """Reconcile node session state after a node runner turn ends.
+
+        Three paths:
+
+        1. ``sdk_error`` is set: the SDK call itself crashed. Mark the
+           node as ``failed`` with the SDK error in the summary, release
+           the active-node lock so the next main turn isn't blocked,
+           and let the original exception bubble up to the HTTP caller.
+
+        2. The node already reached a terminal status
+           (``completed`` / ``paused`` / ``failed`` / ``exited`` /
+           ``waiting_approval``): honor the existing auto-next or
+           no-op behavior. The ``completed`` branch additionally closes
+           the long-lived main runner once the pipeline is complete so
+           stale multi-hour-delayed tool_results from the main session
+           are dropped.
+
+        3. The node returned without calling ``finish_node`` and the
+           SDK did not throw: append a system reminder to the node log
+           and re-prompt the same node session once. If the agent
+           still does not call ``finish_node`` after the bounded
+           reminder turn, give up and mark the node as ``failed`` with
+           a clear summary, releasing the lock.
+        """
         self.state = self.store.read_state()
         latest = self.store.read_node_session(node["id"]) or node
+        if sdk_error is not None:
+            # If the user already resolved the node session (e.g. by
+            # clicking Interrupt, which sets status=paused), the SDK
+            # error is just a delayed side effect of that intervention
+            # and we must not overwrite the user's decision. Still
+            # tear down the runner and release the active-node lock
+            # defensively so the next main turn is not blocked.
+            if latest.get("status") in {"paused", "waiting_approval", "failed", "exited"}:
+                await self._release_runner_and_lock("node_sdk_error_after_user_resolution")
+                return
+            await self._fail_node_after_sdk_crash(node, latest, sdk_error)
+            return
         if latest.get("status") == "waiting_approval":
             return
         if latest.get("status") == "completed":
@@ -1167,19 +1228,132 @@ class HarnessOrchestrator:
             return
         if latest.get("status") in {"paused", "failed", "exited"}:
             return
+        await self._remind_or_fail_unfinished_node(node, latest)
+
+    async def _fail_node_after_sdk_crash(
+        self,
+        node: NodeSession,
+        latest: NodeSession,
+        sdk_error: BaseException,
+    ) -> None:
+        """Mark a node session as failed because the underlying SDK
+        runner crashed (control-request timeout, subprocess error,
+        network drop, etc.). Release the active-node lock so the
+        orchestrator can recover on the next main turn. The original
+        exception is re-raised by the caller."""
+        reason = f"Node SDK runner crashed: {type(sdk_error).__name__}: {sdk_error}"
+        self.store.append_timeline({
+            "type": "node_runner_crash",
+            "timestamp": now_iso(),
+            "nodeSessionId": latest.get("id"),
+            "nodeType": latest.get("nodeType"),
+            "message": reason,
+        })
+        self.store.append_node_part(latest.get("id"), system_text_part(f"Harness error: {reason}"))
         self.store.append_timeline({
             "type": "node_protocol_error",
             "timestamp": now_iso(),
             "nodeSessionId": latest.get("id"),
             "nodeType": latest.get("nodeType"),
-            "message": "Node runner returned without calling finish_node MCP.",
+            "message": reason,
         })
         await self.finish_node({
             "success": False,
-            "summary": "Node runner returned without calling finish_node MCP.",
+            "summary": reason,
             "goalMet": False,
             "outputPaths": [],
         })
+        # Make sure no runner reference is leaked even if finish_node
+        # took an unusual path.
+        await self._release_runner_and_lock("node_runner_crash")
+
+    async def _release_runner_and_lock(self, reason: str) -> None:
+        """Best-effort cleanup of the active node runner and the
+        active-node lock. Used after a node session reaches a terminal
+        status through a non-standard path (SDK error, protocol
+        abandonment) so the next main turn is not blocked."""
+        if self.active_node_runner is not None:
+            await self._close_active_node_runner(reason)
+        self.active_node_runner = None
+        self.active_node_session = None
+        if self.state is not None:
+            self.state["activeNode"] = None
+            self.state["activeNodeSessionId"] = None
+            self.store.write_state(self.state)
+
+    async def _remind_or_fail_unfinished_node(
+        self,
+        node: NodeSession,
+        latest: NodeSession,
+    ) -> None:
+        """Handle a node that returned without calling ``finish_node``
+        and without an SDK crash. Re-prompt the same node session once
+        with a reminder, then mark as ``failed`` if the reminder turn
+        also ends without a terminal status."""
+        reminders_used = int(latest.get("protocolReminders", 0) or 0)
+        if reminders_used >= self._NODE_PROTOCOL_MAX_REMINDERS:
+            summary = (
+                "Node runner returned without calling finish_node MCP after "
+                f"{reminders_used} reminder turn(s); harness is giving up."
+            )
+            self.store.append_timeline({
+                "type": "node_protocol_error",
+                "timestamp": now_iso(),
+                "nodeSessionId": latest.get("id"),
+                "nodeType": latest.get("nodeType"),
+                "message": summary,
+            })
+            self.store.append_node_part(latest.get("id"), system_text_part(f"Harness error: {summary}"))
+            await self.finish_node({
+                "success": False,
+                "summary": summary,
+                "goalMet": False,
+                "outputPaths": [],
+            })
+            await self._release_runner_and_lock("node_protocol_abandoned")
+            return
+        latest["protocolReminders"] = reminders_used + 1
+        latest["protocolReminderReason"] = "Node runner returned without calling finish_node MCP."
+        self.store.write_node_session(latest)
+        self.store.append_timeline({
+            "type": "node_protocol_reminder",
+            "timestamp": now_iso(),
+            "nodeSessionId": latest.get("id"),
+            "nodeType": latest.get("nodeType"),
+            "message": (
+                f"Node runner returned without calling finish_node MCP; "
+                f"sending reminder turn {latest['protocolReminders']} of "
+                f"{self._NODE_PROTOCOL_MAX_REMINDERS}."
+            ),
+            "payload": {"remindersUsed": latest["protocolReminders"]},
+        })
+        self.store.append_node_part(
+            latest.get("id"),
+            system_text_part(
+                "Harness reminder: this turn ended without calling "
+                "mcp__ts_harness__finish_node. Review the workspace and node log, "
+                "complete the required artifacts, and call finish_node with a "
+                "summary, outputPaths, and (for iterative-solving) explicit "
+                "loopDecision/nextNode. If you cannot proceed, call finish_node "
+                "with success=false so the orchestrator can decide what to do."
+            ),
+        )
+        self.active_node_session = latest
+        if self.dry_run or self.active_node_runner is None:
+            # No live runner to re-prompt (dry-run mode or the runner
+            # was already torn down). Treat the reminder as the final
+            # turn and mark as failed so the lock is released.
+            await self._handle_node_runner_return(latest)
+            return
+        try:
+            await self.active_node_runner.send_with_user_echo(
+                "[Harness reminder] This turn must end with mcp__ts_harness__finish_node. "
+                "Inspect the current workspace and node log, then call finish_node."
+            )
+        except BaseException as exc:
+            await self._handle_node_runner_return(latest, sdk_error=exc)
+            return
+        await self._handle_node_runner_return(latest)
 
     async def _close_main_runner(
         self,

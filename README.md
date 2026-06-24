@@ -291,6 +291,12 @@ Iteration routing:
 - `user/iteration-state.md` still records `recommend_exit` for auditability. It is not the control source, but the backend validates that it does not contradict the structured MCP `loopDecision`.
 - Successful `iterative-solving` completion must include output paths for candidate review, case review, iteration summary, and `user/iteration-state.md`; candidate-only reports are rejected.
 
+Node-protocol recovery:
+
+- The harness treats `mcp__ts_harness__finish_node` as the only valid way to leave a node session. If the SDK call itself crashes (control-request timeout, subprocess error, network drop, etc.) the harness marks the node as `failed` with the SDK error in the summary, releases the active-node lock, and re-raises the original exception to the HTTP caller so the user can see what happened. The next main turn is not blocked.
+- If the SDK returns normally but the agent never called `finish_node`, the harness sends a bounded reminder turn inside the same node session asking the agent to inspect the workspace and call `finish_node` (with `success=false` if it cannot proceed). If the reminder turn also ends without `finish_node`, the harness gives up, marks the node as `failed`, and releases the lock so the orchestrator can recover on the next main turn.
+- A node that the user already paused or whose `finish_node` call is awaiting human approval is not overwritten by the recovery flow.
+
 Global native-tool constraints:
 
 - `Task` is allowed only where listed in the node native tools. `TodoWrite`, notebook tools, worktree tools, cron tools, and broad automation tools are disallowed by default.
