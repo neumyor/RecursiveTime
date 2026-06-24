@@ -124,6 +124,34 @@ def test_final_summary_prompt_does_not_request_impossible_failure_reroute() -> N
     assert "要求回到 `iterative-solving`" not in guidance
 
 
+def test_knowledge_to_tools_requires_real_sample_validation() -> None:
+    guidance = node_document("knowledge-to-tools")["guidance"]
+    system_prompt = (
+        REPO_ROOT
+        / "backend"
+        / "harnessing_ts"
+        / "config"
+        / "prompts"
+        / "reference-feature-extractor"
+        / "system.md"
+    ).read_text(encoding="utf-8")
+    build_prompt = (
+        REPO_ROOT
+        / "backend"
+        / "harnessing_ts"
+        / "config"
+        / "prompts"
+        / "reference-feature-extractor"
+        / "build.md"
+    ).read_text(encoding="utf-8")
+
+    for text in (guidance, system_prompt, build_prompt):
+        assert "真实样本" in text
+        assert "合成样本只能作为补充" in text
+    assert "test-cases.json" in guidance
+    assert "source" in guidance
+
+
 def test_iterative_case_review_visualization_contract_is_explicit() -> None:
     guidance = node_document("iterative-solving")["guidance"]
 

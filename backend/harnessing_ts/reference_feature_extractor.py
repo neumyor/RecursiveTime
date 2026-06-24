@@ -111,6 +111,11 @@ def validate_reference_feature_extractor(workspace_path: Path, *, run_tests: boo
         raise RuntimeError("Features missing from reference-rules.json: " + ", ".join(missing_rules))
     if not isinstance(tests, list) or not tests:
         raise RuntimeError("test-cases.json must contain at least one deterministic example.")
+    if not any(_is_real_sample_test_case(workspace_path, case) for case in tests if isinstance(case, dict)):
+        raise RuntimeError(
+            "test-cases.json must contain at least one real workspace sample with "
+            "source.type=real_sample and an existing workspace-relative source.path."
+        )
 
     source = (workspace_path / SOURCE_PATH).read_text(encoding="utf-8")
     _validate_deterministic_source(source)
@@ -137,6 +142,24 @@ def validate_reference_feature_extractor(workspace_path: Path, *, run_tests: boo
             checked += 1
         result["testsPassed"] = checked
     return result
+
+
+def _is_real_sample_test_case(workspace_path: Path, case: dict[str, Any]) -> bool:
+    source = case.get("source") or case.get("sampleSource")
+    if not isinstance(source, dict):
+        return False
+    source_type = str(source.get("type") or source.get("kind") or "").casefold()
+    if source_type not in {"real_sample", "real", "workspace_sample"}:
+        return False
+    raw_path = str(source.get("path") or source.get("sourcePath") or "").strip()
+    if not raw_path:
+        return False
+    target = (workspace_path / raw_path).resolve()
+    try:
+        target.relative_to(workspace_path.resolve())
+    except ValueError:
+        return False
+    return target.is_file()
 
 
 def _validate_deterministic_source(source: str) -> None:

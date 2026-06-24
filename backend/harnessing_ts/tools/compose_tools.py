@@ -43,6 +43,8 @@ def build_node_allowed_tools(
         pool.remove("mcp__ts_harness__query_knowledge")
     if not variant.reference_feature_extractor or not reference_feature_extractor_ready:
         pool = [tool for tool in pool if tool not in REFERENCE_FEATURE_TOOLS]
+    if variant.knowledge_to_tools and node_type == "knowledge-to-tools":
+        pool.append(VALIDATE_REFERENCE_FEATURE_TOOL)
     if variant.random_search:
         pool.append("mcp__ts_harness__sample_random_candidates")
     return sorted(set(build_node_native_tools(node_type, variant=variant) + pool))

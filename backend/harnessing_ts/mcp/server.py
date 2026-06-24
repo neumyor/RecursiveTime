@@ -125,10 +125,10 @@ def create_harness_mcp_server(
 
         tools.append(_inspect_reference_feature_extractor)
 
-    if session_role == "main" and validate_reference_feature_extractor:
+    if (session_role == "main" or session_role == "node") and validate_reference_feature_extractor:
         @tool(
             name="validate_reference_feature_extractor",
-            description="Validate the on-disk reference feature extractor built by the main session during the knowledge-to-tools node. The backend checks required files, manifest schema, reference evidence, deterministic-source AST allowlist, and runs duplicate-execution tests. Returns a status object on success or raises an error message pointing at the failing artifact. After a successful call, extract_reference_features and inspect_reference_feature_extractor become available to all sessions.",
+            description="Validate the on-disk reference feature extractor built during the knowledge-to-tools node. The backend checks required files, manifest schema, reference evidence, real-sample test cases, deterministic-source AST allowlist, and runs duplicate-execution tests. Returns a status object on success or raises an error message pointing at the failing artifact. After a successful call, extract_reference_features and inspect_reference_feature_extractor become available to all sessions.",
             input_schema=_require_intend({
                 "type": "object",
                 "properties": {

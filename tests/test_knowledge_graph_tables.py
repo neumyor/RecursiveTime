@@ -22,6 +22,7 @@ from harnessing_ts.knowledge_graph import (
     upsert_relation,
     validate_knowledge_base,
 )
+from harnessing_ts.knowledge_prompts import builder_system_prompt
 
 
 def write_csv(path, fieldnames, rows):
@@ -317,6 +318,19 @@ def test_compact_knowledge_query_answer_hides_internal_evidence_details():
         "supporting_evidence": [],
         "related_graph_edges": [],
     }
+
+
+def test_knowledge_builder_prompt_prioritizes_diagnostic_judgment_metrics() -> None:
+    prompt = builder_system_prompt(3)
+
+    assert "诊疗指标" in prompt
+    assert "研判指标" in prompt
+    assert "knowledge-to-tools" in prompt
+    assert "阈值" in prompt
+    assert "单位" in prompt
+    assert "测量方法" in prompt
+    assert "不确定条件" in prompt
+    assert "QRS > 120 ms" in prompt
 
 
 def test_extract_reference_text_uses_pdftotext_for_pdf(tmp_path):

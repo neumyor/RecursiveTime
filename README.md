@@ -109,8 +109,8 @@ Open [http://127.0.0.1:4327](http://127.0.0.1:4327), then use the UI in this ord
 1. Open **Settings** and verify the Main LLM. Configure an independent Knowledge Graph credential only when it should differ from the Main LLM.
 2. Upload domain documents with **Reference Files** and task data with **Raw Data Zip**.
 3. Send the task definition in the main conversation. The orchestrator enters `problem-contract`, then iterates through solving and case review.
-4. Build **Knowledge Graph** after references are available.
-5. Run the **knowledge-to-tools** node (or, in `auto` mode, let the orchestrator enter it) after `user/problem-contract.md` and `user/data-spec.md` exist. The main session writes the deterministic extractor under `tools/reference-feature-extractor/` and calls `validate_reference_feature_extractor` to have the backend publish the tool.
+4. Build **Knowledge Graph** after references are available. The builder prioritizes task-relevant diagnostic and judgment metrics, including thresholds, units, measurement methods, channel/lead context, applicability conditions, and uncertainty notes, so `knowledge-to-tools` can query concrete reference rules instead of only broad domain summaries.
+5. Run the **knowledge-to-tools** node (or, in `auto` mode, let the orchestrator enter it) after `user/problem-contract.md` and `user/data-spec.md` exist. The node session writes the deterministic extractor under `tools/reference-feature-extractor/`, tests it on at least one real workspace sample extracted according to `user/data-spec.md`, and calls `validate_reference_feature_extractor` to have the backend publish the tool. Synthetic test cases may supplement this but cannot replace the real-sample validation case.
 6. Review node traces, case-review artifacts, tool outputs, and the final summary in the UI and workspace file tree.
 
 ### 5. Common development commands
@@ -242,7 +242,7 @@ backend/harnessing_ts/knowledge_graph.py
   File-backed knowledge-base tables, deterministic knowledge tools, graph view/search/cards, and builder/reasoner execution.
 
 backend/harnessing_ts/knowledge_prompts.py
-  Literature Knowledge Builder and Knowledge Reasoning Agent prompts.
+  Literature Knowledge Builder and Knowledge Reasoning Agent prompts, including the diagnostic/judgment metric extraction priority used to support `knowledge-to-tools`.
 
 backend/harnessing_ts/chain_summary.py
   Independent chain builder agent for reading runtime logs/reports/runs and producing a structured, frontend-renderable decision-chain summary.

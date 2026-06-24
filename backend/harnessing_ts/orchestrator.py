@@ -1673,6 +1673,7 @@ class HarnessOrchestrator:
             query_knowledge=self.request_query_knowledge if self.variant.knowledge_graph else None,
             extract_reference_features=self.request_extract_reference_features if self.variant.reference_feature_extractor and self.store.is_reference_feature_extractor_ready() else None,
             inspect_reference_feature_extractor=self.request_inspect_reference_feature_extractor if self.variant.reference_feature_extractor and self.store.is_reference_feature_extractor_ready() else None,
+            validate_reference_feature_extractor=self.request_validate_reference_feature_extractor if self.variant.knowledge_to_tools and node_type == "knowledge-to-tools" else None,
             record_artifact=lambda args: self.record_artifact_for_node(args, node_id, node_type),
             record_run=lambda args: self.record_run_for_node(args, node_id, node_type),
             get_runtime_settings=self.get_runtime_settings,

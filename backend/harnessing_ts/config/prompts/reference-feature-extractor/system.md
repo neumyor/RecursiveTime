@@ -10,11 +10,12 @@
 - 程序从 stdin 读取一个 JSON 值，只向 stdout 写一个 JSON 对象；错误写 stderr 并以非零状态退出。
 - 输入严格遵循 `user/data-spec.md`。输出必须包含 `schemaVersion: "1.0"`、`features` 和 `warnings`。
 - 每个输出 feature 必须包含 `name`、`value`、`unit`、`judgment`、`evidence`；judgment 包含 `status`（normal/abnormal/indeterminate/not_applicable）、`label` 和可审计的 `rule`。
+- 调试和验收必须使用当前 workspace 中按 `user/data-spec.md` 读取的真实样本。合成样本只能作为补充 smoke test，不能作为唯一或主要测试依据。
 - 只写入 `tools/reference-feature-extractor/**`，不得修改 task contract、data spec、references 或其他工具。
 - 必须创建 `manifest.json`、`reference-rules.json`、`extractor.py`、`README.md`、`test-cases.json`。
 - README 必须详细说明用途、适用范围、reference 范围、输入 schema、输出 schema、调用方法、feature/rule 列表、不可观察条件、风险与限制。
 - `manifest.json` 的 `schemaVersion` 必须为 `1.0`，`entrypoint` 必须为 `tools/reference-feature-extractor/extractor.py`，并包含 JSON Schema 风格的 `inputSchema`、`outputSchema` 和带 evidence 的非空 `features`。
 - `reference-rules.json.features` 中每项必须包含与 manifest 完全一致的 `name`、自然语言 `computation`、`judgments` 数组和 `evidence` 数组。
-- `test-cases.json` 是数组，每项含 `input`，并尽量包含完整 `expected`。完成前用实际任务环境运行测试，修复所有失败。
+- `test-cases.json` 是数组，每项含 `input`，并尽量包含完整 `expected`；必须至少包含一个从当前 workspace 真实数据中按 `user/data-spec.md` 抽取的样本输入，并用 `source.type="real_sample"` 和已存在的 workspace 相对 `source.path` 记录可审计样本来源（可额外记录 case id、split/fold 或行号）。完成前必须用真实样本运行测试，修复所有失败。
 
 不要只提供设计或代码片段；必须实际写完全部文件。

@@ -10,6 +10,7 @@
 - extractor.py 必须从 stdin 读取一个 JSON 值，只向 stdout 写一个 JSON 对象；错误写 stderr 并以非零状态退出。
 - extractor 的输入必须严格遵守 `user/data-spec.md`；输出必须包含 `schemaVersion: "1.0"`、`features` 和 `warnings` 三个顶层字段。
 - 每个输出 feature 必须包含 `name`、`value`、`unit`、`judgment`、`evidence`；`judgment` 必须包含 `status`（normal/abnormal/indeterminate/not_applicable）、`label` 与可审计的 `rule`。
+- extractor 的调试和验收必须使用当前 workspace 中按 `user/data-spec.md` 定义读取的真实样本。合成样本只能作为补充 smoke test，不能作为唯一或主要测试依据，也不能写成 `test-cases.json` 的唯一案例。
 - 只允许写入 `tools/reference-feature-extractor/**`，不得修改 task contract、data spec、references、knowledge_base/** 或其他工具。
 - 不得删除或覆盖上一轮已经验证通过的 `tools/reference-feature-extractor/**`，除非主会话主动决定重新生成。删除后端会拒绝再次注入 MCP 工具。
 
@@ -24,8 +25,8 @@
   - `manifest.json`：`schemaVersion="1.0"`、`entrypoint="tools/reference-feature-extractor/extractor.py"`、`inputSchema`、`outputSchema` 与 `features` 数组（每条 feature 含 `name`、`description` 与非空 `evidence`）。
   - `reference-rules.json`：`features` 数组；每条 rule 必须包含与 manifest 完全一致的 `name`、自然语言 `computation`、非空 `judgments` 数组与非空 `evidence` 数组。
   - `README.md`：详细说明用途、适用范围、reference 范围、输入 schema、输出 schema、调用方法、feature/rule 列表、不可观察条件、风险与限制。
-  - `test-cases.json`：数组，每项含 `input`，尽量包含完整 `expected`；后端会执行至少一次重复运行以验证字节级一致。
-- 使用 `Bash` 在 workspace 根目录通过 `uv run python tools/reference-feature-extractor/extractor.py < input.json` 至少试运行一次，确保能正确从 stdin 读取并向 stdout 写出 JSON。
+  - `test-cases.json`：数组，每项含 `input`，尽量包含完整 `expected`；必须至少包含一个从当前 workspace 真实数据中按 `user/data-spec.md` 抽取的样本输入，并在该项用 `source.type="real_sample"` 和已存在的 workspace 相对 `source.path` 记录可审计样本来源（可额外记录 case id、split/fold 或行号）。后端会执行至少一次重复运行以验证字节级一致。
+- 使用 `Bash` 在 workspace 根目录通过 `uv run python tools/reference-feature-extractor/extractor.py < input.json` 至少试运行一次真实样本输入，确保能正确从 stdin 读取并向 stdout 写出 JSON。若额外使用合成样本，也必须在真实样本测试通过后再作为补充。
 - 调用 MCP `mcp__ts_harness__validate_reference_feature_extractor` 触发后端强校验：
   - 输入可携带 `{runTests: true}` 强制后端运行确定性测试；默认也会运行。
   - 失败时返回的 error message 会指明具体缺陷（缺失文件、manifest schema、reference 引用、AST 禁用项、确定性测试等）；主会话必须根据 error 修订并重试。
@@ -40,6 +41,7 @@
 - 后端的强校验决定了 `extract_reference_features` 与 `inspect_reference_feature_extractor` 是否被注入；不要试图通过删除 `tools/reference-feature-extractor/**` 之外的路径绕过校验。
 - 如果需要彻底重新生成（删除旧 extractor 再写新的），应先显式删除 `tools/reference-feature-extractor/` 下的所有文件，再重新创建并重新调用 validate。
 - 不要在 `extractor.py` 中读取 `data/raw/**`、`knowledge_base/**` 或网络资源；输入只能来自调用方传入的 JSON。
+- 可以用临时脚本或 `Bash` 从 `data/raw/**`、`data/processed/**` 或 `user/data-spec.md` 指定的数据源中抽取真实样本，转换成 extractor 的 stdin JSON；该读取只用于构造测试输入，不得写进 `extractor.py` 的运行时依赖。
 - 当 reference 不足以支撑某个 feature 的判断时，必须保留 feature 但在 extractor 内返回 `indeterminate` 的 judgment，并在 README 中记录不可观察条件；不要因为 reference 不够就删掉 feature 跳过。
 - 当本节点处于 `iterative-solving` 已被执行过、且 case review 已经依赖过该 extractor 的情况下，需要重新构建时必须在 README 中说明变更点，并在最终 summary 中标注行为变化；后端不接受“悄悄”重写已验证 extractor。
 - 本节点与 `problem-contract` 一样属于 setup 阶段，不会消耗 `iterativeCandidateCount`；其输出只是为 case review 提供数值工具。

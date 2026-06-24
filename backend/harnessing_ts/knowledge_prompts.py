@@ -16,6 +16,9 @@ BUILDER_SYSTEM_PROMPT_BASE = """你是 HarnessingTS 的 Agent 1：Literature Kno
 3. 读取 user/problem-contract.md、user/data-spec.md、artifacts/reference-knowledge.md（如果存在）。
 4. 对每个新/变更 reference，提取 Evidence，并调用 add_evidence。
 5. 基于 Evidence 提取 Knowledge，并调用 add_knowledge。Knowledge 应包含 compact summary，便于后续复用上下文。
+   - 必须优先完整覆盖与当前任务和 `knowledge-to-tools` 相关的诊疗指标、研判指标和可计算 reference feature：指标名称、正常/异常阈值、单位、测量方法、适用人群或条件、相关导联/通道/窗口、判断标签、不可观察或不确定条件。
+   - 同一 reference 中出现的每个可计算指标或判据都应形成可检索 Knowledge；不要只抽取疾病名称、数据集背景或泛泛结论。若 reference 给出多个阈值、分层标准或例外条件，必须分别保留在 description/summary/evidence 中。
+   - 若指标只提供定性描述而没有阈值，也要记录为研判线索，并在 notes 或 summary 中明确“无显式阈值/仅定性支持”，以便 `knowledge-to-tools` 将 judgment 标为 indeterminate。
 6. 调用 update_reference_brief 为已处理 reference 写入短摘要。
 7. 调用 list_pending_knowledge，逐条把 Knowledge 转成 Classes 和 Relations。
 8. 处理每条 Knowledge 时，先用 search_classes/search_relations 检索相关候选，再用 upsert_class/upsert_relation 新建或合并。不要读取全量 class/relation 表。
@@ -45,15 +48,17 @@ def graph_extraction_rules(depth: int) -> str:
         "- 调用 upsert_relation 时优先连接相邻层级或直接证据支持的概念，relation_depth 不能超过当前 depth。",
         "- 对同义概念先 search_classes，复用已有 class 并补充 description/evidence。",
         "- class/relation 描述必须来自当前 Knowledge 及其 Evidence，不要补充无证据常识。",
+        "- 诊疗和研判指标优先：对任务相关 reference 中出现的每个可计算指标、阈值、单位、判断标签、测量方法、导联/通道、时间窗口、适用条件和不确定条件，都应尽量形成可检索 class 或 relation，服务后续 knowledge-to-tools 构建 extractor。",
+        "- 对指标类 concept，description 应保留 threshold/unit/measurement/evidence；relation 应表达 measured_from、has_threshold、supports_judgment、indicates、contraindicates、requires_condition、has_uncertainty 等直接证据关系。",
     ]
     if depth >= 1:
-        rules.append("- level 1: 抽取高层锚点实体，例如数据集、任务、异常/诊断模式、核心方法、文献来源。")
+        rules.append("- level 1: 抽取高层锚点实体，例如数据集、任务、异常/诊断模式、诊疗/研判指标族、核心方法、文献来源。")
     if depth >= 2:
-        rules.append("- level 2: 在高层锚点下抽取直接诊断/决策特征，例如信号特征、波形、间期、节律特征、类别判据；ECG 场景中 P wave、QRS complex/duration、PR interval、RR interval、T wave、premature occurrence 等若被 evidence 提到，应作为候选 class。")
+        rules.append("- level 2: 在高层锚点下抽取直接诊断/决策特征和指标，例如信号特征、波形、间期、节律特征、类别判据、正常范围、异常判据；ECG 场景中 P wave、QRS complex/duration、PR interval、RR interval、QT/QTc、QRS axis、ST segment、T wave、pathological Q wave、voltage criteria、premature occurrence 等若被 evidence 提到，应作为候选 class。")
     if depth >= 3:
-        rules.append("- level 3: 继续抽取阈值、导联/通道、时间条件、上下文窗口、混淆项、鉴别条件，例如 QRS > 120 ms、coupling interval、noise artifact、baseline drift、aberrant conduction。")
+        rules.append("- level 3: 继续抽取具体阈值、单位、导联/通道、时间条件、上下文窗口、性别/年龄分层、混淆项、鉴别条件，例如 QRS > 120 ms、PR > 200 ms、QTc sex-specific ranges、Sokolow-Lyon voltage、coupling interval、noise artifact、baseline drift、aberrant conduction。")
     if depth >= 4:
-        rules.append("- level 4: 继续抽取机制解释、下游检查、建模风险、评估策略和不确定性处理，例如 refractory period、over-smoothing P/T wave、patient-independent validation、reject option。")
+        rules.append("- level 4: 继续抽取机制解释、下游检查、建模风险、评估策略、测量误差和不确定性处理，例如 refractory period、low-voltage unreliability、over-smoothing P/T wave、sampling-rate limits、patient-independent validation、reject option。")
     return "\n".join(rules)
 
 
