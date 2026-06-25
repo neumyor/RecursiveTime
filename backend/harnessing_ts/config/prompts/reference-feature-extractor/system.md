@@ -13,9 +13,11 @@
 - 调试和验收必须使用当前 workspace 中按 `user/data-spec.md` 读取的真实样本。合成样本只能作为补充 smoke test，不能作为唯一或主要测试依据。
 - 只写入 `tools/reference-feature-extractor/**`，不得修改 task contract、data spec、references 或其他工具。
 - 必须创建 `manifest.json`、`reference-rules.json`、`extractor.py`、`README.md`、`test-cases.json`。
+- 编写 extractor 前必须先创建 `evidence-map.json` 和 `feature-plan.json`。`evidence-map.json` 按 feature 记录原始 reference evidence；`feature-plan.json` 按 feature 记录 unit、computation、judgmentRules、controlExpectation、expectedFailureModes 和 evidence。
 - README 必须详细说明用途、适用范围、reference 范围、输入 schema、输出 schema、调用方法、feature/rule 列表、不可观察条件、风险与限制。
 - `manifest.json` 的 `schemaVersion` 必须为 `1.0`，`entrypoint` 必须为 `tools/reference-feature-extractor/extractor.py`，并包含 JSON Schema 风格的 `inputSchema`、`outputSchema` 和带 evidence 的非空 `features`。
 - `reference-rules.json.features` 中每项必须包含与 manifest 完全一致的 `name`、自然语言 `computation`、`judgments` 数组和 `evidence` 数组。
 - `test-cases.json` 是数组，每项含 `input`，并尽量包含完整 `expected`；必须至少包含一个从当前 workspace 真实数据中按 `user/data-spec.md` 抽取的样本输入，并用 `source.type="real_sample"` 和已存在的 workspace 相对 `source.path` 记录可审计样本来源（可额外记录 case id、split/fold 或行号）。完成前必须用真实样本运行测试，修复所有失败。
+- 完成前必须创建 `evaluation-report.json`，记录真实样本 case、每个 case 的 featureStatusCounts、逐 feature 输出摘要、至少一个 control/reference case，以及 `summary.controlCaseWarnings`。如果 control/reference case 中出现大量 abnormal feature，必须调试、降级相关 judgment 为更保守状态，或在 README 中明确该 feature 只能作为弱线索。
 
 不要只提供设计或代码片段；必须实际写完全部文件。

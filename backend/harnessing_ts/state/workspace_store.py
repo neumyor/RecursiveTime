@@ -199,7 +199,7 @@ class WorkspaceStore:
             "startedAt": None,
             "finishedAt": None,
             "trigger": None,
-            "message": "Reference feature builder has not run yet.",
+            "message": "Reference feature extractor has not been validated yet.",
         }
 
     def write_reference_feature_status(self, status: dict[str, Any]) -> dict[str, Any]:
@@ -248,7 +248,7 @@ class WorkspaceStore:
             "message": "Reference feature extractor validated.",
             **summary,
         }
-        self.write_reference_feature_status(status)
+        write_json(self.reference_feature_status_path, status)
         self.append_timeline({
             "type": "reference_feature_validated",
             "timestamp": ts,

@@ -35,6 +35,50 @@ def _write_extractor(root) -> None:
         "computation": "read pr_ms from the case",
         "judgments": [{"when": "> 200", "label": "PR interval prolonged"}],
     }]}), encoding="utf-8")
+    (tool / "evidence-map.json").write_text(json.dumps({
+        "schemaVersion": "1.0",
+        "features": [{
+            "name": "PR interval",
+            "evidence": evidence,
+            "measurement": "PR interval",
+            "unit": "ms",
+            "normalRange": "<= 200 ms",
+            "abnormalRule": "> 200 ms",
+        }],
+    }), encoding="utf-8")
+    (tool / "feature-plan.json").write_text(json.dumps({
+        "schemaVersion": "1.0",
+        "features": [{
+            "name": "PR interval",
+            "unit": "ms",
+            "computation": "Read pr_ms from the input case.",
+            "judgmentRules": [{"status": "abnormal", "rule": "pr_ms > 200"}],
+            "controlExpectation": "Control/reference samples should usually have PR interval <= 200 ms.",
+            "expectedFailureModes": ["Input pr_ms may be missing or non-numeric."],
+            "evidence": evidence,
+        }],
+    }), encoding="utf-8")
+    (tool / "evaluation-report.json").write_text(json.dumps({
+        "schemaVersion": "1.0",
+        "controlCaseCount": 1,
+        "cases": [{
+            "source": {"type": "real_sample", "path": "data/raw/example.json", "caseId": "case-1"},
+            "role": "control",
+            "featureStatusCounts": {"abnormal": 1},
+            "features": [{
+                "name": "PR interval",
+                "value": 220,
+                "judgmentStatus": "abnormal",
+                "judgmentLabel": "PR interval prolonged",
+            }],
+        }],
+        "summary": {
+            "controlCaseWarnings": [{
+                "caseId": "case-1",
+                "message": "Fixture intentionally uses an abnormal PR value.",
+            }],
+        },
+    }), encoding="utf-8")
     (tool / "README.md").write_text("# PR extractor\n\nInput: `{\"pr_ms\": number}`.\n", encoding="utf-8")
     (tool / "test-cases.json").write_text(
         json.dumps([{
@@ -84,6 +128,8 @@ def test_validates_executes_and_inspects_reference_feature_extractor(tmp_path) -
     assert output["features"][0]["judgment"]["label"] == "PR interval prolonged"
     assert "case = json.load" in inspected["source"]
     assert inspected["manifest"]["inputSchema"]["required"] == ["pr_ms"]
+    assert inspected["featurePlan"]["features"][0]["name"] == "PR interval"
+    assert inspected["evaluationReport"]["controlCaseCount"] == 1
 
 
 def test_rejects_non_deterministic_source(tmp_path) -> None:
@@ -102,6 +148,84 @@ def test_rejects_test_cases_without_real_workspace_sample(tmp_path) -> None:
 
     with pytest.raises(RuntimeError, match="real workspace sample"):
         validate_reference_feature_extractor(tmp_path)
+
+
+def test_rejects_missing_quality_planning_artifacts(tmp_path) -> None:
+    _write_extractor(tmp_path)
+    (tmp_path / "tools" / "reference-feature-extractor" / "evaluation-report.json").unlink()
+
+    with pytest.raises(RuntimeError, match="missing required files"):
+        validate_reference_feature_extractor(tmp_path)
+
+
+def test_rejects_evaluation_report_without_control_case(tmp_path) -> None:
+    _write_extractor(tmp_path)
+    tool = tmp_path / "tools" / "reference-feature-extractor"
+    report = json.loads((tool / "evaluation-report.json").read_text(encoding="utf-8"))
+    report["controlCaseCount"] = 0
+    report["cases"][0]["role"] = "analysis"
+    report["cases"][0]["isControl"] = False
+    (tool / "evaluation-report.json").write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="control/reference case"):
+        validate_reference_feature_extractor(tmp_path)
+
+
+def test_rejects_extractor_output_without_warnings_array(tmp_path) -> None:
+    _write_extractor(tmp_path)
+    source = tmp_path / "tools" / "reference-feature-extractor" / "extractor.py"
+    source.write_text(
+        """import json
+import sys
+
+case = json.load(sys.stdin)
+value = float(case["pr_ms"])
+evidence = [{"referencePath": "references/guide.md", "section": "PR interval", "quote": "above 200 ms is prolonged"}]
+json.dump({
+    "schemaVersion": "1.0",
+    "features": [{
+        "name": "PR interval",
+        "value": value,
+        "judgment": {"status": "abnormal", "label": "PR interval prolonged"},
+        "evidence": evidence,
+    }],
+}, sys.stdout)
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="output.warnings"):
+        validate_reference_feature_extractor(tmp_path, run_tests=True)
+
+
+def test_rejects_extractor_output_missing_declared_feature(tmp_path) -> None:
+    _write_extractor(tmp_path)
+    tool = tmp_path / "tools" / "reference-feature-extractor"
+    manifest = json.loads((tool / "manifest.json").read_text(encoding="utf-8"))
+    evidence = [{"referencePath": "references/guide.md", "section": "PR interval", "quote": "above 200 ms is prolonged"}]
+    manifest["features"].append({"name": "Secondary interval", "description": "Second declared feature", "evidence": evidence})
+    (tool / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    rules = json.loads((tool / "reference-rules.json").read_text(encoding="utf-8"))
+    rules["features"].append({
+        "name": "Secondary interval",
+        "description": "Second declared feature",
+        "computation": "Read the same source field for fixture coverage.",
+        "judgments": [{"when": "present", "label": "present"}],
+        "evidence": evidence,
+    })
+    (tool / "reference-rules.json").write_text(json.dumps(rules), encoding="utf-8")
+    for filename in ("evidence-map.json", "feature-plan.json"):
+        payload = json.loads((tool / filename).read_text(encoding="utf-8"))
+        entry = dict(payload["features"][0])
+        entry["name"] = "Secondary interval"
+        payload["features"].append(entry)
+        (tool / filename).write_text(json.dumps(payload), encoding="utf-8")
+    report = json.loads((tool / "evaluation-report.json").read_text(encoding="utf-8"))
+    report["cases"][0]["features"].append({"name": "Secondary interval", "judgmentStatus": "normal"})
+    (tool / "evaluation-report.json").write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="missing declared features"):
+        validate_reference_feature_extractor(tmp_path, run_tests=True)
 
 
 def test_tools_are_only_exposed_when_ready_and_enabled() -> None:
@@ -146,6 +270,11 @@ def test_validate_mcp_tool_publishes_status_for_main_session(tmp_path) -> None:
     orchestrator = HarnessOrchestrator(tmp_path, mode="auto")
     orchestrator.initialize()
     _write_extractor(tmp_path)
+    orchestrator.store.write_reference_feature_status({
+        "status": "failed",
+        "backendValidationStatus": "pending",
+        "determinismVerified": False,
+    })
 
     result = asyncio.run(orchestrator.request_validate_reference_feature_extractor({"runTests": True}))
 
@@ -153,6 +282,9 @@ def test_validate_mcp_tool_publishes_status_for_main_session(tmp_path) -> None:
     assert result["ready"] is True
     assert result["featureCount"] == 1
     assert orchestrator.store.is_reference_feature_extractor_ready() is True
+    status = orchestrator.store.read_reference_feature_status()
+    assert "backendValidationStatus" not in status
+    assert "determinismVerified" not in status
 
 
 def test_validate_mcp_tool_does_not_refresh_main_runner_during_active_node(tmp_path, monkeypatch) -> None:

@@ -20,6 +20,9 @@
 - 阅读 `references/**` 中与本任务相关的章节，记录每个 feature 的 evidence（reference 路径、章节或页码、关键短引用）。DOCX 优先读取同名 `.docx.txt`；PDF 用 Claude Code SDK 的原生 `Read` 工具；其他文本可直接读取。
 - 若知识图谱已构建，对关键 feature 或 judgment 调一次 `mcp__ts_harness__query_knowledge` 验证领域定义与 reference 文本一致；只有当知识图谱的某条结论与本节点已写出的 feature 直接相关时才需要查询，避免无意义上下文消耗。
 - 规划候选 feature 集合：每个 feature 至少对应一条 reference 证据；feature 之间应正交、可独立计算；judgment 阈值必须可被 reference 原文或 `user/data-spec.md` 支持。
+- 编写 extractor 前必须先在 `tools/reference-feature-extractor/` 下写出：
+  - `evidence-map.json`：`schemaVersion="1.0"`，按 feature 汇总原始 reference evidence；每个 feature 必须含 `name`、`evidence` 数组，evidence 每项必须包含 `referencePath`、`quote` 和 `page` 或 `section`。
+  - `feature-plan.json`：`schemaVersion="1.0"`，逐 feature 说明 `name`、`unit`、`computation`、`judgmentRules`、`controlExpectation`、`expectedFailureModes` 与 `evidence`。对启发式或不可稳定观察的 feature，计划中必须写明应保守返回 `indeterminate` 或 warning 的条件。
 - 在 `tools/reference-feature-extractor/` 下创建：
   - `extractor.py`：纯确定性 Python 程序；满足 AST 白名单、禁止调用、确定输入输出。
   - `manifest.json`：`schemaVersion="1.0"`、`entrypoint="tools/reference-feature-extractor/extractor.py"`、`inputSchema`、`outputSchema` 与 `features` 数组（每条 feature 含 `name`、`description` 与非空 `evidence`）。
@@ -27,13 +30,14 @@
   - `README.md`：详细说明用途、适用范围、reference 范围、输入 schema、输出 schema、调用方法、feature/rule 列表、不可观察条件、风险与限制。
   - `test-cases.json`：数组，每项含 `input`，尽量包含完整 `expected`；必须至少包含一个从当前 workspace 真实数据中按 `user/data-spec.md` 抽取的样本输入，并在该项用 `source.type="real_sample"` 和已存在的 workspace 相对 `source.path` 记录可审计样本来源（可额外记录 case id、split/fold 或行号）。后端会执行至少一次重复运行以验证字节级一致。
 - 使用 `Bash` 在 workspace 根目录通过 `uv run python tools/reference-feature-extractor/extractor.py < input.json` 至少试运行一次真实样本输入，确保能正确从 stdin 读取并向 stdout 写出 JSON。若额外使用合成样本，也必须在真实样本测试通过后再作为补充。
+- 真实样本运行后必须写出 `evaluation-report.json`：`schemaVersion="1.0"`，包含 `cases`、`summary` 和至少一个 control/reference case。每个 case 必须记录真实样本 `source`、`featureStatusCounts`、逐 feature 输出摘要；`summary.controlCaseWarnings` 必须列出正常/对照样本中的异常负担和风险，即使为空也要写空数组。若 control/reference case 出现大量 abnormal feature，必须调试、降级相关 judgment，或在 README 和 evaluation report 中明确该工具只能作为弱线索。
 - 调用 MCP `mcp__ts_harness__validate_reference_feature_extractor` 触发后端强校验：
   - 输入可携带 `{runTests: true}` 强制后端运行确定性测试；默认也会运行。
   - 失败时返回的 error message 会指明具体缺陷（缺失文件、manifest schema、reference 引用、AST 禁用项、确定性测试等）；主会话必须根据 error 修订并重试。
   - 成功后主会话可以继续；iterative-solving 在 case review 时才把工具视为可用。
 - 完成全部工件且后端校验通过后，调用 `mcp__ts_harness__finish_node` 提交本节点：
   - `success=true` 表示本节点目标已达成；`summary` 用一两句话说明已写出的工件与后端校验结果。
-  - `outputPaths` 必须包含 `tools/reference-feature-extractor/{extractor.py,manifest.json,reference-rules.json,README.md,test-cases.json}` 与 `state/reference-feature-build.json`。
+  - `outputPaths` 必须包含 `tools/reference-feature-extractor/{extractor.py,manifest.json,reference-rules.json,README.md,test-cases.json,evidence-map.json,feature-plan.json,evaluation-report.json}` 与 `state/reference-feature-build.json`。
   - `nextNode` 可以省略，由后端按 node spec 推进到 `iterative-solving`；若决定终止迭代链，可显式设为 `none`。
 
 注意：

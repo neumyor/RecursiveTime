@@ -8,7 +8,9 @@ subcases:
    subprocess error, network drop, etc.). The harness must mark the
    node as failed with the SDK error in the summary, release the
    active-node lock so the next main turn isn't blocked, and re-raise
-   the original exception to the HTTP caller.
+   the original exception to the HTTP caller. If the user already
+   paused the node, the delayed SDK error must preserve the paused
+   active node so the user can resume it.
 
 2. The SDK call returns normally but the agent never called
    `finish_node`. The harness must give the agent one bounded reminder
@@ -34,9 +36,9 @@ from harnessing_ts.orchestrator import HarnessOrchestrator
 from harnessing_ts.state.workspace_store import WorkspaceStore
 
 
-def _make_orchestrator(tmp_path) -> HarnessOrchestrator:
+def _make_orchestrator(tmp_path, *, mode: str = "auto") -> HarnessOrchestrator:
     WorkspaceStore(tmp_path).ensure_layout()
-    orchestrator = HarnessOrchestrator(tmp_path, dry_run=False, locale="zh", mode="auto")
+    orchestrator = HarnessOrchestrator(tmp_path, dry_run=False, locale="zh", mode=mode)
     orchestrator.initialize()
     return orchestrator
 
@@ -148,7 +150,7 @@ def test_handle_node_runner_return_fails_after_bounded_reminders(tmp_path) -> No
 
 
 def test_handle_node_runner_return_reminder_then_success_clears_protocol_reminders(tmp_path) -> None:
-    orchestrator = _make_orchestrator(tmp_path)
+    orchestrator = _make_orchestrator(tmp_path, mode="manual")
     node = _create_running_node(orchestrator, "problem-contract")
     fake_runner = _FakeNodeRunner()
     orchestrator.active_node_runner = fake_runner  # type: ignore[assignment]
@@ -292,14 +294,32 @@ def test_handle_node_runner_return_sdk_error_preserves_user_pause(tmp_path) -> N
     assert latest.get("status") == "paused"
     assert latest.get("summary") == "Paused by user: needs guidance"
     state = orchestrator.get_state()
-    assert state["activeNode"] is None
-    assert state["activeNodeSessionId"] is None
+    assert state["activeNode"] == "problem-contract"
+    assert state["activeNodeSessionId"] == node["id"]
     assert orchestrator.active_node_runner is None
     # The user pause was preserved; the SDK error did not turn it
     # into a failure.
     timeline = orchestrator.store.read_timeline()
     assert not any(event["type"] == "node_runner_crash" for event in timeline)
     assert not any(event["type"] == "node_protocol_error" for event in timeline)
+
+
+def test_interrupt_current_is_idempotent_for_already_paused_node(tmp_path) -> None:
+    orchestrator = _make_orchestrator(tmp_path)
+    node = _create_running_node(orchestrator, "problem-contract")
+    node["status"] = "paused"
+    node["summary"] = "Paused by user: needs guidance"
+    orchestrator.store.write_node_session(node)
+
+    result = asyncio.run(orchestrator.interrupt_current("second click"))
+
+    latest = orchestrator.store.read_node_session(node["id"])
+    assert latest is not None
+    assert latest["status"] == "paused"
+    assert latest["summary"] == "Paused by user: needs guidance"
+    assert result["alreadyPaused"] is True
+    node_parts = orchestrator.store.read_node_parts(node["id"])
+    assert not any("second click" in str(part.get("text", "")) for part in node_parts)
 
 
 def test_protocol_recovery_does_not_corrupt_timeline_jsonl(tmp_path) -> None:

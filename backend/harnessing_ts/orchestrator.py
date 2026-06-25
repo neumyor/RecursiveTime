@@ -445,6 +445,10 @@ class HarnessOrchestrator:
 
         if node_runner_active or (has_active_node and not main_runner_active):
             target = "node"
+            node = self.active_node_session or self._restore_active_node_session()
+            if node and node.get("status") == "paused":
+                self.active_node_session = node
+                return {"target": target, "state": self.get_state(), "alreadyPaused": True}
             if node_runner_active and self.active_node_runner:
                 try:
                     await self.active_node_runner.interrupt()
@@ -461,7 +465,6 @@ class HarnessOrchestrator:
                     "message": "Main runner interrupted while pausing active node.",
                     "payload": {"reason": message},
                 })
-            node = self.active_node_session or self._restore_active_node_session()
             if node:
                 node["status"] = "paused"
                 node["summary"] = f"Paused by user: {message}"
@@ -921,7 +924,7 @@ class HarnessOrchestrator:
         method is only invoked from tests or external callers."""
         self._ensure_initialized()
         if not self.variant.knowledge_to_tools:
-            raise RuntimeError(f"Reference feature builder is disabled by ablation variant {self.variant.id}.")
+            raise RuntimeError(f"Reference feature extractor is disabled by ablation variant {self.variant.id}.")
         try:
             status = self.store.validate_and_store_reference_feature(run_tests=True)
             await self._refresh_main_runner_for_dynamic_tools()
@@ -1204,9 +1207,16 @@ class HarnessOrchestrator:
             # clicking Interrupt, which sets status=paused), the SDK
             # error is just a delayed side effect of that intervention
             # and we must not overwrite the user's decision. Still
-            # tear down the runner and release the active-node lock
-            # defensively so the next main turn is not blocked.
-            if latest.get("status") in {"paused", "waiting_approval", "failed", "exited"}:
+            # tear down the dead runner. For paused nodes, keep the
+            # active-node lock so the next user message can resume the
+            # same node instead of starting a new main turn.
+            if latest.get("status") == "paused":
+                if self.active_node_runner is not None:
+                    await self._close_active_node_runner("node_sdk_error_after_user_pause")
+                self.active_node_runner = None
+                self.active_node_session = latest
+                return
+            if latest.get("status") in {"waiting_approval", "failed", "exited"}:
                 await self._release_runner_and_lock("node_sdk_error_after_user_resolution")
                 return
             await self._fail_node_after_sdk_crash(node, latest, sdk_error)

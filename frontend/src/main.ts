@@ -2622,13 +2622,24 @@ async function interruptCurrent(reason: string) {
     if (state.busy) {
       state.loadingMessage = loadingPart('暂停中，等待当前请求收尾');
       render();
-      await waitForBackendIdle(5000);
-    } else {
-      state.loadingMessage = null;
-      render();
+      try {
+        await waitForBackendIdle(5000);
+      } catch {
+        // The backend may need longer to let the interrupted SDK task
+        // unwind. Pause has already been recorded, so do not leave a
+        // permanent loading row or show this settling delay as an error.
+      }
     }
+    state.loadingMessage = null;
+    state.pendingParts = reconcilePendingParts(state.bootstrap);
+    render();
   } catch (error) {
+    state.loadingMessage = null;
+    render();
     showDetail('Interrupt Error', { message: error instanceof Error ? error.message : String(error) });
+  } finally {
+    els.interruptBtn.disabled = false;
+    updateControls(state.bootstrap || emptyBootstrap());
   }
 }
 

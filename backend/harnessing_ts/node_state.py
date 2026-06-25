@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from harnessing_ts.reference_feature_extractor import KNOWLEDGE_TO_TOOLS_REQUIRED_OUTPUT_PATHS
 from harnessing_ts.schema import NODE_SPECS, NodeSession, NodeType, WorkspaceState, get_next_node
 from harnessing_ts.variants import AblationVariant, get_variant
 
@@ -77,6 +78,10 @@ class NodeStateMachine:
         goal_met: bool | None = None,
         next_node_specified: bool = False,
     ) -> None:
+        if node_type == "knowledge-to-tools":
+            if success:
+                self.validate_knowledge_to_tools_output_paths(output_paths or [])
+            return
         if node_type != "iterative-solving":
             return
         if success and not loop_decision:
@@ -134,6 +139,17 @@ class NodeStateMachine:
                 "iterative-solving finish_node is missing required outputPaths: "
                 + ", ".join(missing)
                 + ". Complete the full node artifacts before calling finish_node."
+            )
+
+    def validate_knowledge_to_tools_output_paths(self, output_paths: list[str]) -> None:
+        normalized = {_workspace_relative_path(path, self.workspace_path) for path in output_paths}
+        required = set(KNOWLEDGE_TO_TOOLS_REQUIRED_OUTPUT_PATHS)
+        missing = sorted(required - normalized)
+        if missing:
+            raise RuntimeError(
+                "knowledge-to-tools finish_node is missing required outputPaths: "
+                + ", ".join(missing)
+                + ". Complete the full reference feature extractor contract before calling finish_node."
             )
 
     def iterative_route_decision(self, next_node: NodeType | None, loop_decision: str | None) -> str | None:

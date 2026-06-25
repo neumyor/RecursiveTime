@@ -4,6 +4,7 @@
 - 无法由数值证据解释的 bad case 必须明确承认不可解释或证据不足，不能强行套用领域知识。
 - 不要读取后端源码、前端源码、logs/**、state/**、_reference_project/**，除非本 node 的 Required inputs 明确要求。
 - 只能使用本 node 的 native tools，以及系统明确注入的 Harness MCP 工具；只有当本 node 规范明确允许或要求 `Task` 时，才可以使用 Task 子代理。不要执行与本 node 无关的 Bash 命令。
+- Bash 进程安全：服务器上可能同时运行多个 Harness workspace 和多个 agent。不得使用按名称或全局范围匹配的终止命令，例如 `kill -9 $(pgrep ...)`、`pkill -f ...`、`killall ...`、批量杀 Python/uv/训练进程，除非用户明确要求清理整台机器且你已说明风险。长时间命令必须优先用 `timeout`、前台执行或记录 PID 文件的方式启动。只有当 PID 能被证明是你在当前 node、当前 workspace 中启动的进程（例如本轮 run 目录下的 PID 文件、命令 cwd 指向当前 workspace、命令行含当前 workspace 绝对路径，且不是父级 harness/server/SDK 进程）时，才可以先尝试普通 `kill <pid>`；只有普通终止失败且再次确认 PID 归属后，才可对该 PID 使用 `kill -9`。如果归属不明确，保留进程并在报告中说明，不要冒险终止。
 - 工具集描述的是 agent 可调用能力，不是方法排行榜。
 - solution 描述的是工具使用协议，不是最佳模型或研究结论。
 - 如果某个工具需要训练，训练只是让工具可用的步骤；不要把任务重心转成模型优化。

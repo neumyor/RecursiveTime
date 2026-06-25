@@ -210,6 +210,51 @@ def test_omitted_next_node_uses_node_spec_default(tmp_path) -> None:
     assert result["nextNode"] == "knowledge-to-tools"
 
 
+def test_knowledge_to_tools_success_requires_quality_artifact_output_paths(tmp_path) -> None:
+    orchestrator = _orchestrator(tmp_path, mode="auto")
+    _activate_node(orchestrator, "knowledge-to-tools")
+
+    with pytest.raises(RuntimeError, match="evidence-map.json"):
+        asyncio.run(orchestrator.finish_node({
+            "success": True,
+            "summary": "validated extractor",
+            "goalMet": False,
+            "outputPaths": [
+                "tools/reference-feature-extractor/extractor.py",
+                "tools/reference-feature-extractor/manifest.json",
+                "tools/reference-feature-extractor/reference-rules.json",
+                "tools/reference-feature-extractor/README.md",
+                "tools/reference-feature-extractor/test-cases.json",
+                "state/reference-feature-build.json",
+            ],
+        }))
+
+
+def test_knowledge_to_tools_success_accepts_complete_output_paths(tmp_path) -> None:
+    orchestrator = _orchestrator(tmp_path, mode="auto")
+    node = _activate_node(orchestrator, "knowledge-to-tools")
+
+    result = asyncio.run(orchestrator.finish_node({
+        "success": True,
+        "summary": "validated extractor",
+        "goalMet": False,
+        "outputPaths": [
+            "tools/reference-feature-extractor/extractor.py",
+            "tools/reference-feature-extractor/manifest.json",
+            "tools/reference-feature-extractor/reference-rules.json",
+            "tools/reference-feature-extractor/README.md",
+            "tools/reference-feature-extractor/test-cases.json",
+            "tools/reference-feature-extractor/evidence-map.json",
+            "tools/reference-feature-extractor/feature-plan.json",
+            "tools/reference-feature-extractor/evaluation-report.json",
+            "state/reference-feature-build.json",
+        ],
+    }))
+
+    assert result["nextNode"] == "iterative-solving"
+    assert orchestrator.store.read_node_session(node["id"])["status"] == "completed"
+
+
 def test_null_next_node_uses_node_spec_default(tmp_path) -> None:
     orchestrator = _orchestrator(tmp_path, mode="auto")
     node = _activate_node(orchestrator, "problem-contract")

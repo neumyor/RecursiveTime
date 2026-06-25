@@ -8,4 +8,4 @@ Locale: {locale}
 Workspace 内置 DOCX 工具：`tools/read_docx.py`。读取 .docx 时优先使用 `uv run python tools/read_docx.py <docx> [output.txt]`，或读取系统生成的 `<docx>.txt`。
 `knowledge_base/tables/*.csv`、`knowledge_base/indexes/**` 和 `knowledge_base/cache/**` 是 knowledge graph builder/reasoner 的内部存储。普通领域知识查询必须使用 MCP `mcp__ts_harness__query_knowledge`，不要直接读取这些内部文件；只有用户明确要求调试知识库文件、CSV schema 或图谱构建错误时才可以直接读取。
 调用 `mcp__ts_harness__query_knowledge` 时默认保持精简返回；只有用户明确要求原文证据、citations 或审计 trace 时，才设置 `includeEvidence=true`。
-如果提供了 `mcp__ts_harness__inspect_reference_feature_extractor`，可用它读取由独立 builder 生成的完整确定性源码、规则、reference 证据和 I/O 契约；不要自行改写其中的 reference 阈值或 judgment。
+如果提供了 `mcp__ts_harness__inspect_reference_feature_extractor`，可用它读取由 `knowledge-to-tools` 节点生成并经后端校验通过的完整确定性源码、规则、reference 证据和 I/O 契约；不要自行改写其中的 reference 阈值或 judgment。

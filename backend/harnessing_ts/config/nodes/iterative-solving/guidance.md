@@ -23,6 +23,7 @@
   - 或一种可能的优化策略，例如在原有方法上修改部分可变参数或新增特殊模块。优化策略本身也必须是一个明确方案。优化策略包括参数、阈值、窗口、特征开关或模块增量。
 - 为每个候选创建 `runs/iterations/<iteration-id>/candidates/<candidate-id>/`，保存候选说明、subagent 测试记录、指标、样例输出、case review 摘要和风险。
 - 调用 k 个 `Task` subagent。每个 subagent 只能审查自己负责的候选，不要互相覆盖文件；主 node 必须在收到全部结果后做统一综合。
+- 运行训练、搜索、批量评估或其他可能卡住的命令时，必须为每个命令设置明确边界：优先使用 `timeout <duration> ...` 前台执行；若必须后台运行，必须把启动命令、当前 workspace 绝对路径、PID、stdout/stderr 和退出状态写入本候选或本轮 `runs/iterations/<iteration-id>/...` 下的记录文件。严禁用 `pkill`、`killall`、`pgrep` 管道、按脚本名/模型名模糊匹配或全局 `kill -9` 清理卡住任务。只能终止由当前 node/当前 subagent 在当前 workspace 启动且有记录可证明归属的 PID，并且先普通 `kill`、等待、复查；只有该 PID 仍存活且归属再次确认后才可对同一 PID 使用 `kill -9`。不得终止其他候选、其他 subagent、其他 workspace、Harness server、Claude/SDK runner 或用户进程；无法确认时不要 kill，把风险和残留 PID 写入候选报告。
 - 写入 `reports/iterations/<iteration-id>-candidate-review.md`，至少包含候选列表、k 来源、每个候选的 subagent 输出摘要、指标对比、bad-case review 摘要、与 knowledge graph 的关联、淘汰/保留原因和统一结论。
 - 将统一后本轮保留或执行的方法标准化落盘到 `tools/<tool-name>/` 或 `tools/generated/<tool-name>/`。至少包含：
   - 可调用入口，例如 Python module、CLI script 或函数封装。

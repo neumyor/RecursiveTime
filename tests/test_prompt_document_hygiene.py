@@ -87,6 +87,9 @@ def test_node_specs_match_mandatory_output_contracts() -> None:
     assert "reports/iterations/<iteration-id>-candidate-review.md" in iterative_outputs
     assert knowledge_outputs
     assert "tools/reference-feature-extractor/**" in knowledge_outputs
+    assert "tools/reference-feature-extractor/evidence-map.json" in knowledge_outputs
+    assert "tools/reference-feature-extractor/feature-plan.json" in knowledge_outputs
+    assert "tools/reference-feature-extractor/evaluation-report.json" in knowledge_outputs
     assert "state/reference-feature-build.json" in knowledge_outputs
 
 
@@ -148,6 +151,9 @@ def test_knowledge_to_tools_requires_real_sample_validation() -> None:
     for text in (guidance, system_prompt, build_prompt):
         assert "真实样本" in text
         assert "合成样本只能作为补充" in text
+        assert "evaluation-report.json" in text
+    assert "evidence-map.json" in guidance
+    assert "feature-plan.json" in guidance
     assert "test-cases.json" in guidance
     assert "source" in guidance
 
@@ -165,6 +171,28 @@ def test_iterative_case_review_visualization_contract_is_explicit() -> None:
     assert "DPI 不得低于 30" not in guidance
     assert "宽高比必须为 16:9" in guidance
     assert "蓝、橙、绿、红" in guidance
+
+
+def test_node_prompts_restrict_cross_workspace_process_killing() -> None:
+    execution_rules = (
+        REPO_ROOT
+        / "backend"
+        / "harnessing_ts"
+        / "config"
+        / "prompts"
+        / "node"
+        / "execution-rules.md"
+    ).read_text(encoding="utf-8")
+    guidance = node_document("iterative-solving")["guidance"]
+
+    for text in (execution_rules, guidance):
+        assert "当前 workspace" in text
+        assert "pkill" in text
+        assert "killall" in text
+        assert "kill -9" in text
+        assert "PID" in text
+    assert "归属不明确" in execution_rules
+    assert "无法确认时不要 kill" in guidance
 
 
 def test_chain_summary_prompts_are_markdown_backed() -> None:

@@ -34,3 +34,12 @@ def test_knowledge_graph_sse_snapshot_updates_all_live_panels() -> None:
     assert "state.bootstrap.knowledgeGraph = payload.knowledgeGraph" in source
     assert "state.bootstrap.knowledgeBaseSummary = payload.knowledgeBaseSummary" in source
     assert "state.bootstrap.knowledgeGraphBuild = payload.knowledgeGraphBuild" in source
+
+
+def test_interrupt_settling_does_not_leave_permanent_loading_message() -> None:
+    source = MAIN_TS.read_text()
+
+    assert "await waitForBackendIdle(5000)" in source
+    assert "Pause has already been recorded" in source
+    assert "state.loadingMessage = null" in source
+    assert "alreadyPaused" in (ROOT / "backend" / "harnessing_ts" / "orchestrator.py").read_text()

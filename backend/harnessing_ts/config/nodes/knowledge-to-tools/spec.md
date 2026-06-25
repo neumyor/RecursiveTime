@@ -12,4 +12,7 @@ requires:
 
 produces:
 - tools/reference-feature-extractor/**
+- tools/reference-feature-extractor/evidence-map.json
+- tools/reference-feature-extractor/feature-plan.json
+- tools/reference-feature-extractor/evaluation-report.json
 - state/reference-feature-build.json
