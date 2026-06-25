@@ -277,6 +277,8 @@ state/reference-feature-build.json
 
 前端 `Reset Chat` 重置聊天记录和 agent 工作流记忆，并清除 `tools/reference-feature-extractor/`、`state/reference-feature-build.json`、普通生成工具、runs、reports 和 processed data；它只保留 `data/raw/`、`references/`、`knowledge_base/` 与知识图谱。`Reset Workspace` 才清除这些保留的 reference/knowledge graph 产物；独立 LLM 配置继续保留。
 
+前端右侧 workspace 文件树隐藏 `.git`、`.venv`、`node_modules`、`__pycache__` 等基础设施目录；其他文件最多展示 5 层，每个目录最多展示 100 个子项，超出时在该目录内显示局部截断提示，避免单个大目录遮蔽后续目录。
+
 ## 禁止提交
 
 - `node_modules/`

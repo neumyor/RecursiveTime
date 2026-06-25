@@ -2632,6 +2632,15 @@ label {
   border-left: 1px solid var(--line);
 }
 
+.file-tree-note {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
 .file-node {
   width: 100%;
   min-height: 30px;

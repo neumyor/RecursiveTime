@@ -454,38 +454,47 @@ class WorkspaceStore:
     def read_node_parts(self, node_session_id: str) -> list[Part]:
         return filter_display_parts(collapse_tool_parts(read_jsonl(self.node_log_path(node_session_id))))
 
-    def list_file_tree(self, max_entries: int = 10_000) -> dict[str, Any]:
+    def list_file_tree(self, max_depth: int = 5, max_children_per_dir: int = 100) -> dict[str, Any]:
         self.ensure_layout()
         count = 0
-        truncated = False
+        any_truncated = False
 
-        def build(path: Path, rel: str) -> dict[str, Any] | None:
-            nonlocal count, truncated
-            if count >= max_entries:
-                truncated = True
-                return None
+        def build(path: Path, rel: str, depth: int) -> dict[str, Any] | None:
+            nonlocal count, any_truncated
             name = path.name if rel else self.root.name
-            if path.name in {".git", ".venv", "__pycache__", "node_modules"}:
+            ignored_names = {".git", ".venv", "__pycache__", "node_modules"}
+            if path.name in ignored_names:
                 return None
             count += 1
             stat = path.stat()
             if path.is_dir():
                 children: list[dict[str, Any]] = []
+                local_truncated = depth >= max_depth
                 try:
                     entries = sorted(path.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))
                 except PermissionError:
                     entries = []
-                for child in entries:
-                    child_rel = str(child.relative_to(self.root))
-                    child_node = build(child, child_rel)
-                    if child_node:
-                        children.append(child_node)
+                entries = [item for item in entries if item.name not in ignored_names]
+                if not local_truncated:
+                    visible_entries = entries[:max_children_per_dir]
+                    local_truncated = len(entries) > len(visible_entries)
+                    for child in visible_entries:
+                        child_rel = str(child.relative_to(self.root))
+                        child_node = build(child, child_rel, depth + 1)
+                        if child_node:
+                            children.append(child_node)
+                if local_truncated:
+                    any_truncated = True
                 return {
                     "name": name,
                     "path": rel,
                     "kind": "dir",
                     "mtime": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat().replace("+00:00", "Z"),
                     "children": children,
+                    "truncated": local_truncated,
+                    "childCount": len(entries),
+                    "maxChildren": max_children_per_dir,
+                    "maxDepth": max_depth,
                 }
             return {
                 "name": name,
@@ -495,12 +504,13 @@ class WorkspaceStore:
                 "mtime": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat().replace("+00:00", "Z"),
             }
 
-        tree = build(self.root, "")
+        tree = build(self.root, "", 0)
         return {
             "root": str(self.root),
-            "truncated": truncated,
+            "truncated": any_truncated,
             "entryCount": count,
-            "maxEntries": max_entries,
+            "maxDepth": max_depth,
+            "maxChildrenPerDir": max_children_per_dir,
             "tree": tree,
         }
 

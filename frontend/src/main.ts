@@ -2391,8 +2391,10 @@ function renderFileTree(fileTree: Bootstrap['fileTree']) {
   els.workspacePath.textContent = fileTree.root || '';
   els.fileTree.innerHTML = renderTreeNode(fileTree.tree, true);
   if (fileTree.truncated) {
-    const limit = fileTree.maxEntries ? `（已显示 ${fileTree.entryCount || fileTree.maxEntries}/${fileTree.maxEntries} 项）` : '';
-    els.fileTree.insertAdjacentHTML('beforeend', emptyState(`文件数量过多，已截断显示${limit}。`, 'AlertTriangle'));
+    const limit = fileTree.maxChildrenPerDir
+      ? `（每个目录最多 ${fileTree.maxChildrenPerDir} 项，最多 ${fileTree.maxDepth || 5} 层）`
+      : '';
+    els.fileTree.insertAdjacentHTML('beforeend', emptyState(`部分目录已截断显示${limit}。`, 'AlertTriangle'));
   }
   for (const item of els.fileTree.querySelectorAll<HTMLElement>('.file-node.file')) {
     item.addEventListener('click', async () => showWorkspaceFile(item.dataset.path || ''));
@@ -2403,11 +2405,15 @@ function renderTreeNode(node: FileTreeNode | undefined, root = false): string {
   if (!node) return '';
   if (node.kind === 'dir') {
     const open = root || ['user', 'artifacts', 'data', 'tools', 'runs', 'reports'].includes(node.path);
+    const truncation = node.truncated
+      ? `<div class="file-tree-note">${escapeHtml(fileTreeTruncationText(node))}</div>`
+      : '';
     return `
       <details class="file-dir" ${open ? 'open' : ''}>
         <summary><span data-icon="ChevronRight"></span><span>${escapeHtml(node.name || 'workspace')}</span></summary>
         <div class="file-children">
           ${(node.children || []).map((child) => renderTreeNode(child)).join('')}
+          ${truncation}
         </div>
       </details>
     `;
@@ -2418,6 +2424,13 @@ function renderTreeNode(node: FileTreeNode | undefined, root = false): string {
       <span class="file-size">${formatBytes(node.size || 0)}</span>
     </button>
   `;
+}
+
+function fileTreeTruncationText(node: FileTreeNode) {
+  if ((node.childCount || 0) > (node.maxChildren || 0)) {
+    return `已显示前 ${node.maxChildren} / ${node.childCount} 项`;
+  }
+  return `已达到 ${node.maxDepth || 5} 层显示深度`;
 }
 
 async function showWorkspaceFile(path: string) {

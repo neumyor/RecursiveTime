@@ -179,27 +179,49 @@ def test_reset_chat_handles_processed_dir_refilled_during_delete(tmp_path, monke
     assert calls["count"] >= 2
 
 
-def test_file_tree_reports_truncation_after_building_tree(tmp_path):
+def _find_tree_node(node, path: str):
+    if node.get("path") == path:
+        return node
+    for child in node.get("children", []):
+        found = _find_tree_node(child, path)
+        if found:
+            return found
+    return None
+
+
+def test_file_tree_truncates_large_directory_without_hiding_siblings(tmp_path):
     store = WorkspaceStore(tmp_path)
     store.ensure_layout()
-    for index in range(12):
+    for index in range(120):
         (tmp_path / "reports" / f"file_{index:02d}.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "user" / "still-visible.txt").write_text("visible", encoding="utf-8")
 
-    tree = store.list_file_tree(max_entries=5)
+    tree = store.list_file_tree(max_children_per_dir=100)
+    reports = _find_tree_node(tree["tree"], "reports")
+    user_file = _find_tree_node(tree["tree"], "user/still-visible.txt")
 
     assert tree["truncated"] is True
-    assert tree["entryCount"] == 5
-    assert tree["maxEntries"] == 5
+    assert tree["maxChildrenPerDir"] == 100
+    assert reports["truncated"] is True
+    assert reports["childCount"] > 100
+    assert len(reports["children"]) == 100
+    assert user_file is not None
 
 
-def test_file_tree_default_limit_covers_large_runtime_workspace(tmp_path):
+def test_file_tree_limits_depth_to_five_levels(tmp_path):
     store = WorkspaceStore(tmp_path)
     store.ensure_layout()
+    deep = tmp_path / "runs" / "l1" / "l2" / "l3" / "l4" / "l5" / "l6"
+    deep.mkdir(parents=True)
+    (deep / "too-deep.txt").write_text("x", encoding="utf-8")
 
     tree = store.list_file_tree()
+    deepest_visible = _find_tree_node(tree["tree"], "runs/l1/l2/l3/l4")
 
-    assert tree["maxEntries"] == 10_000
-    assert tree["truncated"] is False
+    assert tree["truncated"] is True
+    assert tree["maxDepth"] == 5
+    assert deepest_visible["truncated"] is True
+    assert _find_tree_node(tree["tree"], "runs/l1/l2/l3/l4/l5") is None
 
 
 def test_clear_main_logs_closes_cached_main_runner(tmp_path):

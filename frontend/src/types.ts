@@ -5,6 +5,10 @@ export type FileTreeNode = {
   name: string;
   path: string;
   size?: number;
+  truncated?: boolean;
+  childCount?: number;
+  maxChildren?: number;
+  maxDepth?: number;
   children?: FileTreeNode[];
 };
 
@@ -16,7 +20,7 @@ export type Bootstrap = {
   nodes: JsonMap[];
   nodePartsById: Record<string, JsonMap[]>;
   nodeSpecs: JsonMap[];
-  fileTree: { root?: string; tree?: FileTreeNode; truncated?: boolean; entryCount?: number; maxEntries?: number } | null;
+  fileTree: { root?: string; tree?: FileTreeNode; truncated?: boolean; entryCount?: number; maxDepth?: number; maxChildrenPerDir?: number } | null;
   llmConfig?: JsonMap;
   runtimeSettings?: JsonMap;
   knowledgeGraph?: JsonMap;
