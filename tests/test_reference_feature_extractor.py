@@ -6,6 +6,7 @@ import pytest
 
 from harnessing_ts.orchestrator import HarnessOrchestrator
 from harnessing_ts.reference_feature_extractor import (
+    execute_reference_feature_module,
     execute_reference_feature_extractor,
     inspect_reference_feature_extractor,
     validate_reference_feature_extractor,
@@ -25,6 +26,7 @@ def _write_extractor(root) -> None:
     manifest = {
         "schemaVersion": "1.0",
         "entrypoint": "tools/reference-feature-extractor/extractor.py",
+        "pythonApi": {"file": "tools/reference-feature-extractor/extractor.py", "function": "extract_features"},
         "inputSchema": {"type": "object", "required": ["pr_ms"]},
         "outputSchema": {"type": "object", "required": ["schemaVersion", "features", "warnings"]},
         "features": [{"name": "PR interval", "description": "Measured PR interval", "evidence": evidence}],
@@ -91,25 +93,27 @@ def _write_extractor(root) -> None:
         """import json
 import sys
 
-case = json.load(sys.stdin)
-value = float(case["pr_ms"])
-evidence = [{"referencePath": "references/guide.md", "section": "PR interval", "quote": "above 200 ms is prolonged"}]
-output = {
-    "schemaVersion": "1.0",
-    "features": [{
-        "name": "PR interval",
-        "value": value,
-        "unit": "ms",
-        "judgment": {
-            "status": "abnormal" if value > 200 else "normal",
-            "label": "PR interval prolonged" if value > 200 else "PR interval not prolonged",
-            "rule": "prolonged when PR interval > 200 ms",
-        },
-        "evidence": evidence,
-    }],
-    "warnings": [],
-}
-json.dump(output, sys.stdout, ensure_ascii=False, sort_keys=True)
+def extract_features(case):
+    value = float(case["pr_ms"])
+    evidence = [{"referencePath": "references/guide.md", "section": "PR interval", "quote": "above 200 ms is prolonged"}]
+    return {
+        "schemaVersion": "1.0",
+        "features": [{
+            "name": "PR interval",
+            "value": value,
+            "unit": "ms",
+            "judgment": {
+                "status": "abnormal" if value > 200 else "normal",
+                "label": "PR interval prolonged" if value > 200 else "PR interval not prolonged",
+                "rule": "prolonged when PR interval > 200 ms",
+            },
+            "evidence": evidence,
+        }],
+        "warnings": [],
+    }
+
+if __name__ == "__main__":
+    json.dump(extract_features(json.load(sys.stdin)), sys.stdout, ensure_ascii=False, sort_keys=True)
 """,
         encoding="utf-8",
     )
@@ -120,14 +124,17 @@ def test_validates_executes_and_inspects_reference_feature_extractor(tmp_path) -
 
     result = validate_reference_feature_extractor(tmp_path, run_tests=True)
     output = execute_reference_feature_extractor(tmp_path, {"pr_ms": 220})
+    module_output = execute_reference_feature_module(tmp_path, {"pr_ms": 220})
     inspected = inspect_reference_feature_extractor(tmp_path)
 
     assert result["ready"] is True
     assert result["testsPassed"] == 1
     assert output["features"][0]["value"] == 220.0
+    assert module_output == output
     assert output["features"][0]["judgment"]["label"] == "PR interval prolonged"
-    assert "case = json.load" in inspected["source"]
+    assert "def extract_features" in inspected["source"]
     assert inspected["manifest"]["inputSchema"]["required"] == ["pr_ms"]
+    assert inspected["manifest"]["pythonApi"]["function"] == "extract_features"
     assert inspected["featurePlan"]["features"][0]["name"] == "PR interval"
     assert inspected["evaluationReport"]["controlCaseCount"] == 1
 
@@ -178,24 +185,69 @@ def test_rejects_extractor_output_without_warnings_array(tmp_path) -> None:
         """import json
 import sys
 
-case = json.load(sys.stdin)
-value = float(case["pr_ms"])
-evidence = [{"referencePath": "references/guide.md", "section": "PR interval", "quote": "above 200 ms is prolonged"}]
-json.dump({
-    "schemaVersion": "1.0",
-    "features": [{
-        "name": "PR interval",
-        "value": value,
-        "judgment": {"status": "abnormal", "label": "PR interval prolonged"},
-        "evidence": evidence,
-    }],
-}, sys.stdout)
+def extract_features(case):
+    value = float(case["pr_ms"])
+    evidence = [{"referencePath": "references/guide.md", "section": "PR interval", "quote": "above 200 ms is prolonged"}]
+    return {
+        "schemaVersion": "1.0",
+        "features": [{
+            "name": "PR interval",
+            "value": value,
+            "judgment": {"status": "abnormal", "label": "PR interval prolonged"},
+            "evidence": evidence,
+        }],
+    }
+
+if __name__ == "__main__":
+    json.dump(extract_features(json.load(sys.stdin)), sys.stdout)
 """,
         encoding="utf-8",
     )
 
-    with pytest.raises(RuntimeError, match="output.warnings"):
+    with pytest.raises(RuntimeError, match="missing required keys: warnings"):
         validate_reference_feature_extractor(tmp_path, run_tests=True)
+
+
+def test_rejects_missing_python_api_manifest(tmp_path) -> None:
+    _write_extractor(tmp_path)
+    tool = tmp_path / "tools" / "reference-feature-extractor"
+    manifest = json.loads((tool / "manifest.json").read_text(encoding="utf-8"))
+    manifest.pop("pythonApi")
+    (tool / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="manifest must define pythonApi"):
+        validate_reference_feature_extractor(tmp_path)
+
+
+def test_accepts_task_specific_output_shape(tmp_path) -> None:
+    _write_extractor(tmp_path)
+    tool = tmp_path / "tools" / "reference-feature-extractor"
+    manifest = json.loads((tool / "manifest.json").read_text(encoding="utf-8"))
+    manifest["outputSchema"] = {
+        "type": "object",
+        "required": ["schemaVersion", "measurements"],
+        "properties": {"schemaVersion": {"const": "1.0"}},
+    }
+    (tool / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    source = tmp_path / "tools" / "reference-feature-extractor" / "extractor.py"
+    source.write_text(
+        """import json
+import sys
+
+def extract_features(case):
+    return {"schemaVersion": "1.0", "measurements": {"pr_ms": float(case["pr_ms"])}}
+
+if __name__ == "__main__":
+    json.dump(extract_features(json.load(sys.stdin)), sys.stdout, sort_keys=True)
+""",
+        encoding="utf-8",
+    )
+
+    result = validate_reference_feature_extractor(tmp_path, run_tests=True)
+    output = execute_reference_feature_module(tmp_path, {"pr_ms": 220})
+
+    assert result["testsPassed"] == 1
+    assert output["measurements"]["pr_ms"] == 220.0
 
 
 def test_rejects_extractor_output_missing_declared_feature(tmp_path) -> None:

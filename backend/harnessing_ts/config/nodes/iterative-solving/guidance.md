@@ -36,7 +36,9 @@
 - 形成当前轮解决方案，写入或更新 `user/solution-plan.md`。方案中必须引用本轮候选综合结论，并明确哪些候选被保留、组合或放弃。
 - 执行方案，记录工具调用、训练/推理/验证命令、结果文件、指标和关键观察。所有本轮输出放入 `runs/iterations/<iteration-id>/`。
 - 在写 summary 之前，必须先做整体结果分析和 case review。case review 的核心对象是 bad case；good case、边界样本和工具冲突样本只作为 bad case 归因的对照证据出现。
-- 若系统提供 `mcp__ts_harness__extract_reference_features`，开始 case review 前必须先调用 `mcp__ts_harness__inspect_reference_feature_extractor` 核对输入输出契约和源码；随后必须对每个被分析的 bad case 以及用于对照的每个 good/prototype case 分别调用 `mcp__ts_harness__extract_reference_features`。报告必须记录返回的 feature value、unit、judgment、rule 和 evidence。不得用肉眼或 LLM 自行判断替代该确定性工具；工具返回 `indeterminate` 时必须如实保留。
+- 若 `tools/reference-feature-extractor/` 已通过后端校验，开始 case review 前必须读取 `manifest.json` 和 `README.md`，核对任务特定输入输出契约、`pythonApi`、源码入口和限制。后续应优先在实验或 case-review 脚本中按 README 以 Python module 方式 import 并调用该已验证 API；MCP `inspect_reference_feature_extractor` / `extract_reference_features` 可作为小输入 smoke test 或兼容入口，但不是大样本的强制路径。
+- 对每个被分析的 bad case 以及用于对照的每个 good/prototype case，若 reference feature extractor 可用，必须实际调用已验证 extractor（Python API 或 MCP 均可），不得用肉眼或 LLM 自行判断替代。报告必须记录实际调用方式、工具路径、API 函数名、处理样本 ID、输出摘要和失败/警告；如果输出采用 `features` 结构，应记录 feature value、unit、judgment、rule 和 evidence。工具返回 `indeterminate` 或任务自定义不确定状态时必须如实保留。
+- 每轮使用 reference feature extractor 时，应在 `runs/iterations/<iteration-id>/reference-feature-usage.json` 或等价 run artifact 中记录调用留痕：`toolPath`、`manifestPath`、`pythonApi`、调用模式（`python_module` 或 `mcp`）、样本数量、成功/失败数量、异常信息和输出文件路径。iteration 报告中声称使用 reference features 时必须能追溯到该调用记录。
 - case review 必须产出完整报告 `reports/iterations/<iteration-id>-case-review.md`，至少包含：
   - **Case review scope**：定义本轮什么算作bad case。
   - **Sampling policy**：

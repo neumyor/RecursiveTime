@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 import os
 import subprocess
@@ -88,10 +89,10 @@ def validate_reference_feature_extractor(workspace_path: Path, *, run_tests: boo
     if manifest.get("entrypoint") != str(SOURCE_PATH):
         raise RuntimeError(f"manifest entrypoint must be {SOURCE_PATH}.")
     if not isinstance(manifest.get("inputSchema"), dict) or not isinstance(manifest.get("outputSchema"), dict):
-        raise RuntimeError("manifest must define inputSchema and outputSchema objects.")
-    output_required = manifest["outputSchema"].get("required")
-    if manifest["outputSchema"].get("type") != "object" or not {"schemaVersion", "features", "warnings"}.issubset(set(output_required or [])):
-        raise RuntimeError("manifest.outputSchema must require schemaVersion, features, and warnings.")
+        raise RuntimeError("manifest must define task-specific inputSchema and outputSchema objects.")
+    if manifest["outputSchema"].get("type") != "object":
+        raise RuntimeError("manifest.outputSchema must describe a JSON object.")
+    python_api = _validate_python_api_manifest(manifest)
     features = manifest.get("features")
     if not isinstance(features, list) or not features:
         raise RuntimeError("manifest.features must contain at least one feature definition.")
@@ -131,6 +132,7 @@ def validate_reference_feature_extractor(workspace_path: Path, *, run_tests: boo
 
     source = (workspace_path / SOURCE_PATH).read_text(encoding="utf-8")
     _validate_deterministic_source(source)
+    _load_python_api(workspace_path, python_api)
     result = {
         "ready": True,
         "toolDir": str(TOOL_DIR),
@@ -142,6 +144,7 @@ def validate_reference_feature_extractor(workspace_path: Path, *, run_tests: boo
         "evaluationReportPath": str(EVALUATION_REPORT_PATH),
         "featureCount": len(features),
         "features": [str(item.get("name")) for item in features],
+        "pythonApi": python_api,
     }
     if run_tests:
         checked = 0
@@ -154,6 +157,12 @@ def validate_reference_feature_extractor(workspace_path: Path, *, run_tests: boo
                 raise RuntimeError(f"Extractor is non-deterministic for test case {index}.")
             if "expected" in case and first != case["expected"]:
                 raise RuntimeError(f"Extractor output does not match expected output for test case {index}.")
+            module_first = execute_reference_feature_module(workspace_path, case["input"])
+            module_second = execute_reference_feature_module(workspace_path, case["input"])
+            if module_first != module_second:
+                raise RuntimeError(f"Extractor Python API is non-deterministic for test case {index}.")
+            if module_first != first:
+                raise RuntimeError(f"Extractor Python API output differs from CLI output for test case {index}.")
             checked += 1
         result["testsPassed"] = checked
     return result
@@ -319,6 +328,36 @@ def _validate_deterministic_source(source: str) -> None:
                 raise RuntimeError(f"extractor.py calls forbidden API: {node.func.attr}")
 
 
+def _validate_python_api_manifest(manifest: dict[str, Any]) -> dict[str, str]:
+    raw = manifest.get("pythonApi")
+    if not isinstance(raw, dict):
+        raise RuntimeError("manifest must define pythonApi with file and function for module-style use.")
+    file_path = str(raw.get("file") or raw.get("path") or "").strip()
+    function = str(raw.get("function") or "").strip()
+    if file_path != str(SOURCE_PATH):
+        raise RuntimeError(f"manifest.pythonApi.file must be {SOURCE_PATH}.")
+    if not function.isidentifier():
+        raise RuntimeError("manifest.pythonApi.function must be a valid Python function name.")
+    return {"file": file_path, "function": function}
+
+
+def _load_python_api(workspace_path: Path, python_api: dict[str, str]):
+    source_path = workspace_path / python_api["file"]
+    module_name = "_harness_reference_feature_extractor"
+    spec = importlib.util.spec_from_file_location(module_name, source_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Could not load extractor.py as a Python module.")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise RuntimeError(f"extractor.py must be importable without reading stdin or running extraction: {exc}") from exc
+    fn = getattr(module, python_api["function"], None)
+    if not callable(fn):
+        raise RuntimeError(f"extractor.py does not expose callable pythonApi.function {python_api['function']}.")
+    return fn
+
+
 def execute_reference_feature_extractor(workspace_path: Path, input_value: Any) -> dict[str, Any]:
     validate_reference_feature_extractor(workspace_path, run_tests=False)
     env = {"PATH": os.environ.get("PATH", ""), "PYTHONHASHSEED": "0", "TZ": "UTC", "LC_ALL": "C"}
@@ -344,34 +383,60 @@ def execute_reference_feature_extractor(workspace_path: Path, input_value: Any) 
     return output
 
 
+def execute_reference_feature_module(workspace_path: Path, input_value: Any) -> dict[str, Any]:
+    summary = validate_reference_feature_extractor(workspace_path, run_tests=False)
+    fn = _load_python_api(workspace_path, summary["pythonApi"])
+    try:
+        output = fn(input_value)
+    except Exception as exc:
+        raise RuntimeError(f"Reference feature extractor Python API failed: {exc}") from exc
+    manifest = read_json(workspace_path / MANIFEST_PATH)
+    _validate_output(output, manifest if isinstance(manifest, dict) else {})
+    return output
+
+
 def _validate_output(output: Any, manifest: dict[str, Any]) -> None:
-    if not isinstance(output, dict) or output.get("schemaVersion") != "1.0":
-        raise RuntimeError("Extractor output must be an object with schemaVersion=1.0.")
+    if not isinstance(output, dict):
+        raise RuntimeError("Extractor output must be one JSON object.")
+    schema_version = manifest.get("outputSchema", {}).get("properties", {}).get("schemaVersion", {})
+    expected_version = schema_version.get("const") if isinstance(schema_version, dict) else None
+    if expected_version is not None and output.get("schemaVersion") != expected_version:
+        raise RuntimeError(f"Extractor output must have schemaVersion={expected_version}.")
+    required = manifest.get("outputSchema", {}).get("required", [])
+    if isinstance(required, list):
+        missing_required = [str(key) for key in required if key not in output]
+        if missing_required:
+            raise RuntimeError("Extractor output is missing required keys: " + ", ".join(missing_required))
+    if "features" not in output:
+        return
     features = output.get("features")
     if not isinstance(features, list):
-        raise RuntimeError("Extractor output.features must be an array.")
-    if not isinstance(output.get("warnings"), list):
-        raise RuntimeError("Extractor output.warnings must be an array.")
+        raise RuntimeError("Extractor output.features must be an array when present.")
+    if "warnings" in output and not isinstance(output.get("warnings"), list):
+        raise RuntimeError("Extractor output.warnings must be an array when present.")
     declared = {str(item.get("name")): item for item in manifest.get("features", []) if isinstance(item, dict)}
     returned_names: set[str] = set()
     for item in features:
-        if not isinstance(item, dict) or not str(item.get("name", "")).strip() or "value" not in item:
-            raise RuntimeError("Every output feature requires name and value.")
+        if not isinstance(item, dict) or not str(item.get("name", "")).strip():
+            raise RuntimeError("Every output feature requires name.")
         returned_names.add(str(item.get("name")))
         judgment = item.get("judgment")
-        if not isinstance(judgment, dict) or not str(judgment.get("label", "")).strip():
-            raise RuntimeError(f"Feature {item.get('name')} requires a judgment with label.")
-        if judgment.get("status") not in {"normal", "abnormal", "indeterminate", "not_applicable"}:
-            raise RuntimeError(f"Feature {item.get('name')} has invalid judgment.status.")
-        if not isinstance(item.get("evidence"), list) or not item["evidence"]:
-            raise RuntimeError(f"Feature {item.get('name')} requires reference evidence in output.")
+        if judgment is not None:
+            if not isinstance(judgment, dict) or not str(judgment.get("label", "")).strip():
+                raise RuntimeError(f"Feature {item.get('name')} requires a judgment with label when judgment is present.")
+            if judgment.get("status") not in {"normal", "abnormal", "indeterminate", "not_applicable"}:
+                raise RuntimeError(f"Feature {item.get('name')} has invalid judgment.status.")
+        output_evidence = item.get("evidence")
+        if "evidence" in item and (not isinstance(output_evidence, list) or not output_evidence):
+            raise RuntimeError(f"Feature {item.get('name')} evidence must be a non-empty array when present.")
         definition = declared.get(str(item.get("name")))
         if definition is None:
             raise RuntimeError(f"Extractor returned undeclared feature: {item.get('name')}")
         allowed_evidence = {json.dumps(value, ensure_ascii=False, sort_keys=True) for value in definition.get("evidence", [])}
-        for evidence in item["evidence"]:
-            if json.dumps(evidence, ensure_ascii=False, sort_keys=True) not in allowed_evidence:
-                raise RuntimeError(f"Feature {item.get('name')} returned evidence not declared in manifest.")
+        if isinstance(output_evidence, list):
+            for evidence in output_evidence:
+                if json.dumps(evidence, ensure_ascii=False, sort_keys=True) not in allowed_evidence:
+                    raise RuntimeError(f"Feature {item.get('name')} returned evidence not declared in manifest.")
     missing = sorted(set(declared) - returned_names)
     if missing:
         raise RuntimeError("Extractor output is missing declared features: " + ", ".join(missing))

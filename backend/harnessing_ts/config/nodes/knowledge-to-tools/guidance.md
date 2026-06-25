@@ -1,4 +1,4 @@
-本节点由主会话直接在当前 workspace 中完成，目标是在已有 problem contract、data spec、references/** 与（若已构建的）知识图谱基础上，生成、迭代并通过后端强校验的**确定性** reference feature extractor。生成完成后，iterative-solving 的 case review 才能用 `mcp__ts_harness__extract_reference_features` 与 `mcp__ts_harness__inspect_reference_feature_extractor` 把工具的输出视为可审计的 per-case 数值证据。
+本节点由主会话直接在当前 workspace 中完成，目标是在已有 problem contract、data spec、references/** 与（若已构建的）知识图谱基础上，生成、迭代并通过后端强校验的**确定性** reference feature extractor。生成完成后，iterative-solving 应优先按 `manifest.json` 与 `README.md` 的使用指南，通过 Python module/API 直接调用该工具；MCP `extract_reference_features` 只是兼容入口，不是唯一合规调用方式。只要调用的是已验证的 `tools/reference-feature-extractor/extractor.py` 中声明的 Python API，并留下调用记录，即可作为可审计的 per-case 数值证据。
 
 主会话是唯一构建者：后端不再提供独立 reference feature builder 子会话。所有写入、运行、调试都由主会话通过本节点的 native 工具完成；后端只在主会话调用 `mcp__ts_harness__validate_reference_feature_extractor` 时执行最终的强校验。
 
@@ -7,9 +7,9 @@
 - 若知识图谱已构建并通过 `knowledgeGraphReady=true`，应通过 `mcp__ts_harness__query_knowledge` 获取领域知识，候选 feature、judgment 与 reference 引用应与知识图谱中的定义保持一致；不得把 `knowledge_base/tables/*.csv`、`knowledge_base/indexes/**` 或 `knowledge_base/cache/**` 当成普通读取入口直接消费。
 - 若知识图谱尚未构建或不可用，主会话可结合 `references/**` 文本与自身对任务领域的常识，定义 reference 规则；但 evidence 必须仍指向 `references/**` 中的具体原文（路径、章节/页码与短引用），不得伪造引用。
 - 生成的 extractor 必须是纯确定性的：禁止网络、LLM、随机数、系统时间、外部进程、训练、在线拟合或隐式可变状态。相同 JSON 输入必须产生字节级一致的 JSON 输出。
-- extractor.py 必须从 stdin 读取一个 JSON 值，只向 stdout 写一个 JSON 对象；错误写 stderr 并以非零状态退出。
-- extractor 的输入必须严格遵守 `user/data-spec.md`；输出必须包含 `schemaVersion: "1.0"`、`features` 和 `warnings` 三个顶层字段。
-- 每个输出 feature 必须包含 `name`、`value`、`unit`、`judgment`、`evidence`；`judgment` 必须包含 `status`（normal/abnormal/indeterminate/not_applicable）、`label` 与可审计的 `rule`。
+- extractor.py 必须暴露一个可 import 的纯函数 API，例如 `extract_features(case)`；函数名必须写入 `manifest.json` 的 `pythonApi`，并在 `README.md` 中给出直接 import/调用示例。文件也必须保留 CLI 包装：从 stdin 读取一个 JSON 值，只向 stdout 写一个 JSON 对象；错误写 stderr 并以非零状态退出。
+- extractor 的输入必须严格遵守 `user/data-spec.md` 和自身 `manifest.inputSchema`；输出格式由当前任务自己的 `manifest.outputSchema` 声明。后端不强制所有任务都输出固定的 `features/warnings` 结构，但输出必须是一个 JSON 对象，并且 CLI 与 Python API 在同一输入上必须返回一致结果。
+- 若当前任务输出 reference features，建议每个 feature 包含 `name`、`value`、`unit`、`judgment`、`evidence`；`judgment` 建议包含 `status`（normal/abnormal/indeterminate/not_applicable）、`label` 与可审计的 `rule`。如果任务更适合其他结构，可以使用自定义 output schema，但 README 必须说明后续节点如何读取和解释结果。
 - extractor 的调试和验收必须使用当前 workspace 中按 `user/data-spec.md` 定义读取的真实样本。合成样本只能作为补充 smoke test，不能作为唯一或主要测试依据，也不能写成 `test-cases.json` 的唯一案例。
 - 只允许写入 `tools/reference-feature-extractor/**`，不得修改 task contract、data spec、references、knowledge_base/** 或其他工具。
 - 不得删除或覆盖上一轮已经验证通过的 `tools/reference-feature-extractor/**`，除非主会话主动决定重新生成。删除后端会拒绝再次注入 MCP 工具。
@@ -24,12 +24,12 @@
   - `evidence-map.json`：`schemaVersion="1.0"`，按 feature 汇总原始 reference evidence；每个 feature 必须含 `name`、`evidence` 数组，evidence 每项必须包含 `referencePath`、`quote` 和 `page` 或 `section`。
   - `feature-plan.json`：`schemaVersion="1.0"`，逐 feature 说明 `name`、`unit`、`computation`、`judgmentRules`、`controlExpectation`、`expectedFailureModes` 与 `evidence`。对启发式或不可稳定观察的 feature，计划中必须写明应保守返回 `indeterminate` 或 warning 的条件。
 - 在 `tools/reference-feature-extractor/` 下创建：
-  - `extractor.py`：纯确定性 Python 程序；满足 AST 白名单、禁止调用、确定输入输出。
-  - `manifest.json`：`schemaVersion="1.0"`、`entrypoint="tools/reference-feature-extractor/extractor.py"`、`inputSchema`、`outputSchema` 与 `features` 数组（每条 feature 含 `name`、`description` 与非空 `evidence`）。
+  - `extractor.py`：纯确定性 Python 程序；满足 AST 白名单、禁止调用、确定输入输出；必须包含可 import 的 Python API，并用 `if __name__ == "__main__"` 包住 stdin/stdout CLI 逻辑，避免 import 时读取 stdin 或执行提取。
+  - `manifest.json`：`schemaVersion="1.0"`、`entrypoint="tools/reference-feature-extractor/extractor.py"`、`pythonApi={"file":"tools/reference-feature-extractor/extractor.py","function":"<函数名>"}`、任务特定 `inputSchema`、任务特定 `outputSchema` 与 `features` 数组（每条 feature 含 `name`、`description` 与非空 `evidence`）。
   - `reference-rules.json`：`features` 数组；每条 rule 必须包含与 manifest 完全一致的 `name`、自然语言 `computation`、非空 `judgments` 数组与非空 `evidence` 数组。
-  - `README.md`：详细说明用途、适用范围、reference 范围、输入 schema、输出 schema、调用方法、feature/rule 列表、不可观察条件、风险与限制。
+  - `README.md`：详细说明用途、适用范围、reference 范围、输入 schema、输出 schema、Python module 调用方法、CLI 调用方法、feature/rule 列表、不可观察条件、风险与限制。Python module 示例必须能被 iterative-solving 复制到实验脚本中直接运行。
   - `test-cases.json`：数组，每项含 `input`，尽量包含完整 `expected`；必须至少包含一个从当前 workspace 真实数据中按 `user/data-spec.md` 抽取的样本输入，并在该项用 `source.type="real_sample"` 和已存在的 workspace 相对 `source.path` 记录可审计样本来源（可额外记录 case id、split/fold 或行号）。后端会执行至少一次重复运行以验证字节级一致。
-- 使用 `Bash` 在 workspace 根目录通过 `uv run python tools/reference-feature-extractor/extractor.py < input.json` 至少试运行一次真实样本输入，确保能正确从 stdin 读取并向 stdout 写出 JSON。若额外使用合成样本，也必须在真实样本测试通过后再作为补充。
+- 使用 `Bash` 在 workspace 根目录通过 Python module API 和 CLI 各至少试运行一次真实样本输入，确保 import 调用与 `uv run python tools/reference-feature-extractor/extractor.py < input.json` 返回一致 JSON。若额外使用合成样本，也必须在真实样本测试通过后再作为补充。
 - 真实样本运行后必须写出 `evaluation-report.json`：`schemaVersion="1.0"`，包含 `cases`、`summary` 和至少一个 control/reference case。每个 case 必须记录真实样本 `source`、`featureStatusCounts`、逐 feature 输出摘要；`summary.controlCaseWarnings` 必须列出正常/对照样本中的异常负担和风险，即使为空也要写空数组。若 control/reference case 出现大量 abnormal feature，必须调试、降级相关 judgment，或在 README 和 evaluation report 中明确该工具只能作为弱线索。
 - 调用 MCP `mcp__ts_harness__validate_reference_feature_extractor` 触发后端强校验：
   - 输入可携带 `{runTests: true}` 强制后端运行确定性测试；默认也会运行。
@@ -42,7 +42,7 @@
 
 注意：
 - 本节点使用与 `problem-contract` 相似的 native 工具集：所有写入、运行、调试都在主会话内完成，没有独立 subagent 或后台任务。
-- 后端的强校验决定了 `extract_reference_features` 与 `inspect_reference_feature_extractor` 是否被注入；不要试图通过删除 `tools/reference-feature-extractor/**` 之外的路径绕过校验。
+- 后端的强校验决定了该 Python 工具是否可被后续节点视为可用；`extract_reference_features` 与 `inspect_reference_feature_extractor` 可能作为兼容 MCP 工具被注入，但后续节点可以、也应在大输入场景优先按 README 直接 import 已验证 Python API。
 - 如果需要彻底重新生成（删除旧 extractor 再写新的），应先显式删除 `tools/reference-feature-extractor/` 下的所有文件，再重新创建并重新调用 validate。
 - 不要在 `extractor.py` 中读取 `data/raw/**`、`knowledge_base/**` 或网络资源；输入只能来自调用方传入的 JSON。
 - 可以用临时脚本或 `Bash` 从 `data/raw/**`、`data/processed/**` 或 `user/data-spec.md` 指定的数据源中抽取真实样本，转换成 extractor 的 stdin JSON；该读取只用于构造测试输入，不得写进 `extractor.py` 的运行时依赖。

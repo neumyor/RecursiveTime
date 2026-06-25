@@ -98,7 +98,7 @@ def create_harness_mcp_server(
     if (session_role == "main" or session_role == "node") and extract_reference_features:
         @tool(
             name="extract_reference_features",
-            description="Run the validated deterministic program built strictly from the current task definition and references. Pass one case in exactly the task data format. Returns reference-defined feature values, units, judgments, rules, evidence, and warnings. Case review must call this for every analyzed case when the tool is available; do not replace it with visual or LLM-only judgment.",
+            description="Run the validated deterministic program built strictly from the current task definition and references. Pass one case in exactly the generated extractor's documented task-specific input format. This MCP path is a compatibility/smoke-test entrypoint; for large inputs, later nodes may import the validated Python API documented in manifest.json and README.md directly, as long as they record the call. Do not replace the deterministic extractor with visual or LLM-only judgment.",
             input_schema=_require_intend({
                 "type": "object",
                 "properties": {
@@ -117,7 +117,7 @@ def create_harness_mcp_server(
     if (session_role == "main" or session_role == "node") and inspect_reference_feature_extractor:
         @tool(
             name="inspect_reference_feature_extractor",
-            description="Read the complete generated deterministic extractor contract and implementation: manifest, reference rules, README, and source code. Use this to learn the exact reference-backed feature definitions, thresholds, limitations, input/output rules, and implementation details before calling extract_reference_features.",
+            description="Read the complete generated deterministic extractor contract and implementation: manifest, Python API declaration, reference rules, README, and source code. Use this to learn the exact task-specific input/output rules, feature definitions, thresholds, limitations, and implementation details before calling the MCP extractor or importing the Python API directly.",
             input_schema=_require_intend({"type": "object", "properties": {}}),
         )
         async def _inspect_reference_feature_extractor(args: dict[str, Any]) -> dict[str, Any]:
@@ -128,7 +128,7 @@ def create_harness_mcp_server(
     if (session_role == "main" or session_role == "node") and validate_reference_feature_extractor:
         @tool(
             name="validate_reference_feature_extractor",
-            description="Validate the on-disk reference feature extractor built during the knowledge-to-tools node. The backend checks required files, feature plan, evidence map, evaluation report, manifest schema, reference evidence, real-sample test cases, deterministic-source AST allowlist, and runs duplicate-execution tests. Returns a status object on success or raises an error message pointing at the failing artifact. After a successful call, extract_reference_features and inspect_reference_feature_extractor become available to all sessions.",
+            description="Validate the on-disk reference feature extractor built during the knowledge-to-tools node. The backend checks required files, feature plan, evidence map, evaluation report, manifest schema, Python API importability, reference evidence, real-sample test cases, deterministic-source AST allowlist, and duplicate CLI/API execution tests. Returns a status object on success or raises an error message pointing at the failing artifact. After success, later nodes may use the documented Python API directly; extract_reference_features and inspect_reference_feature_extractor may also become available as compatibility MCP tools.",
             input_schema=_require_intend({
                 "type": "object",
                 "properties": {
