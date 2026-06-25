@@ -637,11 +637,9 @@ class WorkspaceStore:
         tools_root = self.root / "tools"
         if tools_root.exists():
             for child in tools_root.iterdir():
-                if child.name == "reference-feature-extractor":
-                    continue
                 _remove_path(child)
 
-        for path in (self.state_path, self.main_log_path, self.timeline_path):
+        for path in (self.state_path, self.main_log_path, self.timeline_path, self.reference_feature_status_path):
             path.unlink(missing_ok=True)
 
         artifacts_root = self.root / "artifacts"
@@ -671,8 +669,6 @@ class WorkspaceStore:
                     "logs/knowledge-graph-builder.jsonl",
                     "logs/knowledge-reasoning.jsonl",
                     "logs/chain-builder.jsonl",
-                    "tools/reference-feature-extractor",
-                    "state/reference-feature-build.json",
                 ],
                 "cleared": [
                     "logs/main.jsonl",
@@ -682,7 +678,8 @@ class WorkspaceStore:
                     "data/processed",
                     "artifacts/* except knowledge-graph.json",
                     "plots",
-                    "tools/* except reference-feature-extractor",
+                    "tools",
+                    "state/reference-feature-build.json",
                     "runs",
                     "reports",
                     "training",

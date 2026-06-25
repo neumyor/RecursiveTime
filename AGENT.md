@@ -275,7 +275,7 @@ state/reference-feature-build.json
 
 这些目录是运行产物，默认在 `.gitignore` 中。
 
-前端 `Reset Chat` 重置聊天记录和 agent 工作流记忆，但保留 `data/raw/`、`references/`、`knowledge_base/`、知识图谱以及已验证的 `tools/reference-feature-extractor/` 与 `state/reference-feature-build.json`。`Reset Workspace` 才清除这些 reference 派生产物；独立 LLM 配置继续保留。
+前端 `Reset Chat` 重置聊天记录和 agent 工作流记忆，并清除 `tools/reference-feature-extractor/`、`state/reference-feature-build.json`、普通生成工具、runs、reports 和 processed data；它只保留 `data/raw/`、`references/`、`knowledge_base/` 与知识图谱。`Reset Workspace` 才清除这些保留的 reference/knowledge graph 产物；独立 LLM 配置继续保留。
 
 ## 禁止提交
 

@@ -115,6 +115,9 @@ def test_reset_chat_preserves_raw_references_and_knowledge_graph(tmp_path):
     (tmp_path / "runs" / "run.txt").write_text("run", encoding="utf-8")
     (tmp_path / "reports" / "report.md").write_text("report", encoding="utf-8")
     (tmp_path / "tools" / "tool.py").write_text("print('x')", encoding="utf-8")
+    (tmp_path / "tools" / "reference-feature-extractor").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "tools" / "reference-feature-extractor" / "extractor.py").write_text("print('old')", encoding="utf-8")
+    (tmp_path / "state" / "reference-feature-build.json").write_text('{"status":"completed"}', encoding="utf-8")
 
     state = store.reset_chat()
 
@@ -142,6 +145,8 @@ def test_reset_chat_preserves_raw_references_and_knowledge_graph(tmp_path):
     assert not (tmp_path / "runs" / "run.txt").exists()
     assert not (tmp_path / "reports" / "report.md").exists()
     assert not (tmp_path / "tools" / "tool.py").exists()
+    assert not (tmp_path / "tools" / "reference-feature-extractor" / "extractor.py").exists()
+    assert not (tmp_path / "state" / "reference-feature-build.json").exists()
 
     assert store.read_timeline()[-1]["type"] == "chat_reset"
 

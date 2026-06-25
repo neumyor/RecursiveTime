@@ -252,7 +252,7 @@ def test_validate_tool_is_exposed_to_knowledge_to_tools_node() -> None:
     assert "mcp__ts_harness__validate_reference_feature_extractor" not in disabled
 
 
-def test_reset_chat_preserves_built_reference_feature_tool(tmp_path) -> None:
+def test_reset_chat_clears_built_reference_feature_tool(tmp_path) -> None:
     orchestrator = HarnessOrchestrator(tmp_path)
     orchestrator.initialize()
     _write_extractor(tmp_path)
@@ -260,8 +260,9 @@ def test_reset_chat_preserves_built_reference_feature_tool(tmp_path) -> None:
 
     orchestrator.store.reset_chat()
 
-    assert (tmp_path / "tools" / "reference-feature-extractor" / "extractor.py").exists()
-    assert orchestrator.store.is_reference_feature_extractor_ready() is True
+    assert not (tmp_path / "tools" / "reference-feature-extractor" / "extractor.py").exists()
+    assert orchestrator.store.is_reference_feature_extractor_ready() is False
+    assert orchestrator.store.read_reference_feature_status()["status"] == "idle"
 
 
 def test_validate_mcp_tool_publishes_status_for_main_session(tmp_path) -> None:
