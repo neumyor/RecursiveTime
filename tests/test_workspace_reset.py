@@ -179,6 +179,29 @@ def test_reset_chat_handles_processed_dir_refilled_during_delete(tmp_path, monke
     assert calls["count"] >= 2
 
 
+def test_file_tree_reports_truncation_after_building_tree(tmp_path):
+    store = WorkspaceStore(tmp_path)
+    store.ensure_layout()
+    for index in range(12):
+        (tmp_path / "reports" / f"file_{index:02d}.txt").write_text("x", encoding="utf-8")
+
+    tree = store.list_file_tree(max_entries=5)
+
+    assert tree["truncated"] is True
+    assert tree["entryCount"] == 5
+    assert tree["maxEntries"] == 5
+
+
+def test_file_tree_default_limit_covers_large_runtime_workspace(tmp_path):
+    store = WorkspaceStore(tmp_path)
+    store.ensure_layout()
+
+    tree = store.list_file_tree()
+
+    assert tree["maxEntries"] == 10_000
+    assert tree["truncated"] is False
+
+
 def test_clear_main_logs_closes_cached_main_runner(tmp_path):
     import asyncio
 

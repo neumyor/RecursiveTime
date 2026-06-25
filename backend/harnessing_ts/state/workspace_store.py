@@ -454,13 +454,15 @@ class WorkspaceStore:
     def read_node_parts(self, node_session_id: str) -> list[Part]:
         return filter_display_parts(collapse_tool_parts(read_jsonl(self.node_log_path(node_session_id))))
 
-    def list_file_tree(self, max_entries: int = 800) -> dict[str, Any]:
+    def list_file_tree(self, max_entries: int = 10_000) -> dict[str, Any]:
         self.ensure_layout()
         count = 0
+        truncated = False
 
         def build(path: Path, rel: str) -> dict[str, Any] | None:
-            nonlocal count
+            nonlocal count, truncated
             if count >= max_entries:
+                truncated = True
                 return None
             name = path.name if rel else self.root.name
             if path.name in {".git", ".venv", "__pycache__", "node_modules"}:
@@ -493,10 +495,13 @@ class WorkspaceStore:
                 "mtime": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat().replace("+00:00", "Z"),
             }
 
+        tree = build(self.root, "")
         return {
             "root": str(self.root),
-            "truncated": count >= max_entries,
-            "tree": build(self.root, ""),
+            "truncated": truncated,
+            "entryCount": count,
+            "maxEntries": max_entries,
+            "tree": tree,
         }
 
     def read_text_file(self, rel_path: str, max_bytes: int = 256_000) -> dict[str, Any]:

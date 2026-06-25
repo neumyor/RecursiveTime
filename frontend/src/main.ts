@@ -2390,7 +2390,10 @@ function renderFileTree(fileTree: Bootstrap['fileTree']) {
   }
   els.workspacePath.textContent = fileTree.root || '';
   els.fileTree.innerHTML = renderTreeNode(fileTree.tree, true);
-  if (fileTree.truncated) els.fileTree.insertAdjacentHTML('beforeend', emptyState('文件数量过多，已截断显示。', 'AlertTriangle'));
+  if (fileTree.truncated) {
+    const limit = fileTree.maxEntries ? `（已显示 ${fileTree.entryCount || fileTree.maxEntries}/${fileTree.maxEntries} 项）` : '';
+    els.fileTree.insertAdjacentHTML('beforeend', emptyState(`文件数量过多，已截断显示${limit}。`, 'AlertTriangle'));
+  }
   for (const item of els.fileTree.querySelectorAll<HTMLElement>('.file-node.file')) {
     item.addEventListener('click', async () => showWorkspaceFile(item.dataset.path || ''));
   }

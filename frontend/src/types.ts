@@ -16,7 +16,7 @@ export type Bootstrap = {
   nodes: JsonMap[];
   nodePartsById: Record<string, JsonMap[]>;
   nodeSpecs: JsonMap[];
-  fileTree: { root?: string; tree?: FileTreeNode; truncated?: boolean } | null;
+  fileTree: { root?: string; tree?: FileTreeNode; truncated?: boolean; entryCount?: number; maxEntries?: number } | null;
   llmConfig?: JsonMap;
   runtimeSettings?: JsonMap;
   knowledgeGraph?: JsonMap;
