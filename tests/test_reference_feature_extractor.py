@@ -155,6 +155,36 @@ def test_validate_mcp_tool_publishes_status_for_main_session(tmp_path) -> None:
     assert orchestrator.store.is_reference_feature_extractor_ready() is True
 
 
+def test_validate_mcp_tool_does_not_refresh_main_runner_during_active_node(tmp_path, monkeypatch) -> None:
+    import asyncio
+
+    orchestrator = HarnessOrchestrator(tmp_path, mode="auto")
+    state = orchestrator.initialize()
+    _write_extractor(tmp_path)
+    node = orchestrator.store.create_node_session("knowledge-to-tools")
+    node["status"] = "running"
+    orchestrator.store.write_node_session(node)
+    state["activeNode"] = "knowledge-to-tools"
+    state["activeNodeSessionId"] = node["id"]
+    orchestrator.store.write_state(state)
+    orchestrator.state = state
+    orchestrator.main_runner = object()  # type: ignore[assignment]
+    refresh_calls = 0
+
+    async def fake_refresh() -> None:
+        nonlocal refresh_calls
+        refresh_calls += 1
+
+    monkeypatch.setattr(orchestrator, "_refresh_main_runner_for_dynamic_tools", fake_refresh)
+
+    result = asyncio.run(orchestrator.request_validate_reference_feature_extractor({"runTests": True}))
+
+    assert result["status"] == "completed"
+    assert result["ready"] is True
+    assert refresh_calls == 0
+    assert orchestrator.store.is_reference_feature_extractor_ready() is True
+
+
 def test_validate_mcp_tool_reports_failures_for_incomplete_artifacts(tmp_path) -> None:
     import asyncio
 

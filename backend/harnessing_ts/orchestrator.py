@@ -424,10 +424,12 @@ class HarnessOrchestrator:
             raise RuntimeError(f"Reference feature validation is disabled by ablation variant {self.variant.id}.")
         run_tests = bool(args.get("runTests", True))
         status = self.store.validate_and_store_reference_feature(run_tests=run_tests)
-        await_refresh = self.main_runner is not None
+        await_refresh = self.main_runner is not None and not self.state.get("activeNode")
         # The new tool may have just been validated; refresh the main
-        # runner on the next turn so the extraction/inspection MCP tools
-        # become available.
+        # runner when this is called from the main session. During a node
+        # MCP call, closing the main runner can cancel the SDK control
+        # request that is still returning the tool result. The next main
+        # turn refreshes dynamic tools before sending anyway.
         if await_refresh:
             await self._refresh_main_runner_for_dynamic_tools()
         return status
