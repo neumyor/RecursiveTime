@@ -8,6 +8,7 @@ import uuid
 import pytest
 
 from harnessing_ts.orchestrator import HarnessOrchestrator
+from harnessing_ts.api.payloads import build_live_payload
 from harnessing_ts.state.workspace_store import WorkspaceStore
 
 
@@ -140,6 +141,23 @@ def test_close_main_runner_terminates_subprocess_and_records_timeline(tmp_path) 
         for line in (tmp_path / "logs" / "timeline.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert any(e["type"] == "main_runner_closed" for e in events)
+
+
+def test_runtime_payload_reports_idle_after_pipeline_complete_even_if_task_lingers(tmp_path) -> None:
+    """Final-summary completion is the authoritative end of the node chain.
+
+    A server-side main task can linger while the SDK unwinds or returns
+    delayed tool results. The frontend must not keep showing the harness
+    as running after the persisted node state says the pipeline is done.
+    """
+    orch = _make_orchestrator(tmp_path)
+    _completed_state(orch.store, "final-summary")
+    setattr(orch, "_server_run_task", "lingering-task")
+
+    payload = build_live_payload(orchestrator=orch, task_running=lambda task: task == "lingering-task")
+
+    assert payload["runtime"]["pipelineComplete"] is True
+    assert payload["runtime"]["running"] is False
 
 
 def test_pipeline_complete_message_suggests_reset(tmp_path) -> None:

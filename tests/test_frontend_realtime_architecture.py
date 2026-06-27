@@ -43,3 +43,22 @@ def test_interrupt_settling_does_not_leave_permanent_loading_message() -> None:
     assert "Pause has already been recorded" in source
     assert "state.loadingMessage = null" in source
     assert "alreadyPaused" in (ROOT / "backend" / "harnessing_ts" / "orchestrator.py").read_text()
+
+
+def test_frontend_clears_busy_when_pipeline_completes_from_node_parts() -> None:
+    source = MAIN_TS.read_text()
+
+    assert "syncRuntimeBusy(state.bootstrap)" in source
+    assert "resolveRealtimeWaiters(state.bootstrap)" in source
+    assert "function isPipelineComplete" in source
+    assert "running: false, pipelineComplete: true" in source
+    assert "completedNodes.includes('final-summary')" in source
+    assert "return isBackendRunning(data) ? unresolved : []" in source
+
+
+def test_frontend_suppresses_reasoning_only_assistant_parts() -> None:
+    source = MAIN_TS.read_text()
+
+    assert "function isReasoningOnlyPart" in source
+    assert "item.thinking || item.signature || item.redacted_thinking" in source
+    assert "if (isReasoningOnlyPart(part)) return false" in source

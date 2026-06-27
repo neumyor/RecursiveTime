@@ -72,6 +72,27 @@ def _user_tool_result_message() -> dict:
     }
 
 
+def _user_tool_result_with_reasoning_jsonl() -> dict:
+    return {
+        "type": "user",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "\n".join([
+                        "before",
+                        '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"private","signature":"sig"}]}}',
+                        '{"type":"system","subtype":"thinking_tokens","estimated_tokens":42}',
+                        '{"type":"assistant","message":{"content":[{"type":"text","text":"visible jsonl text"}]}}',
+                        "after",
+                    ]),
+                }
+            ]
+        },
+    }
+
+
 def test_tool_use_and_result_collapse_to_one_tool_call_part() -> None:
     tool_call = sdk_message_to_part(_assistant_tool_message())
     tool_result = sdk_message_to_part(_user_tool_result_message())
@@ -83,6 +104,38 @@ def test_tool_use_and_result_collapse_to_one_tool_call_part() -> None:
     assert collapsed[0]["status"] == "completed"
     assert collapsed[0]["intend"] == "读取 README 以确认项目说明。"
     assert collapsed[0]["resultText"] == "# HarnessingTS"
+
+
+def test_tool_result_strips_reasoning_only_jsonl_lines() -> None:
+    tool_call = sdk_message_to_part(_assistant_tool_message())
+    tool_result = sdk_message_to_part(_user_tool_result_with_reasoning_jsonl())
+
+    collapsed = collapse_tool_parts([tool_call, tool_result])
+
+    result = collapsed[0]["resultText"]
+    assert "before" in result
+    assert "after" in result
+    assert "visible jsonl text" in result
+    assert "private" not in result
+    assert "thinking_tokens" not in result
+
+
+def test_display_filter_sanitizes_legacy_merged_tool_call_result_text() -> None:
+    legacy_tool_call = {
+        "role": "assistant",
+        "type": "tool_call",
+        "name": "Bash",
+        "text": "inspect subagent logs",
+        "resultText": "\n".join([
+            "before",
+            '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"private","signature":"sig"}]}}',
+            "after",
+        ]),
+    }
+
+    parts = filter_display_parts([legacy_tool_call])
+
+    assert parts[0]["resultText"] == "before\nafter"
 
 
 def test_builtin_tool_call_without_intend_gets_useful_inferred_title() -> None:
@@ -127,6 +180,17 @@ def test_display_filter_hides_sdk_token_telemetry() -> None:
         {"role": "system", "type": "raw", "text": "thinking_tokens", "raw": {"subtype": "thinking_tokens"}},
         {"role": "system", "type": "raw", "text": "cache_creation_input_tokens", "raw": {"subtype": "cache_creation_input_tokens"}},
         {"role": "system", "type": "raw", "text": "init", "raw": {"subtype": "init"}},
+        {
+            "role": "assistant",
+            "type": "text",
+            "text": "",
+            "raw": {
+                "content": [{
+                    "thinking": "private reasoning that must not be displayed",
+                    "signature": "sig",
+                }],
+            },
+        },
         useful_retry,
         visible_text,
         {"role": "system", "type": "result", "text": "success", "raw": {"is_error": False}},

@@ -129,6 +129,25 @@ def test_failed_node_requires_explicit_user_retry(tmp_path) -> None:
     assert snapshot["recommendedNode"] == "iterative-solving"
 
 
+def test_latest_failed_node_takes_priority_over_completed_nodes(tmp_path) -> None:
+    orchestrator = _orchestrator(tmp_path)
+    _complete_node(orchestrator, "problem-contract")
+    _complete_node(orchestrator, "knowledge-to-tools")
+    failed = orchestrator.store.create_node_session("iterative-solving")
+    failed.update({
+        "status": "failed",
+        "success": False,
+        "summary": "Node runner returned without calling finish_node MCP.",
+    })
+    orchestrator.store.write_node_session(failed)
+
+    snapshot = orchestrator._main_progress_snapshot()
+
+    assert snapshot["recommendedAction"] == "retry_failed_node"
+    assert snapshot["recommendedNode"] == "iterative-solving"
+    assert snapshot["latestNodeSession"]["status"] == "failed"
+
+
 def test_pending_manual_control_prevents_duplicate_node_entry(tmp_path) -> None:
     orchestrator = _orchestrator(tmp_path)
     state = orchestrator.get_state()

@@ -10,6 +10,7 @@ from harnessing_ts.agent.translate import system_text_part, user_text_part
 from harnessing_ts.chain_summary import build_chain_summary
 from harnessing_ts.knowledge_graph import (
     answer_knowledge_query,
+    answer_reference_query,
     build_knowledge_graph,
     get_neighbors,
     get_supporting_evidence,
@@ -31,7 +32,6 @@ from harnessing_ts.state.jsonl import clear_file
 from harnessing_ts.state.workspace_store import WorkspaceStore, now_iso
 from harnessing_ts.tools.compose_tools import build_node_native_tools
 from harnessing_ts.variants import resolve_variant
-from harnessing_ts.variants.random_search import sample_candidates
 
 
 def _main_node_snapshot(node: NodeSession | None) -> dict[str, Any] | None:
@@ -179,6 +179,7 @@ class HarnessOrchestrator:
         assert self.state
         if not self.variant.node_chain:
             raise RuntimeError(f"{self.variant.id} disables the HarnessingTS node chain; solve directly in the main session.")
+        self._validate_failed_node_retry_request(args)
         if self._control_mode() == "manual":
             return self._park_control_request("enter_node", args)
         node = await self.enter_node(args)
@@ -246,6 +247,7 @@ class HarnessOrchestrator:
                 f"(completedNodes={self.state['completedNodes']}). "
                 f"Use the Reset Workspace action to clear state before re-running."
             )
+        self._validate_failed_node_retry_request(args)
         if node_type == "final-summary" and self._read_iteration_state_recommend_exit() is False:
             raise RuntimeError("Cannot enter final-summary while user/iteration-state.md has recommend_exit: false.")
         node = self.store.create_node_session(node_type, args.get("rationale"), args.get("inputSummary"))
@@ -382,9 +384,9 @@ class HarnessOrchestrator:
         return {"ok": True}
 
     async def request_query_knowledge(self, args: dict[str, Any]) -> dict[str, Any]:
-        if not self.variant.knowledge_graph:
+        if not self.variant.knowledge_query:
             raise RuntimeError(f"Knowledge queries are disabled by ablation variant {self.variant.id}.")
-        if not self.store.is_knowledge_graph_ready():
+        if self.variant.knowledge_query_source == "graph" and not self.store.is_knowledge_graph_ready():
             raise RuntimeError("Knowledge graph is not ready. Build it successfully before calling query_knowledge.")
         return await self.query_knowledge(
             question=str(args.get("question", "")),
@@ -628,19 +630,6 @@ class HarnessOrchestrator:
         self._ensure_initialized()
         return self.store.read_runtime_settings()
 
-    def sample_random_search_candidates(self, _args: dict[str, Any] | None = None) -> dict[str, Any]:
-        if not self.variant.random_search:
-            raise RuntimeError(f"Random candidate sampling is not enabled by variant {self.variant.id}.")
-        settings = self.get_runtime_settings()
-        result = sample_candidates(int(settings["iterativeCandidateCount"]))
-        self.store.append_timeline({
-            "type": "random_candidates_sampled",
-            "timestamp": now_iso(),
-            "message": f"Sampled {result['candidateCount']} candidates with seed {result['seed']}.",
-            "payload": result,
-        })
-        return result
-
     def update_runtime_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
         self._ensure_initialized()
         updated = self.store.write_runtime_settings(settings)
@@ -688,6 +677,12 @@ class HarnessOrchestrator:
 
     def get_reference_feature_status(self) -> dict[str, Any]:
         self._ensure_initialized()
+        if not self.variant.reference_feature_extractor:
+            return {
+                "status": "disabled",
+                "ready": False,
+                "message": f"Reference feature extractor is disabled by ablation variant {self.variant.id}.",
+            }
         status = self.store.read_reference_feature_status()
         if status.get("status") == "completed":
             try:
@@ -698,10 +693,14 @@ class HarnessOrchestrator:
 
     def get_reference_feature_parts(self) -> list[Part]:
         self._ensure_initialized()
+        if not self.variant.reference_feature_extractor:
+            return []
         return self.store.read_reference_feature_parts()
 
     def get_reference_feature_tool(self) -> dict[str, Any]:
         self._ensure_initialized()
+        if not self.variant.reference_feature_extractor:
+            return {}
         if not self.store.is_reference_feature_extractor_ready():
             return {}
         return inspect_reference_feature_extractor(self.workspace_path)
@@ -720,26 +719,39 @@ class HarnessOrchestrator:
         include_evidence: bool = False,
     ) -> dict[str, Any]:
         self._ensure_initialized()
-        if not self.variant.knowledge_graph:
+        if not self.variant.knowledge_query:
             raise RuntimeError(f"Knowledge queries are disabled by ablation variant {self.variant.id}.")
-        if not self.store.is_knowledge_graph_ready():
+        if self.variant.knowledge_query_source == "graph" and not self.store.is_knowledge_graph_ready():
             raise RuntimeError("Knowledge graph is not ready. Build it successfully before querying knowledge.")
-        result = await answer_knowledge_query(
-            workspace_path=self.workspace_path,
-            store=self.store,
-            llm_config=self._knowledge_graph_llm_config(),
-            question=question,
-            domain=domain,
-            context=context,
-            observations=observations,
-            include_evidence=include_evidence,
-        )
+        if self.variant.knowledge_query_source == "references":
+            result = await answer_reference_query(
+                workspace_path=self.workspace_path,
+                store=self.store,
+                llm_config=self._knowledge_graph_llm_config(),
+                question=question,
+                domain=domain,
+                context=context,
+                observations=observations,
+                include_evidence=include_evidence,
+            )
+        else:
+            result = await answer_knowledge_query(
+                workspace_path=self.workspace_path,
+                store=self.store,
+                llm_config=self._knowledge_graph_llm_config(),
+                question=question,
+                domain=domain,
+                context=context,
+                observations=observations,
+                include_evidence=include_evidence,
+            )
         self.store.append_timeline({
             "type": "knowledge_query_answered",
             "timestamp": now_iso(),
             "message": question[:240],
             "payload": {
                 "domain": domain,
+                "source": self.variant.knowledge_query_source,
                 "supportingKnowledge": result.get("supporting_knowledge", []),
                 "supportingEvidence": result.get("supporting_evidence", []) if include_evidence else [],
             },
@@ -1110,10 +1122,11 @@ class HarnessOrchestrator:
                 "purpose": self.variant.node_purpose(spec.type, spec.purpose),
                 "requires": self.variant.node_requires(spec.type, spec.requires),
                 "produces": self.variant.node_produces(spec.type, spec.produces),
-                "next": spec.next,
+                "next": self.variant.node_next(spec.type, spec.next),
                 "nativeTools": build_node_native_tools(spec.type, variant=self.variant),
             }
             for spec in NODE_SPECS
+            if self.variant.node_enabled(spec.type)
         ]
 
     async def close(self) -> None:
@@ -1458,6 +1471,32 @@ class HarnessOrchestrator:
     def _next_node_after_completion(self, latest: NodeSession) -> NodeType | None:
         return self.node_state.next_node_after_completion(latest)
 
+    def _validate_failed_node_retry_request(self, args: dict[str, Any]) -> None:
+        """Block accidental node entry after a protocol or runner failure.
+
+        The main prompt tells the agent to retry a failed node only
+        after an explicit user request, but stale context or delayed
+        tool calls can still invoke enter_node. Make the routing rule
+        enforceable at the backend boundary: the next entry after a
+        failed/exited node must be an explicit retry of that same node.
+        """
+        latest = self._latest_node_session()
+        if not latest or latest.get("status") not in {"failed", "exited"}:
+            return
+        node_type = args.get("nodeType")
+        retry = args.get("retryFailedNode") is True
+        if retry and node_type == latest.get("nodeType"):
+            return
+        raise RuntimeError(
+            f"Cannot enter {node_type}: latest node {latest.get('nodeType')} ended with "
+            f"status {latest.get('status')}. Ask the user before retrying, then call "
+            "enter_node with retryFailedNode=true for that same node."
+        )
+
+    def _latest_node_session(self) -> NodeSession | None:
+        sessions = self.store.list_node_sessions()
+        return sessions[-1] if sessions else None
+
     def _is_next_node_specified(self, args: dict[str, Any]) -> bool:
         if "nextNode" not in args:
             return False
@@ -1527,6 +1566,15 @@ class HarnessOrchestrator:
     def _require_knowledge_variant(self) -> None:
         if not self.variant.knowledge_graph:
             raise RuntimeError(f"Knowledge graph access is disabled by ablation variant {self.variant.id}.")
+
+    def _knowledge_query_ready(self) -> bool:
+        if not self.variant.knowledge_query:
+            return False
+        if self.variant.knowledge_query_source == "graph":
+            return self.store.is_knowledge_graph_ready()
+        if self.variant.knowledge_query_source == "references":
+            return True
+        return False
 
     def _knowledge_graph_llm_config(self) -> LlmConfig:
         main = read_effective_llm_config(self.workspace_path)
@@ -1627,6 +1675,8 @@ class HarnessOrchestrator:
             "latestNodeSession": _main_node_snapshot(latest),
             "anchorArtifacts": {path: (self.workspace_path / path).exists() for path in anchor_paths},
             "knowledgeGraphReady": self.variant.knowledge_graph and self.store.is_knowledge_graph_ready(),
+            "knowledgeQueryReady": self._knowledge_query_ready(),
+            "knowledgeQuerySource": self.variant.knowledge_query_source if self.variant.knowledge_query else "none",
             "referenceFeatureExtractorReady": self.variant.reference_feature_extractor and self.store.is_reference_feature_extractor_ready(),
             "recommendedAction": recommended_action,
             "recommendedNode": recommended_node,
@@ -1636,27 +1686,27 @@ class HarnessOrchestrator:
     def _ensure_main_runner(self) -> None:
         if self.main_runner:
             return
-        knowledge_graph_ready = self.variant.knowledge_graph and self.store.is_knowledge_graph_ready()
+        knowledge_query_ready = self._knowledge_query_ready()
         reference_feature_ready = self.variant.reference_feature_extractor and self.store.is_reference_feature_extractor_ready()
         self.main_runner = build_main_runner(
             workspace_path=self.workspace_path,
             locale=self.locale,
             log_path=self.store.main_log_path,
             enter_node=self.request_enter_node if self.variant.node_chain else None,
-            query_knowledge=self.request_query_knowledge if knowledge_graph_ready else None,
+            query_knowledge=self.request_query_knowledge if knowledge_query_ready else None,
             extract_reference_features=self.request_extract_reference_features if reference_feature_ready else None,
             inspect_reference_feature_extractor=self.request_inspect_reference_feature_extractor if reference_feature_ready else None,
             validate_reference_feature_extractor=self.request_validate_reference_feature_extractor if self.variant.knowledge_to_tools else None,
             variant=self.variant,
             on_part=self._emit_main_parts,
         )
-        self._main_runner_knowledge_graph_ready = knowledge_graph_ready
+        self._main_runner_knowledge_graph_ready = knowledge_query_ready
         self._main_runner_reference_feature_ready = reference_feature_ready
 
     async def _refresh_main_runner_for_dynamic_tools(self) -> None:
         if not self.main_runner:
             return
-        graph_ready = self.variant.knowledge_graph and self.store.is_knowledge_graph_ready()
+        graph_ready = self._knowledge_query_ready()
         feature_ready = self.variant.reference_feature_extractor and self.store.is_reference_feature_extractor_ready()
         if self._main_runner_knowledge_graph_ready == graph_ready and self._main_runner_reference_feature_ready == feature_ready:
             return
@@ -1682,14 +1732,13 @@ class HarnessOrchestrator:
             node=node,
             log_path=self.store.node_log_path(node_id),
             finish_node=lambda args: self.request_finish_node_for_node(args, node_id),
-            query_knowledge=self.request_query_knowledge if self.variant.knowledge_graph else None,
+            query_knowledge=self.request_query_knowledge if self.variant.knowledge_query else None,
             extract_reference_features=self.request_extract_reference_features if self.variant.reference_feature_extractor and self.store.is_reference_feature_extractor_ready() else None,
             inspect_reference_feature_extractor=self.request_inspect_reference_feature_extractor if self.variant.reference_feature_extractor and self.store.is_reference_feature_extractor_ready() else None,
             validate_reference_feature_extractor=self.request_validate_reference_feature_extractor if self.variant.knowledge_to_tools and node_type == "knowledge-to-tools" else None,
             record_artifact=lambda args: self.record_artifact_for_node(args, node_id, node_type),
             record_run=lambda args: self.record_run_for_node(args, node_id, node_type),
             get_runtime_settings=self.get_runtime_settings,
-            sample_random_candidates=self.sample_random_search_candidates if self.variant.random_search else None,
             on_session_id=on_session_id,
             on_part=lambda part: self._emit_node_parts(node_id, part),
             variant=self.variant,

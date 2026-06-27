@@ -297,7 +297,7 @@ def test_validate_tool_is_exposed_to_knowledge_to_tools_node() -> None:
     disabled = build_node_allowed_tools(
         "knowledge-to-tools",
         reference_feature_extractor_ready=False,
-        variant=get_variant("V7"),
+        variant=get_variant("NOD-RQA-CRV-SUB-ADA"),
     )
 
     assert "mcp__ts_harness__validate_reference_feature_extractor" in allowed

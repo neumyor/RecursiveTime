@@ -37,9 +37,9 @@ def test_knowledge_graph_ready_requires_completed_status_and_valid_manifest(tmp_
     assert store.is_knowledge_graph_ready() is False
 
 
-def test_main_allowlist_only_contains_query_knowledge_when_graph_is_ready() -> None:
-    unavailable = build_main_allowed_tools(knowledge_graph_ready=False)
-    available = build_main_allowed_tools(knowledge_graph_ready=True)
+def test_main_allowlist_only_contains_query_knowledge_when_query_is_ready() -> None:
+    unavailable = build_main_allowed_tools(knowledge_query_ready=False)
+    available = build_main_allowed_tools(knowledge_query_ready=True)
 
     assert "mcp__ts_harness__query_knowledge" not in unavailable
     assert "mcp__ts_harness__query_knowledge" in available
@@ -62,6 +62,19 @@ def test_main_runner_receives_query_callback_after_successful_graph_build(tmp_pa
     orchestrator = HarnessOrchestrator(tmp_path, dry_run=False)
     orchestrator.initialize()
     _mark_graph_ready(orchestrator.store)
+    fake_runner = MagicMock()
+
+    with patch("harnessing_ts.orchestrator.build_main_runner", return_value=fake_runner) as build:
+        orchestrator._ensure_main_runner()
+
+    assert build.call_args.kwargs["query_knowledge"] == orchestrator.request_query_knowledge
+    assert orchestrator._main_runner_knowledge_graph_ready is True
+
+
+def test_rqa_main_runner_receives_reference_query_callback_without_graph(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("TS_HARNESS_VARIANT", "NOD-RQA-KTL-CRV-SUB-ADA")
+    orchestrator = HarnessOrchestrator(tmp_path, dry_run=False)
+    orchestrator.initialize()
     fake_runner = MagicMock()
 
     with patch("harnessing_ts.orchestrator.build_main_runner", return_value=fake_runner) as build:

@@ -15,7 +15,7 @@ from harnessing_ts.schema import NodeSession, NodeType, Part
 from harnessing_ts.settings.llm import read_effective_llm_config, build_sdk_invocation_config
 from harnessing_ts.state.message_log import MessageLog
 from harnessing_ts.tools.compose_tools import build_main_allowed_tools, build_node_allowed_tools
-from harnessing_ts.variants import AblationVariant, get_variant
+from harnessing_ts.variants import DEFAULT_VARIANT_ID, AblationVariant, get_variant
 
 
 def build_main_runner(
@@ -31,7 +31,7 @@ def build_main_runner(
     variant: AblationVariant | None = None,
     on_part: Callable[[Part], None] | None = None,
 ) -> SdkRunner:
-    variant = variant or get_variant("V0")
+    variant = variant or get_variant(DEFAULT_VARIANT_ID)
     ctx = PromptContext(str(workspace_path), locale)
     sdk_config = build_sdk_invocation_config(read_effective_llm_config(workspace_path))
     mcp_server = create_harness_mcp_server(
@@ -49,7 +49,7 @@ def build_main_runner(
         system_prompt=build_main_system_prompt(ctx, variant),
         attachment_text=None,
         allowed_tools=build_main_allowed_tools(
-            knowledge_graph_ready=query_knowledge is not None,
+            knowledge_query_ready=query_knowledge is not None,
             reference_feature_extractor_ready=extract_reference_features is not None,
             variant=variant,
         ),
@@ -76,12 +76,11 @@ def build_node_runner(
     record_artifact: Callable[[dict[str, Any]], Any],
     record_run: Callable[[dict[str, Any]], Any],
     get_runtime_settings: Callable[[], Any],
-    sample_random_candidates: Callable[[dict[str, Any]], Any] | None = None,
     on_session_id: Callable[[str], None],
     on_part: Callable[[Part], None] | None = None,
     variant: AblationVariant | None = None,
 ) -> SdkRunner:
-    variant = variant or get_variant("V0")
+    variant = variant or get_variant(DEFAULT_VARIANT_ID)
     ctx = PromptContext(str(workspace_path), locale)
     sdk_config = build_sdk_invocation_config(read_effective_llm_config(workspace_path))
     node_type: NodeType = node["nodeType"]
@@ -95,7 +94,6 @@ def build_node_runner(
         record_artifact=record_artifact,
         record_run=record_run,
         get_runtime_settings=get_runtime_settings,
-        sample_random_candidates=sample_random_candidates,
     )
     if mcp_server is None:
         raise RuntimeError("Claude Code SDK MCP server is required for node control but could not be created.")

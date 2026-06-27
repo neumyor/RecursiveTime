@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import quote
 
 from harnessing_ts.agent.sdk_runner import SdkRunner, SdkRunnerConfig
-from harnessing_ts.knowledge_prompts import REASONER_SYSTEM_PROMPT, builder_system_prompt, knowledge_graph_prompt
+from harnessing_ts.knowledge_prompts import REASONER_SYSTEM_PROMPT, REFERENCE_REASONER_SYSTEM_PROMPT, builder_system_prompt, knowledge_graph_prompt
 from harnessing_ts.schema import Part
 from harnessing_ts.settings.llm import LlmConfig, build_sdk_invocation_config
 from harnessing_ts.state.message_log import MessageLog
@@ -163,6 +163,68 @@ async def answer_knowledge_query(
         parsed.setdefault("retrieval", retrieval)
     else:
         parsed = _compact_knowledge_query_answer(parsed)
+    return parsed
+
+
+async def answer_reference_query(
+    *,
+    workspace_path: Path,
+    store: WorkspaceStore,
+    llm_config: LlmConfig,
+    question: str,
+    domain: str | None = None,
+    context: dict[str, Any] | None = None,
+    observations: list[str] | None = None,
+    include_evidence: bool = False,
+) -> dict[str, Any]:
+    sdk_config = build_sdk_invocation_config(llm_config)
+    if llm_config.authMode == "manual" and not llm_config.apiKey:
+        raise RuntimeError("Reference reasoning LLM config requires apiKey when authMode=manual.")
+    prompt = "\n".join([
+        "请直接根据当前 workspace 的 `references/**` 原文回答问题，不要使用 knowledge graph、knowledge_base CSV、class、relation 或 graph edges。",
+        "可读取 `user/problem-contract.md`、`user/data-spec.md` 和 references 下的文本/PDF/DOCX 文本衍生文件来确定任务边界。",
+        "若 reference 证据不足，必须明确 uncertainty，不要补充无来源规则。",
+        "",
+        f"Domain: {domain or 'default'}",
+        f"Question: {question}",
+        f"Context: {json.dumps(context or {}, ensure_ascii=False)}",
+        f"Observations: {json.dumps(observations or [], ensure_ascii=False)}",
+        f"Include evidence details: {json.dumps(include_evidence)}",
+        "",
+        "输出 JSON：",
+        "{",
+        '  "answer": "自然语言回答",',
+        '  "candidate_targets": ["候选概念或异常模式"],',
+        '  "supporting_knowledge": ["reference 文件或章节摘要"],',
+        '  "supporting_evidence": [],',
+        '  "related_graph_edges": [],',
+        '  "recommended_next_checks": ["..."],',
+        '  "uncertainty": "..."',
+        "}",
+        "",
+        "只有 Include evidence details 为 true 时，supporting_evidence 才应包含必要的短引用、文件路径、页码或章节；否则保持空数组或省略。",
+        "只输出合法 JSON，不要输出 Markdown fence。",
+    ])
+    runner = SdkRunner(SdkRunnerConfig(
+        cwd=workspace_path,
+        system_prompt=REFERENCE_REASONER_SYSTEM_PROMPT,
+        attachment_text=None,
+        allowed_tools=["Read", "LS", "Glob", "Grep"],
+        model=sdk_config.model,
+        env=sdk_config.env,
+        extra_args=sdk_config.extra_args,
+        log=MessageLog(store.knowledge_reasoning_log_path),
+    ))
+    try:
+        parts = await runner.send_with_user_echo(prompt)
+    finally:
+        await runner.close()
+    parsed = _parse_json_answer(_last_assistant_text(parts))
+    if include_evidence:
+        parsed.setdefault("retrieval", {"source": "references"})
+    else:
+        parsed = _compact_knowledge_query_answer(parsed)
+    parsed["knowledge_source"] = "references"
     return parsed
 
 

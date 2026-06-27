@@ -316,3 +316,53 @@ def test_enter_node_rejects_when_another_node_is_active(tmp_path) -> None:
             "nodeType": "iterative-solving",
             "rationale": "should not start",
         }))
+
+
+def test_enter_node_rejects_stale_entry_after_failed_node(tmp_path) -> None:
+    orchestrator = _orchestrator(tmp_path, mode="auto")
+    failed = orchestrator.store.create_node_session("iterative-solving")
+    failed["status"] = "failed"
+    failed["success"] = False
+    failed["summary"] = "Node runner returned without calling finish_node MCP."
+    orchestrator.store.write_node_session(failed)
+
+    with pytest.raises(RuntimeError, match="latest node iterative-solving ended with status failed"):
+        asyncio.run(orchestrator.enter_node({
+            "nodeType": "problem-contract",
+            "rationale": "stale main-session enter_node",
+        }))
+
+
+def test_enter_node_allows_explicit_retry_of_latest_failed_node(tmp_path) -> None:
+    orchestrator = _orchestrator(tmp_path, mode="auto")
+    failed = orchestrator.store.create_node_session("iterative-solving")
+    failed["status"] = "failed"
+    failed["success"] = False
+    failed["summary"] = "Node SDK runner crashed."
+    orchestrator.store.write_node_session(failed)
+
+    node = asyncio.run(orchestrator.enter_node({
+        "nodeType": "iterative-solving",
+        "rationale": "user explicitly requested retry",
+        "retryFailedNode": True,
+    }))
+
+    assert node["nodeType"] == "iterative-solving"
+    assert orchestrator.get_state()["activeNode"] == "iterative-solving"
+
+
+def test_manual_enter_node_rejects_pending_stale_entry_after_failed_node(tmp_path) -> None:
+    orchestrator = _orchestrator(tmp_path, mode="manual")
+    failed = orchestrator.store.create_node_session("knowledge-to-tools")
+    failed["status"] = "failed"
+    failed["success"] = False
+    failed["summary"] = "Harness protocol failure."
+    orchestrator.store.write_node_session(failed)
+
+    with pytest.raises(RuntimeError, match="retryFailedNode=true"):
+        asyncio.run(orchestrator.request_enter_node({
+            "nodeType": "iterative-solving",
+            "rationale": "should not be parked for approval",
+        }))
+
+    assert orchestrator.get_state()["pendingControl"] is None

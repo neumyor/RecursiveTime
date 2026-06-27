@@ -6,7 +6,7 @@ from typing import Any
 
 from harnessing_ts.reference_feature_extractor import KNOWLEDGE_TO_TOOLS_REQUIRED_OUTPUT_PATHS
 from harnessing_ts.schema import NODE_SPECS, NodeSession, NodeType, WorkspaceState, get_next_node
-from harnessing_ts.variants import AblationVariant, get_variant
+from harnessing_ts.variants import DEFAULT_VARIANT_ID, AblationVariant, get_variant
 
 
 NODE_SPECS_BY_TYPE = {spec.type: spec for spec in NODE_SPECS}
@@ -15,7 +15,7 @@ NODE_SPECS_BY_TYPE = {spec.type: spec for spec in NODE_SPECS}
 class NodeStateMachine:
     def __init__(self, workspace_path: Path, variant: AblationVariant | None = None) -> None:
         self.workspace_path = workspace_path
-        self.variant = variant or get_variant("V0")
+        self.variant = variant or get_variant(DEFAULT_VARIANT_ID)
 
     def is_pipeline_complete(self, state: WorkspaceState | None) -> bool:
         if not state:
@@ -129,6 +129,11 @@ class NodeStateMachine:
         }
         if self.variant.case_review:
             requirements["case review"] = r"^reports/iterations/.+-case-review\.md$"
+        elif any(re.match(r"^reports/iterations/.+-case-review\.md$", path) for path in normalized):
+            raise RuntimeError(
+                f"{self.variant.id} disables case review; remove case-review outputPaths "
+                "and do not generate reports/iterations/<iteration-id>-case-review.md."
+            )
         missing = [
             label
             for label, pattern in requirements.items()

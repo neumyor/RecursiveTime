@@ -7,7 +7,7 @@ from typing import Any
 from harnessing_ts.config.markdown import node_document, read_prompt_text
 from harnessing_ts.schema import NODE_SPECS, NodeType, get_node_spec
 from harnessing_ts.tools.compose_tools import build_node_native_tools
-from harnessing_ts.variants import AblationVariant, get_variant
+from harnessing_ts.variants import DEFAULT_VARIANT_ID, AblationVariant, get_variant
 
 
 @dataclass(frozen=True)
@@ -30,19 +30,22 @@ def _workspace_static(ctx: PromptContext) -> str:
 def _node_specs_guide(variant: AblationVariant) -> str:
     chunks: list[str] = []
     for spec in NODE_SPECS:
+        if not variant.node_enabled(spec.type):
+            continue
+        next_node = variant.node_next(spec.type, spec.next)
         lines = [
             f"## {spec.type}",
             f"Purpose: {variant.node_purpose(spec.type, spec.purpose)}",
             f"Requires: {', '.join(variant.node_requires(spec.type, spec.requires))}",
             f"Produces: {', '.join(variant.node_produces(spec.type, spec.produces))}",
-            f"Next: {spec.next}" if spec.next else "Next: none",
+            f"Next: {next_node}" if next_node else "Next: none",
         ]
         chunks.append("\n".join([line for line in lines if line]))
     return "\n\n".join(chunks)
 
 
 def build_main_system_prompt(ctx: PromptContext, variant: AblationVariant | None = None) -> str:
-    variant = variant or get_variant("V0")
+    variant = variant or get_variant(DEFAULT_VARIANT_ID)
     if not variant.node_chain:
         return "\n\n---\n\n".join([
             _role_kernel(),
@@ -56,7 +59,7 @@ def build_main_system_prompt(ctx: PromptContext, variant: AblationVariant | None
         read_prompt_text("main/control-protocol.md"),
         "## Node Chain\n" + _node_specs_guide(variant),
     ]
-    if variant.id != "V0":
+    if variant.id != DEFAULT_VARIANT_ID:
         chunks.append(f"## Active Ablation Variant\n\n{variant.id} · {variant.name}\n\n{variant.description}")
     return "\n\n---\n\n".join(chunks)
 
@@ -66,7 +69,7 @@ def build_main_attachment(
     progress: dict[str, Any] | None = None,
     variant: AblationVariant | None = None,
 ) -> str:
-    variant = variant or get_variant("V0")
+    variant = variant or get_variant(DEFAULT_VARIANT_ID)
     if variant.direct_main_tool_use:
         return "\n".join([
             "# Workspace State Attachment",
@@ -90,7 +93,7 @@ def build_node_system_prompt(
     ctx: PromptContext,
     variant: AblationVariant | None = None,
 ) -> str:
-    variant = variant or get_variant("V0")
+    variant = variant or get_variant(DEFAULT_VARIANT_ID)
     spec = get_node_spec(node_type)
     chunks = [
         _role_kernel(),

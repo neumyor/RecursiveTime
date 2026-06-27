@@ -42,7 +42,8 @@ def test_bootstrap_contract_includes_full_static_payload(tmp_path, monkeypatch) 
         "runtime",
     }.issubset(payload)
     assert {"running", "knowledgeGraphRunning", "chainSummaryRunning", "workspaceUv"}.issubset(payload["runtime"])
-    assert payload["variant"]["id"] == "V0"
+    assert payload["variant"]["id"] == "NOD-KGR-KTL-CRV-SUB-ADA"
+    assert payload["variant"]["features"] == ["NOD", "KGR", "KTL", "CRV", "SUB", "ADA"]
 
 
 def test_live_contract_is_incremental_subset(tmp_path, monkeypatch) -> None:

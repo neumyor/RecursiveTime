@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from harnessing_ts.config.markdown import node_document
 from harnessing_ts.schema import NodeType
-from harnessing_ts.variants import AblationVariant, get_variant
+from harnessing_ts.variants import DEFAULT_VARIANT_ID, AblationVariant, get_variant
 
 READ_ONLY = ["Read", "LS", "Glob", "Grep"]
 DIRECT_TOOL_USE = [*READ_ONLY, "WebFetch", "WebSearch", "Write", "Edit", "Bash"]
@@ -14,15 +14,20 @@ NODE_POOL = ["mcp__ts_harness__finish_node", "mcp__ts_harness__get_runtime_setti
 
 def build_main_allowed_tools(
     *,
-    knowledge_graph_ready: bool = False,
+    knowledge_query_ready: bool = False,
+    knowledge_graph_ready: bool | None = None,
     reference_feature_extractor_ready: bool = False,
     variant: AblationVariant | None = None,
 ) -> list[str]:
-    variant = variant or get_variant("V0")
+    variant = variant or get_variant(DEFAULT_VARIANT_ID)
+    if knowledge_graph_ready is not None:
+        knowledge_query_ready = knowledge_graph_ready
+    elif variant.knowledge_query_source == "references":
+        knowledge_query_ready = True
     if variant.direct_main_tool_use:
         return sorted(set(DIRECT_TOOL_USE))
     tools = [*READ_ONLY, *MAIN_POOL]
-    if knowledge_graph_ready and variant.knowledge_graph:
+    if knowledge_query_ready and variant.knowledge_query:
         tools.append("mcp__ts_harness__query_knowledge")
     if variant.knowledge_to_tools:
         tools.append(VALIDATE_REFERENCE_FEATURE_TOOL)
@@ -37,16 +42,14 @@ def build_node_allowed_tools(
     reference_feature_extractor_ready: bool = False,
     variant: AblationVariant | None = None,
 ) -> list[str]:
-    variant = variant or get_variant("V0")
+    variant = variant or get_variant(DEFAULT_VARIANT_ID)
     pool = list(NODE_POOL)
-    if not variant.knowledge_graph:
+    if not variant.knowledge_query:
         pool.remove("mcp__ts_harness__query_knowledge")
     if not variant.reference_feature_extractor or not reference_feature_extractor_ready:
         pool = [tool for tool in pool if tool not in REFERENCE_FEATURE_TOOLS]
     if variant.knowledge_to_tools and node_type == "knowledge-to-tools":
         pool.append(VALIDATE_REFERENCE_FEATURE_TOOL)
-    if variant.random_search:
-        pool.append("mcp__ts_harness__sample_random_candidates")
     return sorted(set(build_node_native_tools(node_type, variant=variant) + pool))
 
 
@@ -55,7 +58,7 @@ def build_node_native_tools(
     *,
     variant: AblationVariant | None = None,
 ) -> list[str]:
-    variant = variant or get_variant("V0")
+    variant = variant or get_variant(DEFAULT_VARIANT_ID)
     tools = list(node_document(node_type)["native_tools"])
     if node_type == "iterative-solving" and not variant.independent_subagents:
         tools = [tool for tool in tools if tool != "Task"]

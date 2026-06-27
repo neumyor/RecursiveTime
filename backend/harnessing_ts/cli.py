@@ -14,6 +14,7 @@ from harnessing_ts.schema import NODE_TYPES
 from harnessing_ts.server_setup import setup_server
 from harnessing_ts.settings.llm import build_sdk_invocation_config, mask_llm_config, mask_sdk_invocation_config, read_effective_llm_config
 from harnessing_ts.training.lightning import write_training_template
+from harnessing_ts.variants import variant_catalog_payload, variant_help_text
 
 
 def main() -> None:
@@ -29,6 +30,8 @@ async def _main() -> None:
     sub.add_parser("init")
     sub.add_parser("state")
     sub.add_parser("llm-config")
+    variants = sub.add_parser("variants")
+    variants.add_argument("--json", action="store_true", help="Print the variant catalog as JSON instead of text.")
     prepare_base = sub.add_parser("prepare-runtime-base")
     prepare_base.add_argument("--python", default="3.11")
     setup = sub.add_parser("setup-server")
@@ -59,7 +62,10 @@ async def _main() -> None:
     workspace = Path(args.workspace).expanduser().resolve() if args.workspace else default_workspace_path()
     control_mode = os.getenv("TS_HARNESS_CONTROL_MODE", "auto").strip().lower()
     if control_mode not in {"auto", "manual"}:
-        control_mode = "auto"
+        raise SystemExit(
+            f"Invalid TS_HARNESS_CONTROL_MODE={control_mode!r}; expected 'auto' or 'manual'. "
+            "Use auto for automatic node transitions or manual for UI approval."
+        )
     command = args.command or "init"
 
     if command == "prepare-runtime-base":
@@ -77,6 +83,12 @@ async def _main() -> None:
         if status.get("state") != "ready":
             print_json(status)
             raise SystemExit(1)
+        return
+    if command == "variants":
+        if args.json:
+            print_json(variant_catalog_payload())
+        else:
+            print(variant_help_text())
         return
 
     orchestrator = HarnessOrchestrator(workspace, dry_run=args.dry_run, locale="zh", mode=control_mode)

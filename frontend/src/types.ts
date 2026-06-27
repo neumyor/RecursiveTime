@@ -38,6 +38,7 @@ export type Bootstrap = {
     running?: boolean;
     knowledgeGraphRunning?: boolean;
     chainSummaryRunning?: boolean;
+    pipelineComplete?: boolean;
     workspaceUv?: JsonMap | null;
   };
   knowledgeGraphBuild?: JsonMap;

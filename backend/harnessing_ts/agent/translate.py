@@ -72,7 +72,7 @@ def sdk_message_to_part(message: Any) -> Part:
 def merge_tool_result_part(tool_call: Part, tool_result: Part) -> Part:
     merged = dict(tool_call)
     merged["status"] = "completed"
-    merged["resultText"] = tool_result.get("resultText") or tool_result.get("text") or ""
+    merged["resultText"] = _strip_reasoning_jsonl_lines(tool_result.get("resultText") or tool_result.get("text") or "")
     merged["resultRaw"] = tool_result.get("raw")
     merged["text"] = merged.get("intend") or _format_tool_use(merged.get("name"), merged.get("input"))
     return merged
@@ -106,7 +106,22 @@ def collapse_tool_parts(parts: list[Part]) -> list[Part]:
 
 
 def filter_display_parts(parts: list[Part]) -> list[Part]:
-    return [part for part in parts if not is_ignorable_display_part(part)]
+    return [_sanitize_display_part(part) for part in parts if not is_ignorable_display_part(part)]
+
+
+def _sanitize_display_part(part: Part) -> Part:
+    if part.get("type") not in {"tool_call", "tool_result"}:
+        return part
+    changed = False
+    sanitized = dict(part)
+    for key in ("resultText", "text"):
+        value = sanitized.get(key)
+        if isinstance(value, str):
+            clean = _strip_reasoning_jsonl_lines(value)
+            if clean != value:
+                sanitized[key] = clean
+                changed = True
+    return sanitized if changed else part
 
 
 def is_ignorable_display_part(part: Part) -> bool:
@@ -125,10 +140,37 @@ def is_ignorable_display_part(part: Part) -> bool:
             "system",
             "thinking_tokens",
         } or subtype.endswith("_tokens")
+    if part.get("role") == "assistant" and part.get("type") == "text":
+        text = part.get("text")
+        if isinstance(text, str) and text.strip():
+            return False
+        return _raw_contains_only_reasoning_content(part.get("raw"))
     if part.get("role") == "system" and part.get("type") == "result":
         raw = part.get("raw")
         return not (isinstance(raw, dict) and raw.get("is_error") is True)
     return False
+
+
+def _raw_contains_only_reasoning_content(raw: Any) -> bool:
+    content = _content(raw) if isinstance(raw, dict) else []
+    if not content:
+        return False
+    for item in content:
+        if isinstance(item, str) and item.strip():
+            return False
+        if not isinstance(item, dict):
+            return False
+        if isinstance(item.get("text"), str) and item["text"].strip():
+            return False
+        if _is_tool_use(item) or _is_tool_result(item):
+            return False
+        if item.get("type") not in {None, "thinking", "redacted_thinking"} and not any(
+            key in item for key in ("thinking", "signature", "redacted_thinking")
+        ):
+            return False
+        if not any(key in item for key in ("thinking", "signature", "redacted_thinking")) and item.get("type") not in {"thinking", "redacted_thinking"}:
+            return False
+    return True
 
 
 def _raw_subtype(part: Part) -> str:
@@ -301,15 +343,47 @@ def _tool_use_id_from_raw(raw: Any) -> str | None:
 
 def _format_tool_result(content: Any, structured: Any) -> str:
     if isinstance(content, str) and content.strip():
-        return content
+        return _strip_reasoning_jsonl_lines(content)
     extracted = _extract_tool_result_text(content)
     if extracted:
-        return extracted
+        return _strip_reasoning_jsonl_lines(extracted)
     if structured is not None:
         import json
 
-        return json.dumps(structured, ensure_ascii=False, indent=2)
+        return _strip_reasoning_jsonl_lines(json.dumps(structured, ensure_ascii=False, indent=2))
     return "Tool result"
+
+
+def _strip_reasoning_jsonl_lines(text: Any) -> str:
+    if not isinstance(text, str) or not text:
+        return ""
+    lines = text.splitlines()
+    if not lines:
+        return text
+    kept: list[str] = []
+    for line in lines:
+        if _is_ignorable_reasoning_json_line(line):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def _is_ignorable_reasoning_json_line(line: str) -> bool:
+    stripped = line.strip()
+    if not (stripped.startswith("{") and stripped.endswith("}")):
+        return False
+    try:
+        import json
+
+        parsed = json.loads(stripped)
+    except Exception:
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    subtype = parsed.get("subtype")
+    if isinstance(subtype, str) and (subtype == "thinking_tokens" or subtype.endswith("_tokens")):
+        return True
+    return _raw_contains_only_reasoning_content(parsed)
 
 
 def _extract_tool_result_text(value: Any) -> str:

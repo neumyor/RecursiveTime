@@ -1,223 +1,106 @@
-# AGENT 操作规范
+# AGENT 维护规范
 
-本项目是一个基于 Claude Code SDK 的时间序列 tool-use harness。它不是 research agent；核心目标是让 agent 更可靠地结合背景知识、数据证据和工具集来完成时间序列问题求解。
+本文面向维护本仓库的 coding agent。README.md 面向人类使用者，负责安装、启动、UI 使用和常见错误；AGENT.md 负责工程边界、实现约束、验证要求和文档同步规则。修改时不要把两者混成同一份文档。
 
-## 文档同步要求（强制）
+## 文档职责
 
-`AGENT.md` 和 `README.md` 是面向 agent、用户和后续维护者的入口规范，必须与代码、prompt、CLI、配置保持一致。任何一次涉及以下范围的改动，**都必须**在同一个 commit（或紧随其后的 commit）里检查并同步 `README.md` 和 `AGENT.md`：
+- README.md：人类用户文档。应说明 prerequisites、安装、启动命令、LLM 配置、变体选择、UI 使用、部署和排错。避免放入内部代码边界、commit 纪律、实现细节。
+- AGENT.md：维护 agent 文档。应说明代码所有权边界、不可破坏的系统契约、变体硬约束、测试/验证要求、禁止提交内容。
+- docs/：更长的架构设计说明。README 只链接或摘要用户需要知道的内容；AGENT 只记录维护时必须遵守的规则。
 
-- Node chain 增删、节点 `phase/purpose/next` 变化、节点 spec / guidance 重大改写
-- CLI 子命令、参数、flag 增删（`backend/harnessing_ts/cli.py`）
-- MCP 工具集（`backend/harnessing_ts/mcp/server.py`）增删、schema 变更
-- node native 工具白名单（`backend/harnessing_ts/config/nodes/<node>/native-tools.md`）
-- 关键 prompt 模板（`backend/harnessing_ts/config/prompts/`、`backend/harnessing_ts/variants/prompts/`）
-- 控制模式（`TS_HARNESS_CONTROL_MODE`）、消融变体（`TS_HARNESS_VARIANT`）、dry-run / debug / max-turns / workspace 等环境变量
-- LLM 配置字段（`backend/harnessing_ts/settings/llm.py`、`config.llm.example.json`）
-- 运行时记录 / 工作区布局 / `.gitignore` 变化
-- 新增/废弃的运行命令、启动入口、Web UI 端口
-
-任何 commit 前都必须执行文档一致性检查：用 `git diff -- README.md AGENT.md docs/` 复核用户文档和 agent 规范是否已经同步。只要改动影响行为、命令、配置、节点协议、运行产物、UI 操作或维护流程，就必须同步更新 `README.md` 和 `AGENT.md`；如果确认无需文档变更，需要在 commit message 中显式说明 `no doc change required: ...`，否则视为遗漏。
-
-## 项目入口
-
-本项目后端使用 Python 实现，依赖由 `uv` 管理。前端是 `frontend/` 下的静态页面，直接由 Python FastAPI 服务托管。
-
-新服务器的标准流程必须优先保持为三条主命令：
+任何影响命令、环境变量、变体、节点协议、运行产物、API payload、UI 操作、MCP 工具、prompt 或维护流程的改动，都必须同时检查 README.md 和 AGENT.md。提交前运行：
 
 ```bash
-git clone https://github.com/neumyor/RecursiveTime.git && cd RecursiveTime
+git diff -- README.md AGENT.md docs/
+```
+
+## 当前系统事实
+
+HarnessingTS 是基于 Python Claude Code SDK 的时间序列 tool-use harness。前端是 `frontend/` 的静态 UI，由 FastAPI 服务托管。运行时状态存在用户指定的 `TS_HARNESS_WORKSPACE`，不是源码仓库。
+
+标准启动入口：
+
+```bash
 uv run ts-harness setup-server
-HOST=0.0.0.0 PORT=4327 TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/v0 TS_HARNESS_VARIANT=V0 uv run ts-harness-server
+HOST=0.0.0.0 PORT=4327 TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/nod-kgr-ktl-crv-sub-ada TS_HARNESS_VARIANT=NOD-KGR-KTL-CRV-SUB-ADA TS_HARNESS_CONTROL_MODE=auto uv run ts-harness-server
 ```
 
-`uv run` 会先自动同步 Python 后端；`setup-server` 会继续执行 frozen Bun install、生产前端构建和共享 runtime base 构建；`ts-harness-server` 会在首次启动时自动创建并初始化 `TS_HARNESS_WORKSPACE`。不要再要求用户重复执行 `uv sync`、`bun install/build`、`prepare-runtime-base` 和 `ts-harness init`。
-
-以下拆分命令只用于开发、诊断或局部重建：
+辅助命令：
 
 ```bash
-uv sync
-uv run ts-harness prepare-runtime-base
-uv run ts-harness init
-```
-
-发送主会话消息：
-
-```bash
-uv run ts-harness send "请基于 ECG5000 设计异常样本分类的工具使用流程"
-```
-
-Dry-run 状态流转：
-
-```bash
-uv run ts-harness --dry-run init
-uv run ts-harness --dry-run start-node problem-contract --input-summary "ECG5000 abnormal sample classification"
-uv run ts-harness --dry-run finish-node --summary "Wrote user/problem-contract.md and user/data-spec.md" --goal-met true --output-path user/problem-contract.md --output-path user/data-spec.md
-```
-
-Python 语法检查：
-
-```bash
-uv run python -m compileall backend/harnessing_ts
-```
-
-本地启动前端工作台：
-
-```bash
-uv run ts-harness-server
-```
-
-默认地址：
-
-```text
-http://127.0.0.1:4327
-```
-
-服务器部署并允许其他电脑访问时，必须显式绑定非 loopback 地址：
-
-```bash
-HOST=0.0.0.0 PORT=4327 TS_HARNESS_WORKSPACE=/srv/harnessingts/workspaces/v0 TS_HARNESS_VARIANT=V0 uv run ts-harness-server
-```
-
-对外共享部署必须先运行 `setup-server` 生成 `frontend/dist/` 和 runtime base，并在 README 的 “Deploy On A Server” 章节同步维护防火墙、进程守护、反向代理和安全注意事项。不要在公网部署时启用 `TS_HARNESS_DEBUG`。
-
-不调用模型的前端测试模式：
-
-```bash
-TS_HARNESS_DRY_RUN=true uv run ts-harness-server
-```
-
-启用前端调试按钮，包括清空当前聊天记录：
-
-```bash
-TS_HARNESS_DEBUG=true uv run ts-harness-server
-```
-
-消融实验通过启动环境变量选择，默认 `V0`：
-
-```bash
-TS_HARNESS_VARIANT=V4 uv run ts-harness-server
-```
-
-变体定义、V2 固定随机目录和独立 prompt overlay 位于 `backend/harnessing_ts/variants/`。新增或修改消融行为时优先保持差异在该目录内，并通过 capability、工具权限和后端契约实施，不要只依赖 prompt 声明。变体只在进程启动时解析，不得新增运行时切换 API；不同实验应使用不同 `TS_HARNESS_WORKSPACE`。
-
-## LLM 配置
-
-默认使用 Claude Code SDK 的本机登录态。如果运行时显示 `not login`，可以改用手动 API 配置。
-
-本地创建：
-
-```bash
-cp config.llm.example.json config.llm.json
-```
-
-DashScope Anthropic-compatible 示例：
-
-```json
-{
-  "authMode": "manual",
-  "protocol": "anthropic",
-  "model": "qwen3.6-plus",
-  "baseUrl": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic",
-  "apiKey": "YOUR_API_KEY",
-  "contextWindow": "200k"
-}
-```
-
-`config.llm.json` 已加入 `.gitignore`，不要提交真实 key。
-
-也可以用环境变量：
-
-```bash
-export TS_HARNESS_LLM_AUTH_MODE=manual
-export TS_HARNESS_LLM_PROTOCOL=anthropic
-export TS_HARNESS_LLM_MODEL=qwen3.6-plus
-export TS_HARNESS_LLM_BASE_URL=https://dashscope.aliyuncs.com/api/v2/apps/anthropic
-export TS_HARNESS_LLM_API_KEY=YOUR_API_KEY
-```
-
-检查 SDK 实际注入配置：
-
-```bash
+uv run ts-harness variants
+uv run ts-harness variants --json
 uv run ts-harness llm-config
+uv run ts-harness --dry-run init
+uv run ts-harness --dry-run start-node problem-contract --input-summary "..."
+uv run ts-harness --dry-run finish-node --summary "..." --goal-met true --output-path user/problem-contract.md --output-path user/data-spec.md
 ```
 
-## Agent Lightning
+启动配置错误必须 fail fast，禁止静默回退：
 
-训练能力是可选依赖，不参与普通后端启动。需要 APO/RL/SFT 闭环时安装：
+- `PORT` 必须是 1-65535 的整数。
+- `TS_HARNESS_CONTROL_MODE` 必须是 `auto` 或 `manual`。
+- `TS_HARNESS_VARIANT` 必须是合法且已注册的功能码组合。
+- 变体错误应提示 `uv run ts-harness variants` 或打印等价 catalog。
 
-```bash
-uv sync --extra training
-```
+## 代码边界
 
-生成起始训练脚手架：
+维护时优先保持现有模块边界：
 
-```bash
-uv run ts-harness training-template
-```
+- `backend/harnessing_ts/server.py`：FastAPI app factory、路由注册、后台任务、静态前端托管、启动配置校验。不要在这里新增业务规则。
+- `backend/harnessing_ts/api/payloads.py`：`/api/bootstrap` 和 `/api/live` 聚合 payload。
+- `backend/harnessing_ts/orchestrator.py`：应用 facade，协调 workspace store、main/node sessions、knowledge services、runner 生命周期和高层能力禁用。
+- `backend/harnessing_ts/node_state.py`：node chain 路由、`finish_node` 结构校验、pipeline completion、variant-aware output path 约束。
+- `backend/harnessing_ts/variants/profiles.py`：功能码、兼容别名、canonicalization、profile registry、capabilities、node overrides、variant help/catalog 的单一事实源。
+- `backend/harnessing_ts/variants/prompts/`：非默认 profile 的 prompt overlay。完整 profile `NOD-KGR-KTL-CRV-SUB-ADA` 不依赖 overlay。
+- `backend/harnessing_ts/tools/compose_tools.py`：main/node allowed tools 和 native tools 的 variant-aware 组装。
+- `backend/harnessing_ts/agent/session_factory.py`：Claude Code SDK runner 构造、prompt、MCP server、allowed tools、LLM invocation config。
+- `backend/harnessing_ts/mcp/server.py`：MCP schema 和 callback 绑定。只暴露已由当前 variant 允许的 callback。
+- `backend/harnessing_ts/state/`：workspace 文件/JSON/JSONL repository 和布局。
+- `backend/harnessing_ts/knowledge_graph.py` / `knowledge_prompts.py`：知识图谱构建、检索和 direct reference QA。
+- `backend/harnessing_ts/reference_feature_extractor.py`：reference feature extractor 的强校验、执行和 inspection。
+- `frontend/src/main.ts`：当前主要 UI 渲染和事件绑定入口。
+- `frontend/src/types.ts`：frontend DTO 类型。
 
-## 架构边界
+新增行为应落在已有边界内。不要把 node 路由规则重新写回 `orchestrator.py`，不要把 workspace layout 细节塞进 `WorkspaceStore` 主体，不要把 API 聚合 payload 散落在路由函数里。消融行为必须通过 capabilities、工具注入和后端契约强制实施，不能只靠 prompt 声明。
 
-- Claude Code SDK 是唯一 runtime 绑定。
-- 后端代码必须放在 `backend/harnessing_ts/`；不要重新引入 Bun/TypeScript 后端。
-- 前端代码必须放在 `frontend/`。
-- 示例、训练脚手架和非运行时代码放在 `examples/`。
-- 本地 JSONL 和文件系统是真相源。
-- SDK session 是短命执行载体。
-- Prompt / node spec 表达方法论。
-- MCP 只做结构化状态突变和审计记录。
-- `toolset` 描述 agent 可调用能力，不描述方法排行榜。
-- `solution` 描述工具使用协议，不描述最佳模型。
-- 训练只是让某些工具可用的实现细节，不是系统目标。
+## 变体系统
 
-## 当前代码架构
+`TS_HARNESS_VARIANT` 只在进程启动时解析。运行时不得新增 variant switch API。旧 `V0`-`V5` 仅作为兼容别名，状态、timeline、API 和 UI 应显示 canonical ID。
 
-后端采用“薄入口 + 应用编排 + 文件型基础设施”的结构。维护时应保持以下边界：
+功能码：
 
-- `backend/harnessing_ts/server.py`：FastAPI 装配入口，负责路由注册、后台 task 启停和静态前端托管；不要在这里新增业务规则。
-- `backend/harnessing_ts/api/payloads.py`：`/api/bootstrap`、`/api/live` 等前端聚合响应的组装层，负责稳定 HTTP contract。
-- `backend/harnessing_ts/orchestrator.py`：应用编排 facade，协调主会话、node session、workspace store、知识服务和 runner 生命周期。
-- `backend/harnessing_ts/node_state.py`：node chain 状态机、`loopDecision` / `nextNode` 校验、pipeline 完成判断、variant-aware iterative-solving 输出路径约束和 V6 one-shot 强制停止。
-- `backend/harnessing_ts/variants/profiles.py`：V0-V7 profile、capability、节点 purpose/input/output override 和 overlay 路由的单一事实源。
-- `backend/harnessing_ts/variants/random_search.py`：V2 固定方法/参数目录和带 seed 的后端随机候选 sampler。
-- `backend/harnessing_ts/variants/prompts/`：V1-V7 独立 prompt overlay；V0 不应依赖 overlay，保持基础系统行为不变。
-- `backend/harnessing_ts/agent/sdk_runner.py`：Claude Code SDK client wrapper，处理消息收发、工具调用/结果合并、SDK session id、interrupt/close 和 SDK 异常自恢复。
-- `backend/harnessing_ts/agent/session_factory.py`：主会话和 node 会话的 prompt、allowed tools、MCP server、LLM invocation config 组装。
-- `backend/harnessing_ts/mcp/server.py`：MCP tool schema 和 callback 绑定；暴露治理、审计、V2 random sampler 和知识库确定性工具。
-- `backend/harnessing_ts/state/workspace_store.py`：workspace 文件/JSON/JSONL repository facade，保留读写状态、日志、运行记录、上传、reset 等外部 API。
-- `backend/harnessing_ts/state/workspace_layout.py`：workspace 目录布局、内置 `tools/read_docx.py`、DOCX reference 文本派生。
-- `backend/harnessing_ts/runtime_base.py`：项目级 PyTorch 与 workspace 默认依赖基础环境、硬件探测、uv backend 选择、验证和共享 cache metadata。
-- `backend/harnessing_ts/server_setup.py`：新服务器聚合初始化，统一执行前端依赖/构建和共享 runtime base 准备。
-- `backend/harnessing_ts/knowledge_graph.py`：文件型知识库表、确定性工具、graph view/search/cards、builder/reasoner 调用逻辑。
-- `backend/harnessing_ts/knowledge_prompts.py`：Knowledge Builder / Reasoning Agent prompt 文本与知识图谱构建请求文本；Knowledge Builder 必须优先抽取服务 `knowledge-to-tools` 的诊疗指标、研判指标、阈值、单位、测量方法、适用条件和不确定条件。
-- `backend/harnessing_ts/chain_summary.py`：独立 chain builder agent，读取 runtime workspace 的 logs/reports/runs/tools/user 工件，输出结构化思维链总结和 metric series。
-- `backend/harnessing_ts/reference_feature_extractor.py`：主会话构建出的 reference feature extractor 的强校验、确定性 Python AST 校验、reference evidence 校验、重复执行一致性测试和源码/规则检查接口；`builder_system_prompt` / `builder_build_prompt` 暴露 build prompt 文本，backend 自身不再运行独立 builder。
-- `backend/harnessing_ts/config/`：Markdown prompt、node spec、guidance、native-tools 配置，Python 只读取、解析和校验。
-- `frontend/src/main.ts`：当前仍是主要 UI 渲染和事件绑定入口。
-- `frontend/src/api.ts`：前端 JSON/Form API client 和错误消息规范。
-- `frontend/src/types.ts`：前端共享 DTO / bootstrap 类型。
+- `NOD`：HarnessingTS node chain。
+- `KGR`：文件型 reference knowledge graph 和 graph-backed `query_knowledge`。
+- `RQA`：direct reference QA agent，直接基于 `references/**` 回答；与 `KGR` 互斥。
+- `KTL`：`knowledge-to-tools` node 和 validated reference feature extractor。
+- `CRV`：case review、bad/good-case attribution、case visualization。
+- `SUB`：独立 `Task` subagents。
+- `ADA`：adaptive iterative solving 和停止决策。
+- `DIR`：普通单 agent baseline；不能与其他 code 组合。
 
-新增功能时优先落在上述已有边界内。不要把 node 路由规则重新写回 `orchestrator.py`，不要把 workspace layout 细节写回 `WorkspaceStore` 主体，不要把 API 聚合 payload 直接散落在路由函数里。
+已注册 profile：
 
-## Git 管理
+- `NOD-KGR-KTL-CRV-SUB-ADA`（旧 `V0`）：完整版本。
+- `NOD-RQA-KTL-CRV-SUB-ADA`（旧 `V1`）：无 knowledge graph，保留 direct reference QA、KTL、CRV、SUB、ADA。
+- `NOD-RQA-KTL-SUB-ADA`（旧 `V2`）：在 direct reference QA 基础上禁用 CRV。
+- `NOD-RQA-CRV-SUB-ADA`（旧 `V3`）：在 direct reference QA 基础上禁用 KTL。
+- `NOD-RQA-SUB-ADA`（旧 `V4`）：在 direct reference QA 基础上同时禁用 CRV 和 KTL。
+- `DIR`（旧 `V5`）：普通单 agent tool-use baseline。
 
-所有关键修改必须通过 git 妥善管理：
+硬约束：
 
-- **每次完成一个逻辑完整的改动后立即提交**，不要积攒大量未提交的修改。
-- **任何 commit 前必须检查并同步 `README.md` 和 `AGENT.md`**。行为、命令、配置、节点协议、运行产物、UI 操作或维护流程发生变化时，两份入口文档必须随代码一起更新；无文档变更时必须在 commit message 写明 `no doc change required: ...`。
-- 提交信息（commit message）使用 [Conventional Commits](https://www.conventionalcommits.org/) 格式，清晰描述改动范围和内容。例如：
-  - `feat(frontend): incremental live rendering to preserve scroll positions`
-  - `fix(backend): correct loopDecision validation for iterative-solving`
-  - `docs(architecture): add MCP boundary design notes`
-- 提交前确保完整验证通过：
-  - 后端：`uv run python -m compileall backend/harnessing_ts`
-  - 测试：`uv run pytest -q`
-  - 前端：`cd frontend && bun run build`
-- `tests/conftest.py` 会自动设置 `TS_HARNESS_SKIP_WORKSPACE_UV=true`，禁止普通单元测试为每个 `tmp_path` 构建完整 `.venv`；runtime-base 必须使用 mock/fake subprocess 做单元测试。
-- **禁止提交**：API key、密码、token、`.env` 文件、运行时产物（见下方禁止提交清单）。
-- 修改前先 `git status` 确认当前分支和已有改动，避免意外覆盖他人工作。
-- 不要提交调试用的临时日志打印、注释掉的代码块、或仅用于本地测试的临时文件。
+- “消融”表示禁止使用，不是“不要求使用”。
+- 无 `NOD` 的 `DIR` 不得创建/进入 node session，不得暴露 node-control MCP。
+- 无 `KGR` 不得构建/读取 knowledge graph；图谱 API payload 应为空或拒绝。
+- `RQA` profiles 的 `query_knowledge` 必须走 direct reference QA，不得读取 graph tables。
+- 无 `KTL` 不得进入 `knowledge-to-tools`，不得注入 validate/extract/inspect reference feature MCP，不得返回 extractor tool metadata，不得运行 extractor。
+- 无 `CRV` 时，`finish_node` 必须拒绝 case-review output path；prompt overlay 也要禁止 case-review、bad/good-case attribution 和 visualization。
+- 无 `SUB` 时，iterative-solving native tools 中不得包含 `Task`。
 
-## 当前 Node Chain（V0 基线）
+## Node Chain 契约
+
+完整 profile 的 baseline chain：
 
 ```text
 problem-contract
@@ -226,75 +109,112 @@ problem-contract
 → final-summary
 ```
 
-- `problem-contract`：用用户输入和 `references/**` 拉取/处理数据、exploration、明确真实任务，产出 `user/problem-contract.md`、`user/data-spec.md`，并为独立 Literature Knowledge Builder 写 `knowledge_base/domain-brief.md`。
-- `knowledge-to-tools`：由主会话直接负责，不再有独立 Reference Feature Builder 子会话。主会话用其 native 工具读取 task contract、data spec、`references/**`、（若已构建）知识图谱并结合领域常识，先写 `tools/reference-feature-extractor/{evidence-map.json,feature-plan.json}`，再写带可 import Python API 和 CLI 包装的 `extractor.py`、`manifest.json`、`reference-rules.json`、`README.md`、`test-cases.json`，必须按 `user/data-spec.md` 抽取真实 workspace 样本并包含 control/reference case 评估，写出 `evaluation-report.json`（合成样本只能补充），然后调用 `mcp__ts_harness__validate_reference_feature_extractor` 让后端做强校验（AST 白名单、reference 原文引用、自声明 I/O contract、Python API 可导入、feature plan、evidence map、真实样本 test-cases、evaluation report、重复执行一致性测试）。校验通过后，后续 session 可按 README/manifest 直接 import Python API，`extract_reference_features` 和 `inspect_reference_feature_extractor` 仅作为兼容 MCP 入口。该 node 通过 `mcp__ts_harness__finish_node` 交还控制权，`outputPaths` 至少要包含上述八个工具文件路径以及 `state/reference-feature-build.json`。
-- `iterative-solving`：可重复执行。每轮先用 `mcp__ts_harness__get_runtime_settings` 读取 `iterativeCandidateCount` 作为 k，提出 k 个候选，用 `Task` subagent 分别做可行性测试和 case review，统一综合后把本轮保留或执行的方法落盘为 `tools/<tool-name>/`，更新 `tools/registry.json` / `user/toolset-spec.md` / `user/solution-plan.md`，执行并把结果写入 `runs/iterations/<iteration-id>/`，最后**先写** `reports/iterations/<iteration-id>-case-review.md`、**再写** `reports/iterations/<iteration-id>-summary.md`、更新 `user/iteration-state.md`。通过 `mcp__ts_harness__finish_node(loopDecision=continue|exit, nextNode=iterative-solving|final-summary, outputPaths=…)` 交还控制权。
-- Reference Feature Extractor 由 `knowledge-to-tools` 节点的主会话负责生成；后端只负责强校验、deterministic executor 和 reference-evidence 检查。Case review 在该工具可用时必须对每个分析 case 和对照 case 实际调用已验证 extractor，优先使用 README/manifest 声明的 Python API，MCP `extract_reference_features` 可作为兼容入口；不能用 LLM 目测替代。
-- `final-summary`：迭代结束才进。基于 timeline、runs、tools、problem-contract、data-spec 总结整个优化历程、最终工具使用方案、最终结果和系统边界，产出 `reports/final-summary.md` 和 `user/final-solution.md`。如果进入后发现 `user/iteration-state.md` 的 `recommend_exit` 或 contract 指向继续迭代，应标记失败并要求回到 `iterative-solving`。
+主要契约：
 
-每个 node 都是独立 Claude Code SDK session，拥有自己的 system prompt、native-tools 白名单和 node 日志。所有节点流转（`enter_node` / `finish_node`）一律走 MCP `mcp__ts_harness__*` 工具，禁止用 JSON 文本块或 `harnessControl.action=…` 等替代控制协议。
+- 所有 node 流转必须走 MCP `mcp__ts_harness__enter_node` / `mcp__ts_harness__finish_node`，不得用 JSON 文本块或 `harnessControl.action` 替代。
+- `knowledge-to-tools` 由当前 node/main SDK session 生成 `tools/reference-feature-extractor/**`，后端只做强校验、deterministic executor 和 evidence 检查。
+- `iterative-solving` 成功完成必须包含 candidate review、case review（除非无 `CRV`）、iteration summary 和 `user/iteration-state.md`。
+- `loopDecision=continue` 必须路由到 `iterative-solving`；`loopDecision=exit` 必须路由到 `final-summary`。
+- `user/iteration-state.md` 的 `recommend_exit` 不是控制源，但不得与 structured MCP `loopDecision` 矛盾。
+- `final-summary` 只在迭代结束后进入。
 
-服务器可能同时运行多个 workspace 和多个 agent。Node prompt 要求所有长时间 Bash 命令优先用 `timeout` 或当前 run 目录下的 PID/日志记录约束生命周期；禁止按名称或全局范围使用 `pkill`、`killall`、`pgrep | kill`、批量杀 Python/uv/训练进程或全局 `kill -9`。只有 PID 能被证明是当前 node/subagent 在当前 workspace 启动的进程时，才可先普通 `kill`，复查仍存活且归属无误后才可对同一 PID 使用 `kill -9`；归属不清时不得终止。
+Node prompt 和 native tools 约束：
 
-Node 结束必须显式调用 `mcp__ts_harness__finish_node`。后端提供两层兑底保护以避免节点卡死或下一轮 main 消息被 `activeNode` 锁拒绝：
+- `Task` 只在 node native tools 允许处可用。
+- 节点应把 `data/raw/**` 视为只读；派生数据写入 `data/processed/**`。
+- 节点不应读取 `backend/**`、`frontend/**`、`state/**`、`_reference_project/**`；`final-summary` 可读取 `logs/timeline.jsonl`。
+- domain knowledge 应通过 `mcp__ts_harness__query_knowledge` 获取，不应直接读 `knowledge_base/tables/*.csv`、`knowledge_base/indexes/**`、`knowledge_base/cache/**`。
+- 长时间 Bash 命令应使用 `timeout` 或当前 run 目录 PID/日志；禁止按名称或全局范围使用 `pkill`、`killall`、`pgrep | kill`、批量杀 Python/uv/训练进程或全局 `kill -9`。
 
-- SDK 调用本身在节点内崩溃（控制请求超时、子进程错误、网络断开等）时，`enter_node` / `_resume_active_node` 会用 `try/except` 捕获，调用 `_handle_node_runner_return(node, sdk_error=exc)` 把节点标为 `failed`（summary 中包含 SDK 错误），释放 active 锁，并重抛原异常让 HTTP 调用者仍能看见失败。
-- SDK 正常返回但 agent 未调用 `finish_node` 时，后端会发一捯有界 reminder turn 提醒 agent 检查 workspace 并调用 `finish_node`（必要时可以 `success=false`）；超过提醒预算后后端会主动放弃，把节点标为 `failed` 并释放锁，避免下一轮 main turn 被永久锁住。
-- 这两层兑底不会覆盖用户主动 `paused` 的节点或正在 `waiting_approval` 的 `finish_node` 请求。
+## 前端契约
 
-消融变体必须保持以下硬差异：
-
-- V1：不创建 node session；main runner 直接获得 Read/Write/Edit/Bash/Web 工具，不提供 node-control、knowledge 或 Task。
-- V2：必须调用后端 `mcp__ts_harness__sample_random_candidates` 获取 seed 和恰好 k 个候选；LLM 不得替换或额外重采样。
-- V3：不注入 knowledge MCP，禁止 builder 和知识 API 内容，并通过 overlay 禁止读取 reference-derived knowledge。
-- V4：从 iterative-solving 的实际 allowed-tools 中移除 `Task`，相同 k 顺序执行。
-- V5：后端不要求 case-review outputPath，prompt 禁止 bad/good-case、统计归因和 case visualization。
-- V6：后端拒绝 `loopDecision=continue` 以及任何第二次 iterative-solving entry；第一轮仍保留 V0 的完整执行要求。
-- V7：跳过 `knowledge-to-tools` 节点；chain 退化为 `problem-contract → iterative-solving → final-summary`，主会话不在该节点构建 reference feature extractor；`validate_reference_feature_extractor`、`extract_reference_features` 与 `inspect_reference_feature_extractor` 三个 MCP 工具都不会被注入。
-
-所有 agent 工具调用都必须在参数中包含 `intend` 字段，用一句简短的话说明本次调用的直接意图。Harness MCP 工具 schema 会强制要求该字段；Claude Code 内置工具也必须按 shared role prompt 的要求尽量携带该字段。后端日志会把同一 `toolUseId` 的工具调用和工具结果合并成一条 `tool_call` 消息；前端默认折叠展示，主标题显示 `intend`，展开后显示详细参数和返回结果。
+- 前端不应假设 variant ID 形如 `V\d`。variant 是任意 canonical feature-code string。
+- 前端应基于 `variant.capabilities` 禁用或标记功能，不应只解析 ID 字符串。
+- Bootstrap/live payload 的稳定聚合位置是 `backend/harnessing_ts/api/payloads.py`。
+- `/api/events` SSE 是主同步路径；`/api/live` 保留用于兼容和诊断。
+- 变体 pill 中完整 profile 和 ablation profile 的样式由显式 class 控制，不得恢复 `.variant-v0` 之类旧假设。
 
 ## 运行记录
 
-流程记录写入：
+运行记录写在 workspace 中：
 
 ```text
 state/workspace.json
 state/nodes/<node-session-id>.json
+state/runtime-settings.json
+state/knowledge-graph-build.json
+state/reference-feature-build.json
+state/chain-summary-build.json
 logs/main.jsonl
 logs/nodes/<node-session-id>.jsonl
 logs/timeline.jsonl
+logs/knowledge-graph-builder.jsonl
+logs/knowledge-reasoning.jsonl
 logs/chain-builder.jsonl
 runs/registry.jsonl
 artifacts/chain-summary.json
-state/chain-summary-build.json
-state/reference-feature-build.json
 ```
 
-`knowledge-to-tools` 节点没有独立的 builder 日志；其 agent 行为、写入与 `validate_reference_feature_extractor` 调用全部记录在 `logs/main.jsonl` 中；`state/reference-feature-build.json` 只记录后端强校验结果。
+`knowledge-to-tools` 没有独立 builder 日志；它的 SDK 行为记录在对应 main/node log 中，后端强校验结果记录在 `state/reference-feature-build.json`。
 
-这些目录是运行产物，默认在 `.gitignore` 中。
+## 验证要求
 
-前端 `Reset Chat` 重置聊天记录和 agent 工作流记忆，并清除 `tools/reference-feature-extractor/`、`state/reference-feature-build.json`、普通生成工具、runs、reports 和 processed data；它只保留 `data/raw/`、`references/`、`knowledge_base/` 与知识图谱。`Reset Workspace` 才清除这些保留的 reference/knowledge graph 产物；独立 LLM 配置继续保留。
+常规验证：
 
-前端右侧 workspace 文件树隐藏 `.git`、`.venv`、`node_modules`、`__pycache__` 等基础设施目录；其他文件最多展示 5 层，每个目录最多展示 100 个子项，超出时在该目录内显示局部截断提示，避免单个大目录遮蔽后续目录。
+```bash
+uv run python -m compileall -q backend/harnessing_ts
+uv run pytest -q
 
-## 禁止提交
+cd frontend
+bun install --frozen-lockfile
+bun run build
+```
 
-- `node_modules/`
-- `dist/`
-- `.venv/`
-- `state/`
-- `logs/`
-- `user/`
-- `data/raw/`
-- `data/processed/`
-- `references/`
-- `artifacts/`
-- `plots/`
-- `tools/`
-- `runs/`
-- `reports/`
-- `.env*`
-- `.secrets/`
-- `config.yaml`
+当前环境注意事项：
+
+- 项目要求 Python `>=3.11`。
+- 如果 `uv run pytest` 调到系统 Python 3.10，应改用正确的 3.11 环境；不要把 `datetime.UTC` 等 3.11 API 报错误判为业务失败。
+- `tests/conftest.py` 会设置 `TS_HARNESS_SKIP_WORKSPACE_UV=true`，普通单元测试不得为每个 `tmp_path` 构建完整 workspace `.venv`。
+- runtime-base 行为必须用 mock/fake subprocess 做单元测试。
+
+变体相关改动至少验证：
+
+- `uv run ts-harness variants` 和 `uv run ts-harness variants --json`。
+- default variant resolves to `NOD-KGR-KTL-CRV-SUB-ADA`。
+- legacy aliases `V0`-`V5` resolve to canonical IDs。
+- unordered IDs canonicalize, e.g. `RQA-NOD-SUB-ADA` -> `NOD-RQA-SUB-ADA`。
+- invalid/unknown/valid-but-unregistered combinations fail with actionable messages。
+- no-`KTL` profiles do not expose knowledge-to-tools node, extractor tools, extractor metadata, or extractor execution.
+- no-`CRV` profiles reject case-review output paths.
+- `DIR` exposes direct tools and no node specs.
+
+## Git 和提交
+
+- 每次完成一个逻辑完整改动后提交，不要积攒大量无关改动。
+- 提交前检查 `git status`，不要覆盖用户或其他 agent 的未提交改动。
+- 不要 revert 未经请求的用户改动。
+- commit message 使用 Conventional Commits。
+- 行为、命令、配置、节点协议、运行产物、UI 操作或维护流程变化时，README.md 和 AGENT.md 必须同步。
+
+禁止提交：
+
+```text
+node_modules/
+dist/
+.venv/
+state/
+logs/
+user/
+data/raw/
+data/processed/
+references/
+artifacts/
+plots/
+tools/
+runs/
+reports/
+.env*
+.secrets/
+config.llm.json
+config.yaml
+```

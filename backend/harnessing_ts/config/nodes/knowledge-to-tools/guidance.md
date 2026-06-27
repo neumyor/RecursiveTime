@@ -4,7 +4,7 @@
 
 核心约束：
 - 所有判断必须落到 `user/problem-contract.md`、`user/data-spec.md` 与 `references/**` 的真实文本上。不得用 LLM 常识、模型默认或训练经验补充任何 feature、阈值、judgment 或 domain 规则；若这些材料没有给出当前 feature 的依据，必须把该 feature 标为 `indeterminate` 并把判定理由写入 README。
-- 若知识图谱已构建并通过 `knowledgeGraphReady=true`，应通过 `mcp__ts_harness__query_knowledge` 获取领域知识，候选 feature、judgment 与 reference 引用应与知识图谱中的定义保持一致；不得把 `knowledge_base/tables/*.csv`、`knowledge_base/indexes/**` 或 `knowledge_base/cache/**` 当成普通读取入口直接消费。
+- 若 `knowledgeQueryReady=true` 且系统注入了 `mcp__ts_harness__query_knowledge`，应通过该工具获取领域知识。`NOD-KGR-KTL-CRV-SUB-ADA` 中该工具查询知识图谱；`RQA` reference-QA 变体中该工具直接读取 `references/**`。不得把 `knowledge_base/tables/*.csv`、`knowledge_base/indexes/**` 或 `knowledge_base/cache/**` 当成普通读取入口直接消费。
 - 若知识图谱尚未构建或不可用，主会话可结合 `references/**` 文本与自身对任务领域的常识，定义 reference 规则；但 evidence 必须仍指向 `references/**` 中的具体原文（路径、章节/页码与短引用），不得伪造引用。
 - 生成的 extractor 必须是纯确定性的：禁止网络、LLM、随机数、系统时间、外部进程、训练、在线拟合或隐式可变状态。相同 JSON 输入必须产生字节级一致的 JSON 输出。
 - extractor.py 必须暴露一个可 import 的纯函数 API，例如 `extract_features(case)`；函数名必须写入 `manifest.json` 的 `pythonApi`，并在 `README.md` 中给出直接 import/调用示例。文件也必须保留 CLI 包装：从 stdin 读取一个 JSON 值，只向 stdout 写一个 JSON 对象；错误写 stderr 并以非零状态退出。
@@ -18,7 +18,7 @@
 - 调用 `mcp__ts_harness__get_runtime_settings` 读取最新运行时参数（虽然本节点不直接用 k，但保持与 iterative-solving 一致的设置读取习惯）。
 - 阅读 `user/problem-contract.md` 与 `user/data-spec.md`，明确任务目标、输入输出、评价口径和 case review 要求。
 - 阅读 `references/**` 中与本任务相关的章节，记录每个 feature 的 evidence（reference 路径、章节或页码、关键短引用）。DOCX 优先读取同名 `.docx.txt`；PDF 用 Claude Code SDK 的原生 `Read` 工具；其他文本可直接读取。
-- 若知识图谱已构建，对关键 feature 或 judgment 调一次 `mcp__ts_harness__query_knowledge` 验证领域定义与 reference 文本一致；只有当知识图谱的某条结论与本节点已写出的 feature 直接相关时才需要查询，避免无意义上下文消耗。
+- 若 `mcp__ts_harness__query_knowledge` 可用，对关键 feature 或 judgment 调一次该工具验证领域定义与 reference 文本一致；只有当返回结论与本节点已写出的 feature 直接相关时才需要查询，避免无意义上下文消耗。
 - 规划候选 feature 集合：每个 feature 至少对应一条 reference 证据；feature 之间应正交、可独立计算；judgment 阈值必须可被 reference 原文或 `user/data-spec.md` 支持。
 - 编写 extractor 前必须先在 `tools/reference-feature-extractor/` 下写出：
   - `evidence-map.json`：`schemaVersion="1.0"`，按 feature 汇总原始 reference evidence；每个 feature 必须含 `name`、`evidence` 数组，evidence 每项必须包含 `referencePath`、`quote` 和 `page` 或 `section`。

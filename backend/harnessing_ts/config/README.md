@@ -96,6 +96,7 @@ Current node directories:
 
 ```text
 nodes/problem-contract/
+nodes/knowledge-to-tools/
 nodes/iterative-solving/
 nodes/final-summary/
 ```

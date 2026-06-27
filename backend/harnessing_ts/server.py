@@ -4,6 +4,7 @@ import asyncio
 import mimetypes
 import os
 import socket
+import sys
 from typing import Any
 from urllib.parse import unquote
 
@@ -17,7 +18,7 @@ from harnessing_ts.api.payloads import build_bootstrap_payload, build_live_paylo
 from harnessing_ts.api.realtime import RealtimeEvent, RealtimeEventBroker
 from harnessing_ts.orchestrator import HarnessOrchestrator
 from harnessing_ts.paths import default_workspace_path, frontend_root
-from harnessing_ts.variants import resolve_variant
+from harnessing_ts.variants import resolve_variant, variant_help_text
 
 
 class SendRequest(BaseModel):
@@ -624,11 +625,19 @@ def _format_exception(exc: Exception) -> str:
 
 
 def main() -> None:
-    host = os.getenv("HOST", "127.0.0.1")
-    port = int(os.getenv("PORT", "4327"))
+    try:
+        host = _startup_host()
+        port = _startup_port()
+        control_mode = _startup_control_mode()
+        variant = resolve_variant()
+    except RuntimeError as exc:
+        _print_startup_error(str(exc), include_variant_help=True)
+        raise SystemExit(2) from None
+    except ValueError as exc:
+        _print_startup_error(str(exc))
+        raise SystemExit(2) from None
     print(f"Workspace: {default_workspace_path()}")
-    print(f"Control mode: {os.getenv('TS_HARNESS_CONTROL_MODE', 'auto')}")
-    variant = resolve_variant()
+    print(f"Control mode: {control_mode}")
     print(f"Ablation variant: {variant.id} · {variant.name}")
     if os.getenv("TS_HARNESS_DRY_RUN") == "true":
         print("Dry-run mode enabled")
@@ -636,6 +645,43 @@ def main() -> None:
         print("Debug actions enabled")
     print("Initializing backend and runtime workspace. The web UI URL will be printed when ready.")
     uvicorn.run("harnessing_ts.server:create_app", host=host, port=port, factory=True)
+
+
+def _startup_host() -> str:
+    host = os.getenv("HOST", "127.0.0.1").strip()
+    if not host:
+        raise ValueError("Invalid HOST: empty value. Use HOST=127.0.0.1 for local access or HOST=0.0.0.0 for LAN/server access.")
+    return host
+
+
+def _startup_port() -> int:
+    raw = os.getenv("PORT", "4327").strip()
+    try:
+        port = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"Invalid PORT={raw!r}; expected an integer from 1 to 65535, for example PORT=4327.") from exc
+    if not 1 <= port <= 65535:
+        raise ValueError(f"Invalid PORT={raw!r}; expected a TCP port from 1 to 65535, for example PORT=4327.")
+    return port
+
+
+def _startup_control_mode() -> str:
+    raw = os.getenv("TS_HARNESS_CONTROL_MODE", "auto").strip().lower()
+    if raw not in {"auto", "manual"}:
+        raise ValueError(
+            f"Invalid TS_HARNESS_CONTROL_MODE={raw!r}; expected 'auto' or 'manual'. "
+            "Use auto for automatic node transitions or manual for UI approval."
+        )
+    return raw
+
+
+def _print_startup_error(message: str, *, include_variant_help: bool = False) -> None:
+    print("HarnessingTS startup configuration error", file=sys.stderr)
+    print(message, file=sys.stderr)
+    if include_variant_help:
+        print("", file=sys.stderr)
+        print("Valid variant configuration:", file=sys.stderr)
+        print(variant_help_text(), file=sys.stderr)
 
 
 def _startup_report(message: str) -> None:

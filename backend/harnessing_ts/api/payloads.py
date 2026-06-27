@@ -81,9 +81,11 @@ def masked_llm_config(workspace_path: Path) -> dict[str, Any]:
 
 
 def _runtime_payload(orchestrator: HarnessOrchestrator, task_running: TaskRunning) -> dict[str, Any]:
+    pipeline_complete = orchestrator.node_state.is_pipeline_complete(orchestrator.get_state())
     return {
-        "running": task_running(getattr(orchestrator, "_server_run_task", None)),
+        "running": False if pipeline_complete else task_running(getattr(orchestrator, "_server_run_task", None)),
         "knowledgeGraphRunning": task_running(getattr(orchestrator, "_server_knowledge_graph_task", None)),
         "chainSummaryRunning": task_running(getattr(orchestrator, "_server_chain_summary_task", None)),
+        "pipelineComplete": pipeline_complete,
         "workspaceUv": orchestrator.get_runtime_status(),
     }

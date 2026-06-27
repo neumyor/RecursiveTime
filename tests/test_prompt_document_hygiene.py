@@ -105,7 +105,7 @@ def test_node_chain_orders_problem_to_knowledge_to_tools_to_solving_to_summary()
     ]
 
 
-def test_main_prompt_forbids_knowledge_query_before_graph_is_ready() -> None:
+def test_main_prompt_gates_knowledge_query_by_source_and_readiness() -> None:
     role = (
         REPO_ROOT
         / "backend"
@@ -116,8 +116,9 @@ def test_main_prompt_forbids_knowledge_query_before_graph_is_ready() -> None:
         / "role.md"
     ).read_text(encoding="utf-8")
 
-    assert "`knowledgeGraphReady` 为 true" in role
-    assert "未构建、构建中、失败或缺少有效 manifest 时不得尝试调用" in role
+    assert "`knowledgeQueryReady` 为 true" in role
+    assert "`knowledgeQuerySource` 为 `graph`" in role
+    assert "`knowledgeQuerySource` 为 `references`" in role
 
 
 def test_final_summary_prompt_does_not_request_impossible_failure_reroute() -> None:

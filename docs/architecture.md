@@ -39,11 +39,12 @@ The current implementation keeps runtime orchestration, domain routing rules, fi
 
 ```text
 problem-contract
+→ knowledge-to-tools
 → iterative-solving
 → final-summary
 ```
 
-The main session acts as orchestrator. Each node is an independent Claude Code SDK session with its own prompt, tool whitelist, node log, and completion summary.
+The main session acts as orchestrator. Each node is a Claude Code SDK session with its own prompt, tool whitelist, log, and completion summary. The `NOD-KGR-KTL-CRV-SUB-ADA` baseline uses the full four-node chain. Variants can disable specific capabilities; for example profiles without `KTL` skip `knowledge-to-tools`, so their chain becomes `problem-contract → iterative-solving → final-summary`.
 
 ## Node Roles
 
@@ -51,11 +52,15 @@ The main session acts as orchestrator. Each node is an independent Claude Code S
 
    Use the user request and references to acquire/process data, explore the data, clarify the actual task, and write both the whole-flow problem contract and the data specification.
 
-2. `iterative-solving`
+2. `knowledge-to-tools`
+
+   Use the problem contract, data specification, references, and the knowledge graph when available to build a deterministic reference feature extractor under `tools/reference-feature-extractor/`. The node must write the evidence map, feature plan, importable extractor, manifest/README contract, real-sample test cases, and evaluation report, then call the backend validator before later nodes can treat the extractor as trusted numeric evidence.
+
+3. `iterative-solving`
 
    Each round tries exactly one new method, or one explicit combination of previously persisted tools. The method must first be standardized under `tools` with an interface and usage docs, then executed and reviewed through data-first case analysis. The node must write the case review before the iteration summary. Bad-case attribution must start from raw input values or tool features, compare against good cases/prototypes, and only then connect to domain knowledge.
 
-3. `final-summary`
+4. `final-summary`
 
    If iteration is complete, summarize the full optimization trajectory, final tool-use solution, final results, limitations, and evidence.
 
@@ -76,18 +81,24 @@ state/nodes/<node-session-id>.json
 logs/main.jsonl
 logs/nodes/<node-session-id>.jsonl
 logs/timeline.jsonl
+logs/knowledge-graph-builder.jsonl
 logs/chain-builder.jsonl
 user/problem-contract.md
 user/data-spec.md
 user/iteration-state.md
 user/final-solution.md
+state/reference-feature-build.json
+artifacts/knowledge-graph.json
 artifacts/chain-summary.json
 artifacts/
 data/processed/
+tools/reference-feature-extractor/
 tools/
 runs/iterations/
 reports/iterations/
+reports/iterations/<iteration-id>-candidate-review.md
 reports/iterations/<iteration-id>-case-review.md
+reports/iterations/<iteration-id>-summary.md
 reports/final-summary.md
 ```
 
@@ -124,19 +135,23 @@ The frontend renders `tool_call` messages collapsed by default. The row title sh
 
 ## MCP Boundary
 
-The MCP server exposes only governance and audit tools:
+The MCP server exposes structured harness tools while leaving methodology in Markdown prompts and node specs:
 
 - `enter_node`
 - `finish_node`
 - `record_artifact`
 - `record_run`
+- `get_runtime_settings`
+- `query_knowledge` when the active variant allows it; `KGR` profiles use the built knowledge graph, while `RQA` reference-QA profiles answer directly from `references/**`
+- reference feature extractor validation/inspection/execution tools when the active variant allows `knowledge-to-tools`
 
-Methodology stays in Markdown prompts and node specs. MCP should not decide which ECG feature, classifier, or LLM judgment strategy is appropriate; it only records and mutates system state.
+MCP should not decide which ECG feature, classifier, or LLM judgment strategy is appropriate. It records or mutates harness state, exposes runtime settings, and provides deterministic access to already-built knowledge and reference-feature services.
 
 ## ECG5000 Example
 
 For ECG5000 abnormal sample classification, the harness should guide the agent toward this kind of flow:
 
 1. Build `user/problem-contract.md` and `user/data-spec.md` by combining the user request, ECG reference material, data acquisition through `sktime`, processed data schema, exploration, success criteria, evidence rules, and leakage risks.
-2. Run `iterative-solving` one or more times. Each round builds or revises exactly one tool method, or one explicit combination of existing tools, records results under `runs/iterations/<iteration-id>/`, writes `reports/iterations/<iteration-id>-case-review.md` first, then writes `reports/iterations/<iteration-id>-summary.md`. Case review centers on bad cases: analyze every bad case when there are fewer than 10, otherwise sample 5-20 cases with an explicit strategy. Each reviewed sample needs a visualization path, raw input evidence, current-method evidence, good-case/prototype comparison, and explanation level. Case review then summarizes statistical patterns across all bad cases or the largest computable bad-case set. Summary should focus on method changes, tool paths, aggregate metrics, target gaps, high-level case-review findings, and next-round decisions rather than duplicating per-case details.
-3. When the `finish_node` MCP call requests `loopDecision: "exit"` and `nextNode: "final-summary"`, run `final-summary` to summarize the full trajectory and final tool-use solution.
+2. Run `knowledge-to-tools` to turn reference evidence into a validated deterministic feature extractor under `tools/reference-feature-extractor/`, including evidence mapping, feature planning, real-sample tests, control/reference evaluation, and backend validation.
+3. Run `iterative-solving` one or more times. Each round builds or revises exactly one tool method, or one explicit combination of existing tools, records results under `runs/iterations/<iteration-id>/`, writes `reports/iterations/<iteration-id>-case-review.md` first, then writes `reports/iterations/<iteration-id>-summary.md`. Case review centers on bad cases: analyze every bad case when there are fewer than 10, otherwise sample 5-20 cases with an explicit strategy. Each reviewed sample needs a visualization path, raw input evidence, current-method evidence, good-case/prototype comparison, and explanation level. Case review then summarizes statistical patterns across all bad cases or the largest computable bad-case set. Summary should focus on method changes, tool paths, aggregate metrics, target gaps, high-level case-review findings, and next-round decisions rather than duplicating per-case details.
+4. When the `finish_node` MCP call requests `loopDecision: "exit"` and `nextNode: "final-summary"`, run `final-summary` to summarize the full trajectory and final tool-use solution.

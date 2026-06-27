@@ -3,7 +3,7 @@
 
 核心约束：
 - 每轮必须在候选阶段提出 k 个候选解决方案。k 不是固定常量，必须在候选生成前调用 MCP `mcp__ts_harness__get_runtime_settings`，读取 `iterativeCandidateCount` 作为本轮 k；如果用户在前端实时修改 k，后续读取必须采用新值。
-- 候选阶段不是方法排行榜或 baseline sweep。每个候选都必须围绕 contract、上一轮失败机制、reference knowledge graph 和数据证据形成清晰假设。
+- 候选阶段不是方法排行榜或 baseline sweep。每个候选都必须围绕 contract、上一轮失败机制、当前变体可用的 reference knowledge source 和数据证据形成清晰假设。
 - 每个候选必须分配一个 subagent 使用 `Task` 独立测试和 review。subagent 的输出必须包括：候选假设、最小实现或复用工具路径、评估命令、指标、bad-case 抽样与 case review 结论、风险、是否建议进入统一方案。
 - 主 node 负责统一综合所有 subagent 结果，记录为什么选择某个候选、组合候选、放弃候选或继续探索。不要让 subagent 直接调用 `mcp__ts_harness__finish_node`。
 - 只有被统一综合后决定保留或执行的方案，才必须落盘为 `tools/` 下标准化工具或工具组合；被淘汰候选的代码可留在 `runs/iterations/<iteration-id>/candidates/<candidate-id>/`，但不得污染 `tools/registry.json`。
@@ -12,12 +12,12 @@
 必须完成：
 - 读取 `user/problem-contract.md`，严格围绕 contract 的目标、输入输出、评价方式和停止条件工作。
 - 读取 `user/data-spec.md`，所有工具构建、训练、推理、评估、case review 和输出预测文件都必须遵守其中定义的数据路径等要求。
-- **必须调用 `mcp__ts_harness__query_knowledge`** 获取 reference knowledge graph 中的领域知识（如 ECG 异常类型定义、信号特征、常见方法、评价指标、bad case 归因线索等）。候选生成、case review 归因和 iteration summary 阶段都应按自然语言问题查询知识图谱。
+- 若系统注入了 `mcp__ts_harness__query_knowledge`，**必须调用该工具**获取领域知识（如 ECG 异常类型定义、信号特征、常见方法、评价指标、bad case 归因线索等）。`NOD-KGR-KTL-CRV-SUB-ADA` 中该工具查询 reference knowledge graph；`RQA` reference-QA 变体中该工具直接读取 `references/**`。候选生成、case review 归因和 iteration summary 阶段都应按自然语言问题查询。
 - 普通知识检索不要直接读取 `knowledge_base/tables/*.csv`、`knowledge_base/indexes/**` 或 `knowledge_base/cache/**`。这些文件是 knowledge graph builder/reasoner 的内部存储；只有用户明确要求调试知识库文件、CSV schema 或图谱构建错误时才可以直接读取。
 - 调用 `mcp__ts_harness__query_knowledge` 时默认不要请求原文证据详情。只有用户明确要求 citations/evidence，或本轮 case review 必须审计原始 reference 证据时，才设置 `includeEvidence=true`。
 - 读取已有 `tools/**`、`reports/iterations/**` 和 `user/iteration-state.md`。首轮迭代时这些路径可以不存在；若不存在，应从 contract 和 data-spec 开始建立第一轮工具。
 - 调用 `mcp__ts_harness__get_runtime_settings`，读取 `iterativeCandidateCount`，并在本轮候选审查报告中记录实际使用的 k。
-- 根据 contract、上一轮 `user/iteration-state.md`、知识图谱查询结果和已有工具，提出 k 个候选对象：
+- 根据 contract、上一轮 `user/iteration-state.md`、知识查询结果和已有工具，提出 k 个候选对象：
   - 一种新工具方法，例如一个形态特征规则、一个相似度检索器、一个传统 ML 分类器、一个深度学习推理工具、一个 LLM 判断器、一个验证/审查工具。
   - 或一种已有工具组合，例如“先用形态特征筛查，再用上一轮相似度工具复核”。组合本身也必须是一个明确方案。
   - 或一种可能的优化策略，例如在原有方法上修改部分可变参数或新增特殊模块。优化策略本身也必须是一个明确方案。优化策略包括参数、阈值、窗口、特征开关或模块增量。

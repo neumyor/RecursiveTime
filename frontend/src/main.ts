@@ -812,7 +812,10 @@ function applyRealtimeEvent(eventType: string, payload: JsonMap) {
     if (payload.nodes) state.bootstrap.nodes = payload.nodes;
     if (payload.state) state.bootstrap.state = payload.state;
     if (payload.timeline) state.bootstrap.timeline = payload.timeline;
+    syncRuntimeBusy(state.bootstrap);
+    state.pendingParts = reconcilePendingParts(state.bootstrap);
     render();
+    resolveRealtimeWaiters(state.bootstrap);
     return;
   }
   if (eventType === 'workspace_files' && payload.fileTree) {
@@ -828,13 +831,35 @@ function applyRealtimeEvent(eventType: string, payload: JsonMap) {
 
 function applyBootstrapSnapshot(data: Bootstrap) {
   state.bootstrap = data;
-  state.busy = Boolean(data.runtime?.running);
+  syncRuntimeBusy(data);
   state.pendingParts = reconcilePendingParts(data);
   state.loadingMessage = state.busy
     ? state.loadingMessage || loadingPart('后端运行中，正在实时接收最新消息')
     : null;
   render();
   resolveRealtimeWaiters(data);
+}
+
+function syncRuntimeBusy(data: Bootstrap | null) {
+  if (data && isPipelineComplete(data)) {
+    data.runtime = { ...(data.runtime || {}), running: false, pipelineComplete: true };
+  }
+  state.busy = isBackendRunning(data);
+  if (!state.busy) {
+    state.loadingMessage = null;
+  }
+}
+
+function isBackendRunning(data: Bootstrap | null): boolean {
+  if (!data) return false;
+  return Boolean(data.runtime?.running) && !isPipelineComplete(data);
+}
+
+function isPipelineComplete(data: Bootstrap | null): boolean {
+  const ws = data?.state || {};
+  const completedNodes = Array.isArray(ws.completedNodes) ? ws.completedNodes : [];
+  return Boolean(data?.runtime?.pipelineComplete)
+    || (completedNodes.includes('final-summary') && !ws.activeNode && !ws.activeNodeSessionId);
 }
 
 function render() {
@@ -953,8 +978,8 @@ function renderNodes(specs: JsonMap[], ws: JsonMap, sessions: JsonMap[]) {
     const session = latestByType.get(spec.type);
     const active = ws.activeNode === spec.type;
     const done = completedNodes.includes(spec.type);
-    const failed = !done && session?.status === 'failed';
-    const status = active ? 'active' : done ? 'done' : failed ? 'failed' : 'pending';
+    const failed = session?.status === 'failed';
+    const status = active ? 'active' : failed ? 'failed' : done ? 'done' : 'pending';
     const isOpen = state.selectedNodeType === spec.type;
     return `
       <details class="node-item" data-node="${escapeHtml(spec.type)}" ${isOpen ? 'open' : ''}>
@@ -2290,7 +2315,7 @@ function reconcilePendingParts(data: Bootstrap | null): JsonMap[] {
     .filter((part: JsonMap) => part.role === 'user' && part.text)
     .map((part: JsonMap) => normalizePendingText(part.text)));
   const unresolved = state.pendingParts.filter((part) => !isPendingPartLogged(part, loggedUserTexts));
-  return data.runtime?.running ? unresolved : [];
+  return isBackendRunning(data) ? unresolved : [];
 }
 
 function isPendingPartLogged(part: JsonMap, loggedUserTexts: Set<string>): boolean {
@@ -2319,6 +2344,7 @@ function normalizeChatParts(parts: JsonMap[]): JsonMap[] {
     .map((part: JsonMap) => ({ ...part, displayText: displayTextForPart(part) }))
     .filter((part: JsonMap) => {
       if (part.type === 'loading') return true;
+      if (isReasoningOnlyPart(part)) return false;
       if (!part.displayText.trim()) return false;
       if (part.role === 'system' && part.type === 'raw') {
         const subtype = part.raw?.subtype || part.text || part.displayText || '';
@@ -2328,6 +2354,24 @@ function normalizeChatParts(parts: JsonMap[]): JsonMap[] {
       if (part.role === 'system' && part.type === 'result' && part.raw?.is_error !== true) return false;
       return true;
     });
+}
+
+function isReasoningOnlyPart(part: JsonMap): boolean {
+  if (part.role !== 'assistant' || part.type !== 'text') return false;
+  if (typeof part.text === 'string' && part.text.trim()) return false;
+  const content = Array.isArray(part.raw?.message?.content)
+    ? part.raw.message.content
+    : Array.isArray(part.raw?.content)
+      ? part.raw.content
+      : [];
+  if (!content.length) return false;
+  return content.every((item: JsonMap | string) => {
+    if (typeof item === 'string') return !item.trim();
+    if (!item || typeof item !== 'object') return false;
+    if (typeof item.text === 'string' && item.text.trim()) return false;
+    if (item.type === 'tool_use' || item.type === 'tool_result' || item.name || item.input || item.tool_use_id) return false;
+    return Boolean(item.thinking || item.signature || item.redacted_thinking);
+  });
 }
 
 function displayTextForPart(part: JsonMap) {
@@ -2520,7 +2564,10 @@ function variantPill(variant: JsonMap | null | undefined) {
   if (!variant?.id) return '<span class="mini-pill pending">-</span>';
   const id = String(variant.id).toUpperCase();
   const label = `${id} · ${variant.name || 'Unknown variant'}`;
-  return `<span class="mini-pill variant-pill variant-${escapeHtml(id.toLowerCase())}" title="${escapeHtml(variant.description || label)}">${escapeHtml(label)}</span>`;
+  const isDefault = id === 'NOD-KGR-KTL-CRV-SUB-ADA';
+  const features = Array.isArray(variant.features) ? `Features: ${variant.features.join(', ')}` : '';
+  const title = [variant.description || label, features].filter(Boolean).join('\n');
+  return `<span class="mini-pill variant-pill ${isDefault ? 'variant-default' : 'variant-ablation'}" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
 }
 
 function formatRuntimeUv(runtimeUv: JsonMap | null | undefined) {
