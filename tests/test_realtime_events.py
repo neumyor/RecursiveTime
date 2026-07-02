@@ -120,6 +120,22 @@ def test_reference_upload_emits_realtime_file_tree(tmp_path) -> None:
     assert events[-1][1]["fileTree"]["root"] == str(tmp_path)
 
 
+def test_reference_delete_emits_realtime_file_tree(tmp_path) -> None:
+    orchestrator = HarnessOrchestrator(tmp_path)
+    orchestrator.initialize()
+    path = orchestrator.upload_reference_file("paper.txt", b"reference")
+    events: list[tuple[str, dict]] = []
+    orchestrator.set_realtime_event_sink(lambda kind, payload: events.append((kind, payload)))
+
+    deleted = orchestrator.delete_reference_file(path)
+
+    assert deleted == "references/paper.txt"
+    assert events[-1][0] == "workspace_files"
+    assert events[-1][1]["change"] == {"kind": "reference_deleted", "path": path}
+    assert events[-1][1]["fileTree"]["root"] == str(tmp_path)
+    assert not (tmp_path / path).exists()
+
+
 def test_raw_zip_upload_emits_realtime_file_tree(tmp_path) -> None:
     orchestrator = HarnessOrchestrator(tmp_path)
     orchestrator.initialize()

@@ -360,6 +360,26 @@ class WorkspaceStore:
     def read_knowledge_graph_parts(self) -> list[Part]:
         return filter_display_parts(collapse_tool_parts(read_jsonl(self.knowledge_graph_log_path)))
 
+    def clear_knowledge_graph(self) -> None:
+        _remove_path(self.root / "knowledge_base")
+        self.knowledge_graph_path.unlink(missing_ok=True)
+        self.knowledge_graph_status_path.unlink(missing_ok=True)
+        clear_file(self.knowledge_graph_log_path)
+        self.ensure_layout()
+        self.append_timeline({
+            "type": "knowledge_graph_rebuild_started",
+            "timestamp": now_iso(),
+            "message": "Knowledge graph cleared before rebuild",
+            "payload": {
+                "cleared": [
+                    "knowledge_base",
+                    "artifacts/knowledge-graph.json",
+                    "state/knowledge-graph-build.json",
+                    "logs/knowledge-graph-builder.jsonl",
+                ],
+            },
+        })
+
     def read_chain_summary(self) -> dict[str, Any]:
         from harnessing_ts.chain_summary import chain_summary_from_logs, read_chain_summary
 
@@ -545,6 +565,25 @@ class WorkspaceStore:
             "timestamp": now_iso(),
             "message": rel,
             "payload": {"path": rel, "size": len(content), "textDerivative": derivative},
+        })
+        return rel
+
+    def delete_reference_file(self, path: str) -> str:
+        rel_path = path.strip().lstrip("/")
+        root = self.root.resolve()
+        references_root = (root / "references").resolve()
+        target = (root / rel_path).resolve()
+        if target == references_root or references_root not in target.parents:
+            raise ValueError("Reference deletion is limited to files under references/.")
+        if not target.exists() or not target.is_file():
+            raise FileNotFoundError(rel_path)
+        rel = str(target.relative_to(root))
+        target.unlink()
+        self.append_timeline({
+            "type": "reference_deleted",
+            "timestamp": now_iso(),
+            "message": rel,
+            "payload": {"path": rel},
         })
         return rel
 

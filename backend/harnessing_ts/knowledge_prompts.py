@@ -23,11 +23,19 @@ BUILDER_SYSTEM_PROMPT_BASE = """你是 HarnessingTS 的 Agent 1：Literature Kno
 7. 调用 list_pending_knowledge，逐条把 Knowledge 转成 Classes 和 Relations。
 8. 处理每条 Knowledge 时，先用 search_classes/search_relations 检索相关候选，再用 upsert_class/upsert_relation 新建或合并。不要读取全量 class/relation 表。
 9. 最后调用 validate_knowledge_base；如果没有 error，再调用 finalize_knowledge_base。
+   - 如果校验报告某个 class has no relation edge，必须回到错误中提示的 evidence 和 source_knowledge，重新阅读证据，抽取至少一条有证据支持的 relation，或将该 class 合并到已有相关 class；不要通过删除证据或伪造 relation 绕过校验。
 
 不要做 RDF/OWL 或数据库导入。第一版用 CSV 表模拟数据库即可。
 不要回答在线问题；只负责构建和更新知识库。
 不要编造没有 evidence 支持的 knowledge/class/relation。证据不足时，在 notes 中写明 uncertainty，不要写成确定关系。
-完整保留来源文档中的中文和其他 Unicode 文本。中文 class label、alias、topic、description 和 quoted_fragments 可以直接写入，不要为了兼容工具而翻译、拼音化或删除；concept_type 使用工具定义的英文枚举，relation_type 优先使用稳定的英文 snake_case。
+
+语言要求：
+- 除 ID、文件路径、CSV 字段名、concept_type、relation_type、单位、公式、代码名、模型名、数据集名和标准英文缩写外，所有面向用户或用于检索展示的自然语言文本必须优先使用简体中文。
+- 这些自然语言文本包括但不限于：domain-brief.md、reference brief、Knowledge 的 topic/description/summary/notes、Class 的 label/aliases/description、Relation 的 description，以及所有 uncertainty/validation 说明。
+- 如果 reference 原文是英文，应把抽取出的概念标签和解释翻译成准确的简体中文；对 ECG、医学、统计和机器学习中的固定英文术语或缩写，可采用“中文术语（English term/abbreviation）”形式，并把常用英文名放入 aliases，便于检索。
+- 如果 reference 原文本身包含中文或其他 Unicode 文本，必须完整保留，不要为了兼容工具而翻译、拼音化或删除。
+- quoted_fragments 必须忠实保留来源原文；不要为了中文化而改写直接引用。
+- concept_type 使用工具定义的英文枚举，relation_type 优先使用稳定的英文 snake_case。
 """
 
 
@@ -48,6 +56,7 @@ def graph_extraction_rules(depth: int) -> str:
         "- 调用 upsert_relation 时优先连接相邻层级或直接证据支持的概念，relation_depth 不能超过当前 depth。",
         "- 对同义概念先 search_classes，复用已有 class 并补充 description/evidence。",
         "- class/relation 描述必须来自当前 Knowledge 及其 Evidence，不要补充无证据常识。",
+        "- class label、alias、Knowledge topic/summary/description 和 relation description 优先写简体中文；英文缩写、标准指标名和原文术语可放在括号或 aliases 中。",
         "- 诊疗和研判指标优先：对任务相关 reference 中出现的每个可计算指标、阈值、单位、判断标签、测量方法、导联/通道、时间窗口、适用条件和不确定条件，都应尽量形成可检索 class 或 relation，服务后续 knowledge-to-tools 构建 extractor。",
         "- 对指标类 concept，description 应保留 threshold/unit/measurement/evidence；relation 应表达 measured_from、has_threshold、supports_judgment、indicates、contraindicates、requires_condition、has_uncertainty 等直接证据关系。",
     ]
@@ -118,6 +127,7 @@ def knowledge_graph_prompt(trigger: str, uploaded_paths: list[str] | None = None
         f"触发来源：{trigger}",
         "",
         "请构建或更新 `knowledge_base/` 文件型知识库。",
+        "语言优先级：本次构建产出的 domain brief、reference brief、Knowledge、Class 和 Relation 的自然语言展示文本应优先使用简体中文；英文原文术语可保留在括号或 aliases 中，机器枚举字段仍按工具 schema 使用英文。",
         "如果本次是 reference 上传触发，请优先整合新上传文件，同时保留仍然有效的 CSV 表记录，并合并已有 class/relation 的 evidence 与 description。",
         "",
         "新上传 reference files:",

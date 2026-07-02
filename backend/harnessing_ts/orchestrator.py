@@ -805,6 +805,8 @@ class HarnessOrchestrator:
         if not self.variant.knowledge_graph:
             raise RuntimeError(f"Knowledge graph building is disabled by ablation variant {self.variant.id}.")
         setattr(self, "_knowledge_graph_pause_requested", False)
+        if trigger == "rebuild":
+            self.store.clear_knowledge_graph()
         status = self.store.write_knowledge_graph_build_status({
             "running": True,
             "status": "running",
@@ -1076,6 +1078,15 @@ class HarnessOrchestrator:
             "change": {"kind": "reference_uploaded", "path": path},
         })
         return path
+
+    def delete_reference_file(self, path: str) -> str:
+        self._ensure_initialized()
+        deleted = self.store.delete_reference_file(path)
+        self._emit_realtime("workspace_files", {
+            "fileTree": self.get_file_tree(),
+            "change": {"kind": "reference_deleted", "path": deleted},
+        })
+        return deleted
 
     def upload_raw_data_zip(self, filename: str, content: bytes) -> dict[str, Any]:
         self._ensure_initialized()

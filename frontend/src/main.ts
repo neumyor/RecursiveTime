@@ -1,6 +1,7 @@
 import './styles.css';
-import { fetchJson, postForm, postJson } from './api';
+import { deleteJson, fetchJson, postForm, postJson } from './api';
 import DOMPurify from 'dompurify';
+import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY } from 'd3-force';
 import {
   Activity,
   AlertTriangle,
@@ -25,6 +26,7 @@ import {
   Pause,
   Play,
   RefreshCw,
+  RotateCcw,
   Send,
   Settings2,
   ShieldCheck,
@@ -61,6 +63,9 @@ const state = {
     : 'chat') as 'chat' | 'knowledgeGraph' | 'chainSummary' | 'imageViewer' | 'settings'),
   selectedImagePath: new URLSearchParams(window.location.search).get('path') || '',
   selectedGraphNodeId: null as string | null,
+  knowledgeGraphTab: 'graph' as 'graph' | 'trace',
+  graphInfoCollapsed: false,
+  chainNavCollapsed: false,
   selectedKnowledgeBaseKind: null as string | null,
   knowledgeBaseCards: null as JsonMap | null,
   knowledgeBaseCardsBusy: false,
@@ -129,7 +134,7 @@ app.innerHTML = `
       <div class="brand-mark" data-icon="Sparkles"></div>
       <div>
         <h1>HarnessingTS</h1>
-        <p>Time-Series Tool-Use Harness</p>
+        <p>时间序列智能工作台</p>
       </div>
     </section>
 
@@ -137,43 +142,39 @@ app.innerHTML = `
     <section class="panel status-panel">
       <div class="panel-heading">
         <span data-icon="Gauge"></span>
-        <span>Workspace</span>
+        <span>工作区</span>
       </div>
       <dl class="kv">
-        <dt>Status</dt>
-        <dd id="statusText">Loading</dd>
-        <dt>Mode</dt>
+        <dt>状态</dt>
+        <dd id="statusText">加载中</dd>
+        <dt>模式</dt>
         <dd id="modeText">-</dd>
-        <dt>Variant</dt>
+        <dt>流程</dt>
         <dd id="variantText">-</dd>
-        <dt>Model</dt>
+        <dt>模型</dt>
         <dd id="modelText">-</dd>
-        <dt>Runtime</dt>
+        <dt>环境</dt>
         <dd id="runtimeUvText">-</dd>
       </dl>
-      <div class="workspace-actions">
-        <button id="stateBtn" type="button" class="ghost"><span data-icon="Archive"></span><span>State</span></button>
-        <button id="llmBtn" type="button" class="ghost"><span data-icon="Settings2"></span><span>LLM</span></button>
-      </div>
-      <button id="settingsBtn" type="button" class="workspace-settings-btn"><span data-icon="SlidersHorizontal"></span><span>Settings</span></button>
+      <button id="settingsBtn" type="button" class="workspace-settings-btn"><span data-icon="SlidersHorizontal"></span><span>工作区设置</span></button>
     </section>
 
     <section id="pendingControlPanel" class="panel control-panel" hidden>
       <div class="panel-heading">
         <span data-icon="ShieldCheck"></span>
-        <span>Pending Control</span>
+        <span>等待确认</span>
       </div>
       <div id="pendingControlBody" class="control-body"></div>
       <div class="split-actions">
-        <button id="approveControlBtn" type="button" class="success-btn"><span data-icon="Check"></span><span>Approve</span></button>
-        <button id="rejectControlBtn" type="button" class="danger ghost"><span data-icon="X"></span><span>Reject</span></button>
+        <button id="approveControlBtn" type="button" class="success-btn"><span data-icon="Check"></span><span>同意</span></button>
+        <button id="rejectControlBtn" type="button" class="danger ghost"><span data-icon="X"></span><span>拒绝</span></button>
       </div>
     </section>
 
     <section class="panel">
       <div class="panel-heading">
         <span data-icon="GitBranch"></span>
-        <span>Node Chain</span>
+        <span>节点流程</span>
       </div>
       <div id="nodeList" class="node-list"></div>
     </section>
@@ -181,7 +182,7 @@ app.innerHTML = `
     <section class="panel">
       <div class="panel-heading">
         <span data-icon="Boxes"></span>
-        <span>Selected Node</span>
+        <span>当前节点</span>
       </div>
       <div id="nodeDetail" class="node-detail"></div>
     </section>
@@ -189,63 +190,72 @@ app.innerHTML = `
     <details class="panel timeline-panel">
       <summary class="panel-heading">
         <span data-icon="Clock3"></span>
-        <span>Timeline</span>
+        <span>时间线</span>
       </summary>
       <div id="timeline" class="timeline"></div>
     </details>
     </div>
 
     <div class="graph-left-content">
-      <section class="panel">
+      <section class="panel graph-control-card">
         <div class="panel-heading">
           <span data-icon="Settings2"></span>
-          <span>Builder Settings</span>
+          <span>构建设置</span>
         </div>
         <div id="graphBuildStatus" class="graph-build-status"></div>
-        <div class="graph-left-actions">
-          <button id="buildGraphBtn" type="button"><span data-icon="RefreshCw"></span><span>Build</span></button>
-          <button id="continueGraphBtn" type="button" class="secondary"><span data-icon="Play"></span><span>Continue</span></button>
-          <button id="pauseGraphBtn" type="button" class="danger ghost"><span data-icon="Pause"></span><span>Pause</span></button>
-          <button id="backToChatBtn" type="button" class="ghost"><span data-icon="ChevronLeft"></span><span>Main</span></button>
+        <div id="graphLeftActions" class="graph-left-actions">
+          <button id="buildGraphBtn" type="button"><span data-icon="RefreshCw"></span><span>构建</span></button>
+          <button id="rebuildGraphBtn" type="button" class="rebuild" hidden><span data-icon="RotateCcw"></span><span>重建</span></button>
+          <button id="continueGraphBtn" type="button" class="secondary"><span data-icon="Play"></span><span>继续</span></button>
+          <button id="pauseGraphBtn" type="button" class="danger ghost"><span data-icon="Pause"></span><span>暂停</span></button>
         </div>
+      </section>
+
+      <details class="panel graph-settings-card">
+        <summary class="panel-heading">
+          <span data-icon="SlidersHorizontal"></span>
+          <span>详细设置</span>
+        </summary>
+        <div class="graph-settings-body">
         <label>
-          <span>Extraction Depth</span>
+          <span>抽取深度</span>
           <input id="graphExtractionDepthInput" type="number" min="1" max="4" step="1" />
         </label>
         <label>
-          <span>Auth</span>
+          <span>认证方式</span>
           <select id="graphAuthMode">
-            <option value="manual">manual</option>
-            <option value="sdk-default">sdk-default</option>
+            <option value="manual">手动配置</option>
+            <option value="sdk-default">SDK 默认</option>
           </select>
         </label>
         <label>
-          <span>Protocol</span>
+          <span>协议</span>
           <select id="graphProtocol">
-            <option value="">auto</option>
+            <option value="">自动</option>
             <option value="anthropic">anthropic</option>
             <option value="openai-compat">openai-compat</option>
           </select>
         </label>
         <label>
-          <span>Model</span>
-          <input id="graphModelInput" type="text" placeholder="inherits main model" />
+          <span>模型</span>
+          <input id="graphModelInput" type="text" placeholder="默认继承主模型" />
         </label>
         <label>
-          <span>Base URL</span>
-          <input id="graphBaseUrlInput" type="text" placeholder="inherits main endpoint" />
+          <span>接口地址</span>
+          <input id="graphBaseUrlInput" type="text" placeholder="默认继承主接口地址" />
         </label>
         <label>
-          <span>API Key</span>
-          <input id="graphApiKeyInput" type="password" placeholder="leave blank to keep current" />
+          <span>API 密钥</span>
+          <input id="graphApiKeyInput" type="password" placeholder="留空表示保持当前密钥" />
         </label>
-        <button id="saveGraphLlmBtn" type="button" class="secondary full-width"><span data-icon="Check"></span><span>Save builder LLM</span></button>
-      </section>
+        <button id="saveGraphLlmBtn" type="button" class="secondary full-width"><span data-icon="Check"></span><span>保存构建模型</span></button>
+        </div>
+      </details>
 
       <section class="panel">
         <div class="panel-heading">
           <span data-icon="Gauge"></span>
-          <span>Knowledge Base</span>
+          <span>知识库</span>
         </div>
         <div class="knowledge-summary" id="knowledgeSummary"></div>
         <div class="knowledge-card-list" id="knowledgeCards"></div>
@@ -257,33 +267,33 @@ app.innerHTML = `
     <header class="toolbar">
       <div class="toolbar-main">
         <div class="title-group">
-          <div class="eyebrow"><span data-icon="Bot"></span><span>Main Session</span></div>
-          <h2 id="mainTitle">Orchestrator</h2>
+          <div class="eyebrow"><span data-icon="Bot"></span><span>主会话</span></div>
+          <h2 id="mainTitle">任务编排</h2>
         </div>
         <label class="transcript-filter">
-          <span>Transcript</span>
+          <span>记录范围</span>
           <select id="transcriptScope"></select>
         </label>
       </div>
       <div class="toolbar-actions">
-        <button id="interruptBtn" type="button" class="danger ghost"><span data-icon="Pause"></span><span>Pause</span></button>
-        <button id="resetChatBtn" type="button" class="ghost debug-only"><span data-icon="RefreshCw"></span><span>Reset Chat</span></button>
-        <button id="clearAllLogsBtn" type="button" class="danger ghost debug-only"><span data-icon="Trash2"></span><span>Reset Workspace</span></button>
+        <button id="resetChatBtn" type="button" class="ghost debug-only"><span data-icon="RefreshCw"></span><span>重置会话</span></button>
+        <button id="clearAllLogsBtn" type="button" class="danger ghost debug-only"><span data-icon="Trash2"></span><span>重置工作区</span></button>
       </div>
     </header>
 
     <section id="chatStream" class="chat-stream"></section>
+    <button id="chatTopBtn" type="button" class="chat-top-btn" title="回到顶部" aria-label="回到顶部"><span data-icon="ArrowUp"></span></button>
 
     <section id="settingsView" class="settings-view" hidden>
       <header class="settings-header">
         <div class="settings-header-inner">
           <div class="settings-header-text">
-            <div class="settings-eyebrow"><span data-icon="SlidersHorizontal"></span><span>Workspace</span></div>
-            <h1 class="settings-title">Settings</h1>
-            <p class="settings-subtitle">All configurable parameters for this workspace. Changes apply immediately or on the next message.</p>
+            <div class="settings-eyebrow"><span data-icon="SlidersHorizontal"></span><span>工作区</span></div>
+            <h1 class="settings-title">设置</h1>
+            <p class="settings-subtitle">这里集中管理当前工作区的运行参数和模型配置。部分改动会立即生效，部分会在下一条消息后生效。</p>
           </div>
           <div class="settings-header-actions">
-            <button id="settingsDoneBtn" type="button" class="settings-done-btn"><span data-icon="ChevronLeft"></span><span>Back to Chat</span></button>
+            <button id="settingsDoneBtn" type="button" class="settings-done-btn"><span data-icon="ChevronLeft"></span><span>返回主会话</span></button>
           </div>
         </div>
       </header>
@@ -292,83 +302,111 @@ app.innerHTML = `
     <section id="knowledgeGraphView" class="knowledge-graph-view" hidden>
       <div class="graph-header">
         <div class="graph-title-block">
-          <div class="eyebrow"><span data-icon="Network"></span><span>Knowledge Graph</span></div>
-          <h2 id="graphTitle">Reference Knowledge</h2>
+          <div class="eyebrow"><span data-icon="Network"></span><span>知识图谱</span></div>
+          <h2 id="graphTitle">参考知识</h2>
+        </div>
+        <div class="graph-header-actions">
+          <button id="backToChatBtn" type="button" class="graph-back-button"><span data-icon="ChevronLeft"></span><span>返回主会话</span></button>
         </div>
       </div>
-      <section class="builder-trace-panel">
-        <div class="panel-heading">
-          <span data-icon="TerminalSquare"></span>
-          <span>Builder Agent Trace</span>
+      <nav class="graph-tabs" aria-label="知识图谱页面切换">
+        <button id="graphTabTrace" type="button" class="graph-tab" data-graph-tab="trace"><span data-icon="TerminalSquare"></span><span>构建过程</span></button>
+        <button id="graphTabGraph" type="button" class="graph-tab active" data-graph-tab="graph"><span data-icon="Network"></span><span>知识图谱</span></button>
+      </nav>
+      <div id="graphTracePanel" class="graph-tab-panel graph-trace-panel" hidden>
+        <section class="builder-trace-panel">
+          <div class="panel-heading">
+            <span data-icon="TerminalSquare"></span>
+            <span>构建过程记录</span>
+          </div>
+          <div id="builderTrace" class="builder-trace"></div>
+        </section>
+      </div>
+      <div id="graphKnowledgePanel" class="graph-tab-panel graph-knowledge-panel">
+        <div id="graphLayout" class="graph-layout">
+          <div id="graphCanvas" class="graph-canvas"></div>
+          <button id="graphInfoToggle" class="graph-info-toggle" type="button" title="折叠图谱信息"><span data-icon="ChevronRight"></span></button>
+          <aside id="graphInfoPanel" class="graph-inspector-shell">
+            <header class="graph-inspector-header">
+              <span data-icon="Info"></span>
+              <span>图谱信息</span>
+            </header>
+            <section id="graphInspector" class="graph-inspector"></section>
+          </aside>
         </div>
-        <div id="builderTrace" class="builder-trace"></div>
-      </section>
-      <div class="graph-layout">
-        <div id="graphCanvas" class="graph-canvas"></div>
-        <section id="graphInspector" class="graph-inspector"></section>
       </div>
     </section>
 
     <section id="chainSummaryView" class="chain-summary-view" hidden>
       <header class="chain-header">
         <div class="chain-title-block">
-          <div class="eyebrow"><span data-icon="Activity"></span><span>Chain Summary</span></div>
+          <div class="eyebrow"><span data-icon="Activity"></span><span>流程总结</span></div>
           <h2>思维链总结</h2>
-          <p>把当前 workspace 的日志、iteration 报告、运行结果和样本证据组织成一条可审计的决策链。</p>
+          <p>把当前工作区的日志、迭代报告、运行结果和样本证据组织成一条可审计的决策链。</p>
         </div>
         <div class="chain-header-actions">
           <button id="backToChatFromChainBtn" type="button" class="chain-back-btn"><span data-icon="ChevronLeft"></span><span>返回主会话</span></button>
           <button id="buildChainSummaryBtn" type="button" class="chain-generate-btn"><span data-icon="RefreshCw"></span><span>生成思维链总结</span></button>
         </div>
       </header>
-      <section id="chainBuildStatus" class="chain-build-status"></section>
-      <section id="chainMetricChart" class="chain-chart-panel"></section>
-      <section id="chainSummaryContent" class="chain-content-panel"></section>
+      <div id="chainBody" class="chain-body">
+        <button id="chainNavToggle" class="chain-nav-toggle" type="button" title="折叠目录"><span data-icon="ChevronLeft"></span></button>
+        <aside id="chainNav" class="chain-nav">
+          <div class="chain-nav-heading"><span data-icon="GitBranch"></span><span>导航窗格</span></div>
+          <nav id="chainNavContent" class="chain-nav-content" aria-label="思维链总结目录"></nav>
+        </aside>
+        <div id="chainMainScroll" class="chain-main-scroll">
+          <section id="chainBuildStatus" class="chain-build-status chain-anchor"></section>
+          <section id="chainMetricChart" class="chain-chart-panel"></section>
+          <section id="chainSummaryContent" class="chain-content-panel"></section>
+        </div>
+      </div>
     </section>
 
     <section id="imageViewerView" class="image-viewer-view" hidden>
       <header class="image-viewer-header">
         <div>
-          <div class="eyebrow"><span data-icon="Activity"></span><span>Chain Summary Image</span></div>
+          <div class="eyebrow"><span data-icon="Activity"></span><span>总结图片</span></div>
           <h2 id="imageViewerTitle">样本可视化</h2>
         </div>
         <button id="backToChainFromImageBtn" type="button" class="chain-back-btn"><span data-icon="ChevronLeft"></span><span>返回思维链总结</span></button>
       </header>
       <section class="image-viewer-stage">
-        <img id="imageViewerImage" alt="Chain summary visualization" />
+        <img id="imageViewerImage" alt="流程总结可视化图片" />
       </section>
       <div id="imageViewerPath" class="image-viewer-path"></div>
     </section>
 
     <form id="sendForm" class="composer">
       <div class="composer-shell">
-        <textarea id="messageInput" rows="1" placeholder="向 orchestrator 发送消息"></textarea>
+        <textarea id="messageInput" rows="1" placeholder="向任务编排器发送消息"></textarea>
+        <button id="interruptBtn" type="button" class="composer-stop-btn" title="暂停回答" hidden><span data-icon="Square"></span></button>
         <button id="sendBtn" type="submit" class="send-round" title="发送" disabled><span data-icon="ArrowUp"></span></button>
       </div>
     </form>
   </main>
 
   <aside class="right-rail">
-    <button id="kgCta" class="kg-cta" type="button" data-state="idle" aria-label="Open Knowledge Graph">
+    <button id="kgCta" class="kg-cta" type="button" data-state="idle" aria-label="打开知识图谱">
       <div class="kg-cta-icon"><span data-icon="Network"></span></div>
       <div class="kg-cta-body">
-        <div class="kg-cta-eyebrow">Reference Knowledge</div>
-        <div class="kg-cta-title">Knowledge Graph</div>
+        <div class="kg-cta-eyebrow">参考知识</div>
+        <div class="kg-cta-title">知识图谱</div>
         <div class="kg-cta-meta">
-          <span class="kg-cta-pill" id="kgCtaPill">Idle</span>
-          <span class="kg-cta-stats" id="kgCtaStats">not built</span>
+          <span class="kg-cta-pill" id="kgCtaPill">空闲</span>
+          <span class="kg-cta-stats" id="kgCtaStats">尚未构建</span>
         </div>
       </div>
       <div class="kg-cta-arrow"><span data-icon="ChevronRight"></span></div>
     </button>
-    <button id="chainCta" class="kg-cta chain-cta" type="button" data-state="idle" aria-label="Open Chain Summary">
+    <button id="chainCta" class="kg-cta chain-cta" type="button" data-state="idle" aria-label="打开流程总结">
       <div class="kg-cta-icon"><span data-icon="Activity"></span></div>
       <div class="kg-cta-body">
-        <div class="kg-cta-eyebrow">Agent Trajectory</div>
+        <div class="kg-cta-eyebrow">执行轨迹</div>
         <div class="kg-cta-title">思维链总结</div>
         <div class="kg-cta-meta">
-          <span class="kg-cta-pill" id="chainCtaPill">Idle</span>
-          <span class="kg-cta-stats" id="chainCtaStats">not generated</span>
+          <span class="kg-cta-pill" id="chainCtaPill">空闲</span>
+          <span class="kg-cta-stats" id="chainCtaStats">尚未生成</span>
         </div>
       </div>
       <div class="kg-cta-arrow"><span data-icon="ChevronRight"></span></div>
@@ -376,23 +414,28 @@ app.innerHTML = `
     <section class="panel files-panel">
       <div class="panel-heading">
         <span data-icon="FolderTree"></span>
-        <span>Workspace Files</span>
+        <span>工作区文件</span>
       </div>
       <div id="workspacePath" class="workspace-path"></div>
       <form id="uploadForm" class="upload-form">
-        <label>
-          <span>Reference Files</span>
-          <input id="referenceFiles" type="file" multiple />
-        </label>
-        <button id="uploadBtn" type="submit" class="secondary"><span data-icon="Upload"></span><span>Upload references</span></button>
+        <button id="uploadBtn" type="button" class="upload-pick-button">
+          <span class="upload-pick-icon" data-icon="Upload"></span>
+          <span class="upload-pick-copy">
+            <span class="upload-pick-title">上传参考文件</span>
+            <span class="upload-pick-subtitle">选择一个或多个文件后自动上传</span>
+          </span>
+        </button>
+        <input id="referenceFiles" class="sr-only-file" type="file" multiple />
       </form>
       <form id="rawZipUploadForm" class="upload-form">
-        <label>
-          <span>Raw Data Zip</span>
-          <input id="rawZipFile" type="file" accept=".zip" />
-        </label>
-        <div class="upload-hint">Upload a .zip archive; it will be extracted into data/raw/.</div>
-        <button id="rawZipUploadBtn" type="submit" class="secondary"><span data-icon="HardDriveUpload"></span><span>Extract raw data</span></button>
+        <button id="rawZipUploadBtn" type="button" class="upload-pick-button">
+          <span class="upload-pick-icon" data-icon="HardDriveUpload"></span>
+          <span class="upload-pick-copy">
+            <span class="upload-pick-title">导入原始数据压缩包</span>
+            <span class="upload-pick-subtitle">选择 .zip 后自动解压到 data/raw/</span>
+          </span>
+        </button>
+        <input id="rawZipFile" class="sr-only-file" type="file" accept=".zip" />
       </form>
       <div id="fileTree" class="file-tree"></div>
     </section>
@@ -401,8 +444,11 @@ app.innerHTML = `
   <dialog id="detailDialog">
     <form method="dialog">
       <header>
-        <h3 id="dialogTitle">Detail</h3>
-        <button value="close" class="icon-btn ghost" type="submit" title="关闭"><span data-icon="X"></span></button>
+        <h3 id="dialogTitle">详情</h3>
+        <div class="dialog-actions">
+          <button id="deleteReferenceBtn" value="" class="dialog-delete-btn" type="button" hidden><span data-icon="Trash2"></span><span>删除参考文献</span></button>
+          <button value="close" class="icon-btn ghost" type="submit" title="关闭"><span data-icon="X"></span></button>
+        </div>
       </header>
       <pre id="dialogBody"></pre>
     </form>
@@ -433,6 +479,7 @@ const iconMap: Record<string, IconNode> = {
   Pause,
   Play,
   RefreshCw,
+  RotateCcw,
   Send,
   Settings2,
   ShieldCheck,
@@ -461,6 +508,7 @@ const els = {
   nodeList: query('#nodeList'),
   nodeDetail: query('#nodeDetail'),
   chatStream: query<HTMLElement>('#chatStream'),
+  chatTopBtn: query<HTMLButtonElement>('#chatTopBtn'),
   knowledgeGraphView: query<HTMLElement>('#knowledgeGraphView'),
   chainSummaryView: query<HTMLElement>('#chainSummaryView'),
   imageViewerView: query<HTMLElement>('#imageViewerView'),
@@ -470,13 +518,26 @@ const els = {
   backToChainFromImageBtn: query<HTMLButtonElement>('#backToChainFromImageBtn'),
   backToChatFromChainBtn: query<HTMLButtonElement>('#backToChatFromChainBtn'),
   buildChainSummaryBtn: query<HTMLButtonElement>('#buildChainSummaryBtn'),
+  chainBody: query<HTMLElement>('#chainBody'),
+  chainNav: query<HTMLElement>('#chainNav'),
+  chainNavToggle: query<HTMLButtonElement>('#chainNavToggle'),
+  chainNavContent: query<HTMLElement>('#chainNavContent'),
+  chainMainScroll: query<HTMLElement>('#chainMainScroll'),
   chainBuildStatus: query<HTMLElement>('#chainBuildStatus'),
   chainMetricChart: query<HTMLElement>('#chainMetricChart'),
   chainSummaryContent: query<HTMLElement>('#chainSummaryContent'),
   graphTitle: query('#graphTitle'),
+  graphTabTrace: query<HTMLButtonElement>('#graphTabTrace'),
+  graphTabGraph: query<HTMLButtonElement>('#graphTabGraph'),
+  graphTracePanel: query<HTMLElement>('#graphTracePanel'),
+  graphKnowledgePanel: query<HTMLElement>('#graphKnowledgePanel'),
+  graphLayout: query<HTMLElement>('#graphLayout'),
+  graphInfoPanel: query<HTMLElement>('#graphInfoPanel'),
+  graphInfoToggle: query<HTMLButtonElement>('#graphInfoToggle'),
   graphCanvas: query('#graphCanvas'),
   graphInspector: query('#graphInspector'),
   graphBuildStatus: query('#graphBuildStatus'),
+  graphLeftActions: query<HTMLElement>('#graphLeftActions'),
   graphAuthMode: query<HTMLSelectElement>('#graphAuthMode'),
   graphProtocol: query<HTMLSelectElement>('#graphProtocol'),
   graphModelInput: query<HTMLInputElement>('#graphModelInput'),
@@ -485,6 +546,7 @@ const els = {
   graphExtractionDepthInput: query<HTMLInputElement>('#graphExtractionDepthInput'),
   saveGraphLlmBtn: query<HTMLButtonElement>('#saveGraphLlmBtn'),
   buildGraphBtn: query<HTMLButtonElement>('#buildGraphBtn'),
+  rebuildGraphBtn: query<HTMLButtonElement>('#rebuildGraphBtn'),
   continueGraphBtn: query<HTMLButtonElement>('#continueGraphBtn'),
   pauseGraphBtn: query<HTMLButtonElement>('#pauseGraphBtn'),
   knowledgeSummary: query('#knowledgeSummary'),
@@ -511,8 +573,6 @@ const els = {
   chainCta: query<HTMLButtonElement>('#chainCta'),
   chainCtaPill: query<HTMLElement>('#chainCtaPill'),
   chainCtaStats: query<HTMLElement>('#chainCtaStats'),
-  stateBtn: query<HTMLButtonElement>('#stateBtn'),
-  llmBtn: query<HTMLButtonElement>('#llmBtn'),
   settingsBtn: query<HTMLButtonElement>('#settingsBtn'),
   settingsView: query<HTMLElement>('#settingsView'),
   settingsContent: query<HTMLElement>('#settingsContent'),
@@ -522,6 +582,7 @@ const els = {
   dialog: query<HTMLDialogElement>('#detailDialog'),
   dialogTitle: query('#dialogTitle'),
   dialogBody: query('#dialogBody'),
+  deleteReferenceBtn: query<HTMLButtonElement>('#deleteReferenceBtn'),
 };
 
 hydrateIcons();
@@ -583,8 +644,10 @@ els.transcriptScope.addEventListener('change', () => {
   state.transcriptScope = els.transcriptScope.value;
   render();
 });
-els.stateBtn.addEventListener('click', () => showDetail('Workspace State', state.bootstrap?.state));
-els.llmBtn.addEventListener('click', () => showDetail('LLM Config', state.bootstrap?.llmConfig));
+els.chatStream.addEventListener('scroll', updateChatTopButton);
+els.chatTopBtn.addEventListener('click', () => {
+  els.chatStream.scrollTo({ top: 0, behavior: 'smooth' });
+});
 els.backToChatBtn.addEventListener('click', () => {
   state.view = 'chat';
   history.pushState({}, '', '/');
@@ -603,14 +666,29 @@ els.settingsDoneBtn.addEventListener('click', () => {
 els.buildGraphBtn.addEventListener('click', async () => {
   await postJson('/api/knowledge-graph/build', { trigger: 'manual' });
 });
+els.rebuildGraphBtn.addEventListener('click', async () => {
+  await postJson('/api/knowledge-graph/build', { trigger: 'rebuild' });
+});
 els.continueGraphBtn.addEventListener('click', async () => {
   await postJson('/api/knowledge-graph/continue', {});
 });
 els.pauseGraphBtn.addEventListener('click', async () => {
-  await postJson('/api/knowledge-graph/pause', { reason: 'Paused from knowledge graph UI.' });
+  await postJson('/api/knowledge-graph/pause', { reason: '用户从知识图谱页面暂停。' });
 });
 els.saveGraphLlmBtn.addEventListener('click', async () => {
   await saveKnowledgeGraphLlmConfig();
+});
+els.graphTabTrace.addEventListener('click', () => {
+  state.knowledgeGraphTab = 'trace';
+  renderKnowledgeGraphTabState();
+});
+els.graphTabGraph.addEventListener('click', () => {
+  state.knowledgeGraphTab = 'graph';
+  renderKnowledgeGraphTabState();
+});
+els.graphInfoToggle.addEventListener('click', () => {
+  state.graphInfoCollapsed = !state.graphInfoCollapsed;
+  renderGraphInfoState();
 });
 els.kgCta.addEventListener('click', async () => {
   state.view = 'knowledgeGraph';
@@ -636,6 +714,10 @@ els.backToChainFromImageBtn.addEventListener('click', () => {
 els.buildChainSummaryBtn.addEventListener('click', async () => {
   resetChainRenderSignatures();
   await postJson('/api/chain-summary/build', {});
+});
+els.chainNavToggle.addEventListener('click', () => {
+  state.chainNavCollapsed = !state.chainNavCollapsed;
+  renderChainNavState();
 });
 window.addEventListener('popstate', () => {
   const path = window.location.pathname;
@@ -689,7 +771,7 @@ els.resetChatBtn.addEventListener('click', async () => {
   });
 });
 els.clearAllLogsBtn.addEventListener('click', async () => {
-  if (!confirm('这将重置整个工作区，删除 references、knowledge graph、日志、运行产物、报告和临时工具。设置中的 API key、endpoint、model 与 k 会保留。是否继续？')) return;
+  if (!confirm('这将重置整个工作区，删除参考资料、知识图谱、日志、运行产物、报告和临时工具。设置中的 API 密钥、接口地址、模型与 k 会保留。是否继续？')) return;
   const typed = prompt('二次确认：请输入 RESET 来确认重置工作区。');
   if (typed !== 'RESET') return;
   await runAction(async () => {
@@ -700,6 +782,23 @@ els.clearAllLogsBtn.addEventListener('click', async () => {
     state.renderSignatures.clear();
     applyBootstrapSnapshot(result.bootstrap);
   });
+});
+els.deleteReferenceBtn.addEventListener('click', async () => {
+  const path = els.deleteReferenceBtn.dataset.path || '';
+  if (!path) return;
+  if (!confirm(`确定删除这篇参考文献吗？\n\n${path}`)) return;
+  const typed = prompt('二次确认：请输入 DELETE 删除该参考文献。');
+  if (typed !== 'DELETE') return;
+  els.deleteReferenceBtn.disabled = true;
+  try {
+    const result = await deleteJson<JsonMap>('/api/references', { path });
+    applyBootstrapSnapshot(result.bootstrap);
+    els.dialog.close();
+  } catch (error) {
+    showDetail('删除失败', { message: error instanceof Error ? error.message : String(error) });
+  } finally {
+    els.deleteReferenceBtn.disabled = false;
+  }
 });
 
 els.sendForm.addEventListener('submit', async (event) => {
@@ -727,35 +826,58 @@ els.sendForm.addEventListener('submit', async (event) => {
   });
 });
 
-els.uploadForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const files = [...(els.referenceFiles.files || [])];
-  if (!files.length) return;
-  await runAction(async () => {
-    const form = new FormData();
-    for (const file of files) form.append('files', file);
-    await postForm('/api/references/upload', form);
-    els.referenceFiles.value = '';
-  });
+els.uploadForm.addEventListener('submit', (event) => event.preventDefault());
+els.rawZipUploadForm.addEventListener('submit', (event) => event.preventDefault());
+
+els.uploadBtn.addEventListener('click', () => {
+  if (!state.busy) els.referenceFiles.click();
 });
 
-els.rawZipUploadForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
+els.rawZipUploadBtn.addEventListener('click', () => {
+  if (!state.busy) els.rawZipFile.click();
+});
+
+els.referenceFiles.addEventListener('change', async () => {
+  await uploadReferenceFiles();
+});
+
+els.rawZipFile.addEventListener('change', async () => {
+  await uploadRawZipFile();
+});
+
+async function uploadReferenceFiles() {
+  const files = [...(els.referenceFiles.files || [])];
+  if (!files.length) return;
+  try {
+    await runAction(async () => {
+      const form = new FormData();
+      for (const file of files) form.append('files', file);
+      await postForm('/api/references/upload', form);
+    });
+  } finally {
+    els.referenceFiles.value = '';
+  }
+}
+
+async function uploadRawZipFile() {
   const file = els.rawZipFile.files?.[0];
   if (!file) return;
-  await runAction(async () => {
-    const form = new FormData();
-    form.append('file', file);
-    const result = await postForm('/api/data/raw/upload-zip', form);
-    els.rawZipFile.value = '';
-    showDetail('Raw Data Zip Uploaded', {
-      archive: result.uploaded?.archive,
-      targetDir: result.uploaded?.targetDir,
-      extractedCount: result.uploaded?.extracted?.length || 0,
-      extracted: result.uploaded?.extracted || [],
+  try {
+    await runAction(async () => {
+      const form = new FormData();
+      form.append('file', file);
+      const result = await postForm('/api/data/raw/upload-zip', form);
+      showDetail('原始数据压缩包已上传', {
+        archive: result.uploaded?.archive,
+        targetDir: result.uploaded?.targetDir,
+        extractedCount: result.uploaded?.extracted?.length || 0,
+        extracted: result.uploaded?.extracted || [],
+      });
     });
-  });
-});
+  } finally {
+    els.rawZipFile.value = '';
+  }
+}
 
 function connectRealtimeEvents() {
   const source = new EventSource('/api/events');
@@ -872,8 +994,8 @@ function render() {
 
   const ws = data.state || {};
   const activeNode = ws.activeNode;
-  setHtmlIfChanged(els.statusText, statusPill(activeNode ? `Active: ${activeNode}` : 'Ready', activeNode ? 'active' : 'ready'));
-  els.modeText.textContent = data.dryRun ? `${ws.controlMode || ws.mode} / dry-run` : (ws.controlMode || ws.mode || '-');
+  setHtmlIfChanged(els.statusText, statusPill(activeNode ? `执行中：${nodeDisplayName(activeNode)}` : '就绪', activeNode ? 'active' : 'ready'));
+  els.modeText.textContent = data.dryRun ? `${modeLabel(ws.controlMode || ws.mode)} / 试运行` : modeLabel(ws.controlMode || ws.mode || '-');
   setHtmlIfChanged(els.variantText, variantPill(data.variant));
   els.modelText.textContent = data.llmConfig?.config?.model || 'sdk-default';
   setHtmlIfChanged(els.runtimeUvText, runtimePill(data.runtime?.workspaceUv));
@@ -890,9 +1012,10 @@ function render() {
   renderStable('knowledge-builder', [data.knowledgeGraphBuild, data.runtime, data.knowledgeGraphLlmConfig], () => renderKnowledgeGraphBuilder(data));
   renderStable('knowledge-workbench', [data.knowledgeBaseSummary, state.selectedKnowledgeBaseKind, state.knowledgeBaseCards, state.knowledgeBaseCardsBusy, state.knowledgeQuestion, state.knowledgeAnswer, state.knowledgeQueryBusy], () => renderKnowledgeWorkbench(data));
   renderStable('builder-trace', data.knowledgeGraphParts || [], () => renderBuilderTrace(data.knowledgeGraphParts || []));
+  renderKnowledgeGraphTabState();
   renderChainSummary(data);
   renderImageViewer();
-  renderStable('settings', [data.llmConfig, data.knowledgeGraphLlmConfig, data.runtimeSettings], () => renderSettings(data));
+  renderStable('settings', [state.view, data.llmConfig, data.knowledgeGraphLlmConfig, data.runtimeSettings], () => renderSettings(data));
   renderViewState();
   renderStable('timeline', data.timeline, () => renderTimeline(data.timeline));
   renderStable('file-tree', data.fileTree, () => renderFileTree(data.fileTree));
@@ -947,11 +1070,11 @@ function renderPendingControl(pending: JsonMap | null | undefined) {
 
 function renderTranscriptScope(nodes: JsonMap[]) {
   const options = [
-    { value: 'all', label: 'All sessions' },
-    { value: 'main', label: 'Main only' },
+    { value: 'all', label: '全部记录' },
+    { value: 'main', label: '仅主会话' },
     ...(nodes || []).slice().reverse().map((node) => ({
       value: `node:${node.id}`,
-      label: `${node.nodeType} · ${node.status} · ${formatTime(node.startedAt)}`,
+      label: `${nodeDisplayName(node.nodeType)} · ${statusLabel(node.status)} · ${formatTime(node.startedAt)}`,
     })),
   ];
   if (!options.some((option) => option.value === state.transcriptScope)) {
@@ -967,6 +1090,7 @@ function renderDebugActions(enabled: boolean) {
   for (const element of document.querySelectorAll<HTMLElement>('.debug-only')) {
     element.hidden = !enabled;
   }
+  document.querySelector<HTMLElement>('.toolbar')?.classList.toggle('compact', !enabled);
 }
 
 function renderNodes(specs: JsonMap[], ws: JsonMap, sessions: JsonMap[]) {
@@ -985,12 +1109,12 @@ function renderNodes(specs: JsonMap[], ws: JsonMap, sessions: JsonMap[]) {
       <details class="node-item" data-node="${escapeHtml(spec.type)}" ${isOpen ? 'open' : ''}>
         <summary class="node-header">
           <span class="node-index">${index + 1}</span>
-          <span class="node-name">${escapeHtml(spec.type)}</span>
-          <span class="badge ${status}">${statusIcon(status)}${status}</span>
+          <span class="node-name">${escapeHtml(nodeDisplayName(spec.type))}</span>
+          <span class="badge ${status}">${statusIcon(status)}${statusLabel(status)}</span>
           <span class="node-chevron" data-icon="ChevronRight"></span>
         </summary>
         <div class="node-body">
-          <div class="node-purpose">${escapeHtml(spec.phase)} · ${escapeHtml(spec.purpose)}</div>
+          <div class="node-purpose">${escapeHtml(nodePhaseLabel(spec.phase))} · ${escapeHtml(nodePurposeText(spec))}</div>
         </div>
       </details>
     `;
@@ -1022,16 +1146,16 @@ function renderNodeDetail(specs: JsonMap[], nodes: JsonMap[]) {
     ...sessions.flatMap((node) => node.outputPaths || []),
   ]);
   els.nodeDetail.innerHTML = `
-    <div class="node-detail-title">${escapeHtml(spec.type)}</div>
-    <div class="meta">${escapeHtml(spec.purpose)}</div>
-    <div class="detail-section-title">Artifacts</div>
+    <div class="node-detail-title">${escapeHtml(nodeDisplayName(spec.type))}</div>
+    <div class="meta">${escapeHtml(nodePurposeText(spec))}</div>
+    <div class="detail-section-title">产物</div>
     ${produced.length ? `<div class="artifact-list">${produced.map((path) => `
       <button class="artifact-item" data-path="${escapeHtml(path)}"><span data-icon="File"></span><span>${escapeHtml(path)}</span></button>
     `).join('')}</div>` : emptyState('暂无节点产物。', 'File')}
-    <div class="detail-section-title">Sessions</div>
+    <div class="detail-section-title">执行记录</div>
     ${sessions.length ? `<div class="session-list">${sessions.map((node) => `
       <button class="session-item" data-session="${escapeHtml(node.id)}">
-        <span class="session-title">${escapeHtml(node.status)} · ${formatTime(node.startedAt)}</span>
+        <span class="session-title">${escapeHtml(statusLabel(node.status))} · ${formatTime(node.startedAt)}</span>
         <span class="meta">${escapeHtml(node.summary || node.rationale || '')}</span>
       </button>
     `).join('')}</div>` : emptyState('暂无 node session。', 'Activity')}
@@ -1040,7 +1164,7 @@ function renderNodeDetail(specs: JsonMap[], nodes: JsonMap[]) {
   for (const item of els.nodeDetail.querySelectorAll<HTMLElement>('.session-item')) {
     item.addEventListener('click', async () => {
       const log = await fetchJson(`/api/nodes/${item.dataset.session}/log`);
-      showDetail(`Node Log ${item.dataset.session}`, log);
+      showDetail(`节点日志 ${item.dataset.session}`, log);
     });
   }
   for (const item of els.nodeDetail.querySelectorAll<HTMLElement>('.artifact-item')) {
@@ -1060,12 +1184,13 @@ function renderChat(data: Bootstrap) {
       els.chatStream.innerHTML = `
         <div class="welcome-state">
           <div class="welcome-orbit"><span data-icon="Sparkles"></span></div>
-          <h3>Ready for a time-series workflow</h3>
-          <p>发送任务后，orchestrator 会读取 workspace、规划节点并把执行过程同步到这里。</p>
+          <h3>可以开始时间序列任务</h3>
+          <p>发送任务后，任务编排器会读取工作区、规划节点，并把执行过程同步到这里。</p>
         </div>
       `;
       hydrateIcons(els.chatStream);
     }
+    updateChatTopButton();
     return;
   }
 
@@ -1114,6 +1239,7 @@ function renderChat(data: Bootstrap) {
   } else if (changed && savedScroll < els.chatStream.scrollHeight) {
     els.chatStream.scrollTop = Math.min(savedScroll, els.chatStream.scrollHeight - els.chatStream.clientHeight);
   }
+  updateChatTopButton();
 }
 
 function messageKey(part: JsonMap, index: number) {
@@ -1145,23 +1271,23 @@ function renderKgCta(data: Bootstrap) {
   const classes = (graph.nodes || []).length;
   const relations = (graph.edges || []).length;
   let state: 'idle' | 'building' | 'built' | 'failed' = 'idle';
-  let label = 'Idle';
+  let label = '空闲';
   if (build.status === 'failed') {
     state = 'failed';
-    label = 'Failed';
+    label = '失败';
   } else if (running) {
     state = 'building';
-    label = 'Building';
+    label = '构建中';
   } else if (build.status === 'completed' && classes > 0) {
     state = 'built';
-    label = 'Built';
+    label = '已构建';
   }
   els.kgCta.dataset.state = state;
   els.kgCtaPill.textContent = label;
   els.kgCtaPill.className = `kg-cta-pill ${state}`;
   els.kgCtaStats.textContent = classes > 0 || relations > 0
-    ? `${classes} classes · ${relations} relations`
-    : 'not built';
+    ? `${classes} 个概念 · ${relations} 条关系`
+    : '尚未构建';
 }
 
 function renderChainCta(data: Bootstrap) {
@@ -1172,16 +1298,16 @@ function renderChainCta(data: Bootstrap) {
   const iterations = Array.isArray(summary.iterations) ? summary.iterations.length : 0;
   const metrics = Array.isArray(summary.metricSeries) ? summary.metricSeries.length : 0;
   let ctaState: 'idle' | 'building' | 'built' | 'failed' = 'idle';
-  let label = 'Idle';
+  let label = '空闲';
   if (build.status === 'failed') {
     ctaState = 'failed';
-    label = 'Failed';
+    label = '失败';
   } else if (running) {
     ctaState = 'building';
-    label = 'Building';
+    label = '生成中';
   } else if (build.status === 'completed' || iterations > 0 || metrics > 0) {
     ctaState = 'built';
-    label = 'Ready';
+    label = '可查看';
   }
   els.chainCta.dataset.state = ctaState;
   els.chainCtaPill.textContent = label;
@@ -1190,13 +1316,13 @@ function renderChainCta(data: Bootstrap) {
   const featureCount = Number(featureBuild.featureCount || data.referenceFeatureTool?.featureCount || 0);
   let featureLabel: string | null = null;
   if (featureBuild.status === 'completed' && featureBuild.ready !== false) {
-    featureLabel = `features: ${featureCount}`;
+    featureLabel = `特征：${featureCount}`;
   } else if (featureBuild.status === 'failed') {
-    featureLabel = 'features: failed';
+    featureLabel = '特征：失败';
   } else if (data.variant?.capabilities?.referenceFeatureExtractor === false) {
-    featureLabel = `features: disabled · ${data.variant?.id || 'variant'}`;
+    featureLabel = `特征：已禁用 · ${data.variant?.id || 'variant'}`;
   }
-  const base = iterations || metrics ? `${iterations} iterations · ${metrics} metrics` : 'not generated';
+  const base = iterations || metrics ? `${iterations} 轮迭代 · ${metrics} 个指标` : '尚未生成';
   els.chainCtaStats.textContent = featureLabel ? `${base} · ${featureLabel}` : base;
 }
 
@@ -1232,19 +1358,19 @@ function renderSettings(data: Bootstrap) {
   const ws = data.state || {};
 
   const workspaceRows = [
-    { label: 'Variant', value: variantPill(data.variant) },
-    { label: 'Active node', value: ws.activeNode
-      ? `<span class="settings-readout-pill active">${escapeHtml(ws.activeNode)}</span>`
+    { label: '流程版本', value: variantPill(data.variant) },
+    { label: '当前节点', value: ws.activeNode
+      ? `<span class="settings-readout-pill active">${escapeHtml(nodeDisplayName(ws.activeNode))}</span>`
       : `<span class="settings-readout-pill">—</span>` },
-    { label: 'Control mode', value: `<span class="settings-readout-pill ${ws.controlMode === 'auto' ? 'active' : ''}">${escapeHtml(ws.controlMode || ws.mode || 'manual')}</span>` },
-    { label: 'Dry run', value: data.dryRun
-      ? `<span class="settings-readout-pill active">on</span>`
-      : `<span class="settings-readout-pill">off</span>` },
-    { label: 'Debug actions', value: data.debugEnabled
-      ? `<span class="settings-readout-pill active">enabled</span>`
-      : `<span class="settings-readout-pill">disabled</span>` },
-    { label: 'Workspace UV', value: runtimePill(data.runtime?.workspaceUv) },
-    { label: 'Workspace path', value: `<span class="settings-readout-mono">${escapeHtml(data.runtime?.workspaceUv?.workspace || '')}</span>`, copyable: data.runtime?.workspaceUv?.workspace || '' },
+    { label: '控制模式', value: `<span class="settings-readout-pill ${ws.controlMode === 'auto' ? 'active' : ''}">${escapeHtml(modeLabel(ws.controlMode || ws.mode || 'manual'))}</span>` },
+    { label: '试运行', value: data.dryRun
+      ? `<span class="settings-readout-pill active">开启</span>`
+      : `<span class="settings-readout-pill">关闭</span>` },
+    { label: '调试操作', value: data.debugEnabled
+      ? `<span class="settings-readout-pill active">已启用</span>`
+      : `<span class="settings-readout-pill">未启用</span>` },
+    { label: '运行环境', value: runtimePill(data.runtime?.workspaceUv) },
+    { label: '工作区路径', value: `<span class="settings-readout-mono">${escapeHtml(data.runtime?.workspaceUv?.workspace || '')}</span>`, copyable: data.runtime?.workspaceUv?.workspace || '' },
   ];
 
   const kOptions = [1, 2, 3, 4, 5, 6, 7, 8];
@@ -1252,25 +1378,32 @@ function renderSettings(data: Bootstrap) {
 
   els.settingsContent.innerHTML = `
     <div class="settings-section">
-      <div class="settings-section-header">Workspace</div>
+      <div class="settings-section-header">工作区</div>
       <div class="settings-card">
         ${workspaceRows.map((row) => `
           <div class="settings-row">
             <div class="settings-row-label">${escapeHtml(row.label)}</div>
-            <div class="settings-row-control">${row.value}${row.copyable ? `<button class="settings-icon-btn" type="button" data-copy="${escapeHtml(row.copyable)}" title="Copy"><span data-icon="Archive"></span></button>` : ''}</div>
+            <div class="settings-row-control">${row.value}${row.copyable ? `<button class="settings-icon-btn" type="button" data-copy="${escapeHtml(row.copyable)}" title="复制"><span data-icon="Archive"></span></button>` : ''}</div>
           </div>
         `).join('')}
+        <div class="settings-row">
+          <div class="settings-row-label">详细信息</div>
+          <div class="settings-row-control settings-inline-actions">
+            <button class="settings-secondary-btn" type="button" data-settings-detail="state"><span data-icon="Archive"></span><span>查看状态文件</span></button>
+            <button class="settings-secondary-btn" type="button" data-settings-detail="llm"><span data-icon="Settings2"></span><span>查看模型配置</span></button>
+          </div>
+        </div>
       </div>
-      <p class="settings-section-foot">Read-only at runtime. Variant, control mode, dry run, and debug actions are server launch env vars (<code>TS_HARNESS_VARIANT</code> / <code>TS_HARNESS_CONTROL_MODE</code> / <code>TS_HARNESS_DRY_RUN</code> / <code>TS_HARNESS_DEBUG</code>); restart the server to change them.</p>
+      <p class="settings-section-foot">这些项目由服务启动参数决定，例如 <code>TS_HARNESS_VARIANT</code>、<code>TS_HARNESS_CONTROL_MODE</code>、<code>TS_HARNESS_DRY_RUN</code> 和 <code>TS_HARNESS_DEBUG</code>。如需修改，请重启服务。</p>
     </div>
 
     <div class="settings-section">
-      <div class="settings-section-header">Runtime</div>
+      <div class="settings-section-header">运行参数</div>
       <div class="settings-card">
         <div class="settings-row">
           <div class="settings-row-label">
-            <div>Iterative candidates (k)</div>
-            <div class="settings-row-help">How many parallel methods the iterative-solving node generates per loop.</div>
+            <div>每轮候选方案数（k）</div>
+            <div class="settings-row-help">迭代求解节点每一轮会并行提出多少个方法候选。</div>
           </div>
           <div class="settings-row-control">
             ${segmentedHtml('iterativeK', kOptions.map(String), String(state.settings.iterativeK), (v) => v)}
@@ -1278,8 +1411,8 @@ function renderSettings(data: Bootstrap) {
         </div>
         <div class="settings-row">
           <div class="settings-row-label">
-            <div>Knowledge graph extraction depth</div>
-            <div class="settings-row-help">How many hops the reference knowledge builder follows per source.</div>
+            <div>知识图谱抽取深度</div>
+            <div class="settings-row-help">参考知识构建器从每个来源向外追踪的层数。</div>
           </div>
           <div class="settings-row-control">
             ${segmentedHtml('graphDepth', depthOptions.map(String), String(state.settings.graphDepth), (v) => v)}
@@ -1288,8 +1421,8 @@ function renderSettings(data: Bootstrap) {
       </div>
     </div>
 
-    ${renderLlmSection('graph', 'Knowledge Graph Builder LLM', 'Used by the reference knowledge graph builder agent. Leave fields blank to inherit from Main LLM.')}
-    ${renderLlmSection('main', 'Main LLM', 'Used by the orchestrator and all node agents. Saved to <code>&lt;workspace&gt;/config.llm.json</code>; takes effect on the next message.', true)}
+    ${renderLlmSection('graph', '知识图谱构建模型', '供参考知识图谱构建器使用。留空时继承主模型配置。')}
+    ${renderLlmSection('main', '主模型', '供编排器和所有节点智能体使用。保存到 <code>&lt;workspace&gt;/config.llm.json</code>，通常在下一条消息后生效。', true)}
   `;
 
   bindSettingsHandlers();
@@ -1304,22 +1437,22 @@ function renderLlmSection(prefix: 'graph' | 'main', title: string, description: 
   const modelValue = isMain ? s.mainModel : s.graphModel;
   const baseUrlValue = isMain ? s.mainBaseUrl : s.graphBaseUrl;
   const authOptions = [
-    { value: 'manual', label: 'manual' },
-    { value: 'sdk-default', label: 'sdk-default' },
+    { value: 'manual', label: '手动配置' },
+    { value: 'sdk-default', label: 'SDK 默认' },
   ];
   const protocolOptions = [
-    { value: '', label: 'auto' },
+    { value: '', label: '自动' },
     { value: 'anthropic', label: 'anthropic' },
     { value: 'openai-compat', label: 'openai-compat' },
   ];
   const contextOptions = [
-    { value: '', label: 'default' },
+    { value: '', label: '默认' },
     { value: '200k', label: '200k' },
     { value: '1m', label: '1m' },
   ];
-  const modelPlaceholder = isMain ? 'e.g. deepseek-v4-pro' : 'inherits main model';
-  const baseUrlPlaceholder = isMain ? 'https://api.example.com/anthropic' : 'inherits main endpoint';
-  const apiKeyPlaceholder = 'leave blank to keep current';
+  const modelPlaceholder = isMain ? '例如 deepseek-v4-pro' : '默认继承主模型';
+  const baseUrlPlaceholder = isMain ? 'https://api.example.com/anthropic' : '默认继承主接口地址';
+  const apiKeyPlaceholder = '留空表示保持当前密钥';
   const saveBtnId = isMain ? 'saveMainLlmBtn' : 'saveGraphLlmBtn2';
   const resetBtnId = isMain ? 'resetMainLlmBtn' : '';
   const modelId = `${prefix}Model`;
@@ -1330,32 +1463,32 @@ function renderLlmSection(prefix: 'graph' | 'main', title: string, description: 
       <div class="settings-section-header">${escapeHtml(title)}</div>
       <div class="settings-card">
         <div class="settings-row">
-          <div class="settings-row-label">Auth</div>
+          <div class="settings-row-label">认证方式</div>
           <div class="settings-row-control">${segmentedHtml(`${prefix}AuthMode`, authOptions.map((o) => o.value), authValue, (v) => v, authOptions.map((o) => o.label))}</div>
         </div>
         <div class="settings-row">
-          <div class="settings-row-label">Protocol</div>
+          <div class="settings-row-label">接口协议</div>
           <div class="settings-row-control">${segmentedHtml(`${prefix}Protocol`, protocolOptions.map((o) => o.value), protocolValue, (v) => v, protocolOptions.map((o) => o.label))}</div>
         </div>
         <div class="settings-row">
-          <div class="settings-row-label">Context window</div>
+          <div class="settings-row-label">上下文窗口</div>
           <div class="settings-row-control">${segmentedHtml(`${prefix}Context`, contextOptions.map((o) => o.value), contextValue, (v) => v, contextOptions.map((o) => o.label))}</div>
         </div>
         <div class="settings-row">
-          <div class="settings-row-label">Model</div>
+          <div class="settings-row-label">模型</div>
           <div class="settings-row-control"><input class="settings-input" type="text" id="${modelId}" value="${escapeHtml(modelValue)}" placeholder="${escapeHtml(modelPlaceholder)}" /></div>
         </div>
         <div class="settings-row">
-          <div class="settings-row-label">Endpoint</div>
+          <div class="settings-row-label">接口地址</div>
           <div class="settings-row-control"><input class="settings-input" type="text" id="${baseUrlId}" value="${escapeHtml(baseUrlValue)}" placeholder="${escapeHtml(baseUrlPlaceholder)}" /></div>
         </div>
         <div class="settings-row">
-          <div class="settings-row-label">API key</div>
+          <div class="settings-row-label">API 密钥</div>
           <div class="settings-row-control"><input class="settings-input" type="password" id="${apiKeyId}" value="" placeholder="${escapeHtml(apiKeyPlaceholder)}" autocomplete="off" /></div>
         </div>
         <div class="settings-card-footer">
-          <button id="${saveBtnId}" type="button" class="settings-primary-btn"><span data-icon="Check"></span><span>${escapeHtml(isMain ? 'Save main LLM' : 'Save builder LLM')}</span></button>
-          ${isMain ? `<button id="${resetBtnId}" type="button" class="settings-secondary-btn"><span data-icon="RefreshCw"></span><span>Reset to file default</span></button>` : ''}
+          <button id="${saveBtnId}" type="button" class="settings-primary-btn"><span data-icon="Check"></span><span>${escapeHtml(isMain ? '保存主模型' : '保存构建模型')}</span></button>
+          ${isMain ? `<button id="${resetBtnId}" type="button" class="settings-secondary-btn"><span data-icon="RefreshCw"></span><span>恢复文件默认值</span></button>` : ''}
           <span class="settings-save-status" id="${prefix}SaveStatus"></span>
         </div>
       </div>
@@ -1417,6 +1550,15 @@ function bindSettingsHandlers() {
   mainSave?.addEventListener('click', () => saveLlmConfig(true));
   const mainReset = els.settingsContent.querySelector<HTMLButtonElement>('#resetMainLlmBtn');
   mainReset?.addEventListener('click', () => resetMainLlmConfig());
+  for (const detailBtn of els.settingsContent.querySelectorAll<HTMLButtonElement>('[data-settings-detail]')) {
+    detailBtn.addEventListener('click', () => {
+      if (detailBtn.dataset.settingsDetail === 'state') {
+        showDetail('工作区状态文件', state.bootstrap?.state);
+      } else {
+        showDetail('模型配置', state.bootstrap?.llmConfig);
+      }
+    });
+  }
   for (const copyBtn of els.settingsContent.querySelectorAll<HTMLButtonElement>('[data-copy]')) {
     copyBtn.addEventListener('click', async () => {
       const text = copyBtn.dataset.copy || '';
@@ -1432,7 +1574,7 @@ function bindSettingsHandlers() {
           hydrateIcons(copyBtn);
         }, 1100);
       } catch (error) {
-        showDetail('Copy failed', { message: error instanceof Error ? error.message : String(error) });
+        showDetail('复制失败', { message: error instanceof Error ? error.message : String(error) });
       }
     });
   }
@@ -1482,7 +1624,7 @@ async function saveLlmConfig(isMain: boolean) {
     }
     const status = els.settingsContent.querySelector<HTMLElement>(statusSelector);
     if (status) {
-      status.textContent = 'Saved';
+      status.textContent = '已保存';
       status.classList.add('saved');
       window.setTimeout(() => {
         status.textContent = '';
@@ -1490,12 +1632,12 @@ async function saveLlmConfig(isMain: boolean) {
       }, 1800);
     }
   } catch (error) {
-    showDetail(isMain ? 'Save main LLM failed' : 'Save builder LLM failed', { message: error instanceof Error ? error.message : String(error) });
+    showDetail(isMain ? '保存主模型失败' : '保存构建模型失败', { message: error instanceof Error ? error.message : String(error) });
   }
 }
 
 async function resetMainLlmConfig() {
-  if (!confirm('Reset main LLM to file default? This clears model, endpoint, protocol, and context window saved in <workspace>/config.llm.json. API key is kept.')) return;
+  if (!confirm('是否将主模型恢复为文件默认值？这会清空保存在 <workspace>/config.llm.json 中的模型、接口地址、协议和上下文窗口设置；API 密钥会保留。')) return;
   try {
     const result = await postJson('/api/llm-config', {
       authMode: 'sdk-default',
@@ -1507,7 +1649,7 @@ async function resetMainLlmConfig() {
     syncSettingsFromBootstrap(result.bootstrap);
     applyBootstrapSnapshot(result.bootstrap);
   } catch (error) {
-    showDetail('Reset main LLM failed', { message: error instanceof Error ? error.message : String(error) });
+    showDetail('恢复主模型失败', { message: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -1523,11 +1665,40 @@ function renderViewState() {
   els.settingsView.hidden = !settingsMode;
   els.sendForm.hidden = graphMode || chainMode || imageMode || settingsMode;
   els.transcriptScope.disabled = graphMode || chainMode || imageMode;
-  query('#mainTitle').textContent = graphMode ? 'Knowledge Graph' : chainMode ? '思维链总结' : imageMode ? '图片查看' : settingsMode ? 'Settings' : 'Orchestrator';
+  query('#mainTitle').textContent = graphMode ? '知识图谱' : chainMode ? '思维链总结' : imageMode ? '图片查看' : settingsMode ? '设置' : '任务编排';
   document.body.classList.toggle('knowledge-page', graphMode);
   document.body.classList.toggle('chain-page', chainMode);
   document.body.classList.toggle('image-page', imageMode);
   document.body.classList.toggle('settings-page', settingsMode);
+  updateChatTopButton();
+}
+
+function updateChatTopButton() {
+  const visible = state.view === 'chat' && !els.chatStream.hidden && els.chatStream.scrollTop > 220;
+  els.chatTopBtn.classList.toggle('visible', visible);
+}
+
+function renderKnowledgeGraphTabState() {
+  const graphActive = state.knowledgeGraphTab === 'graph';
+  els.graphTabGraph.classList.toggle('active', graphActive);
+  els.graphTabTrace.classList.toggle('active', !graphActive);
+  els.graphKnowledgePanel.hidden = !graphActive;
+  els.graphTracePanel.hidden = graphActive;
+  if (els.graphLayout.classList.contains('graph-empty')) {
+    els.graphLayout.classList.remove('info-collapsed');
+    els.graphInfoPanel.hidden = true;
+    els.graphInfoToggle.hidden = true;
+    return;
+  }
+  renderGraphInfoState();
+}
+
+function renderGraphInfoState() {
+  els.graphLayout.classList.toggle('info-collapsed', state.graphInfoCollapsed);
+  els.graphInfoPanel.hidden = state.graphInfoCollapsed;
+  els.graphInfoToggle.hidden = false;
+  els.graphInfoToggle.title = state.graphInfoCollapsed ? '展开图谱信息' : '折叠图谱信息';
+  els.graphInfoToggle.setAttribute('aria-label', els.graphInfoToggle.title);
 }
 
 function renderChainSummary(data: Bootstrap) {
@@ -1555,14 +1726,14 @@ function renderChainSummary(data: Bootstrap) {
     <div class="chain-status-main">
       <span class="mini-pill ${build.status === 'failed' ? 'failed' : running ? 'active' : build.status === 'completed' ? 'ready' : 'pending'}">
         ${running ? '<span data-icon="Loader2"></span>' : ''}
-        ${escapeHtml(running ? 'running' : build.status || 'idle')}
+        ${escapeHtml(running ? '运行中' : statusLabel(build.status || 'idle'))}
       </span>
-      <span class="meta">${escapeHtml(build.message || 'Chain builder uses the current workspace logs and artifacts.')}</span>
+      <span class="meta">${escapeHtml(chainSummaryBuildMessage(build.message || '') || '流程总结会读取当前工作区的日志和产物。')}</span>
     </div>
     <div class="chain-status-stats">
-      <span><strong>${escapeHtml(iterations)}</strong><small>Iterations</small></span>
-      <span><strong>${escapeHtml(metrics)}</strong><small>Metrics</small></span>
-      <span><strong>${escapeHtml(samples)}</strong><small>Samples</small></span>
+      <span><strong>${escapeHtml(iterations)}</strong><small>迭代</small></span>
+      <span><strong>${escapeHtml(metrics)}</strong><small>指标</small></span>
+      <span><strong>${escapeHtml(samples)}</strong><small>样本</small></span>
     </div>
   `;
   }
@@ -1584,6 +1755,44 @@ function renderChainSummary(data: Bootstrap) {
     state.chainContentSignature = contentSignature;
     renderChainContent(summary, build);
   }
+  renderChainNav(summary, build);
+  renderChainNavState();
+}
+
+function renderChainNav(summary: JsonMap, build: JsonMap = {}) {
+  const iterations: JsonMap[] = Array.isArray(summary.iterations) ? summary.iterations : [];
+  const generated = build.status === 'completed' || Boolean(summary.overview) || iterations.length > 0;
+  const links = [
+    { target: 'chainBuildStatus', label: '状态概览', icon: 'Activity' },
+    { target: 'chain-metrics-section', label: '指标变化', icon: 'Gauge' },
+    ...(generated ? [{ target: 'chain-overview-section', label: '总结摘要', icon: 'Sparkles' }] : []),
+    ...iterations.map((iteration, index) => ({
+      target: `chain-iteration-${index + 1}`,
+      label: `第 ${iterationAxisLabel(iteration.iterationId || index + 1, index)} 轮`,
+      icon: 'GitBranch',
+    })),
+  ];
+  els.chainNavContent.innerHTML = links.map((link) => `
+    <button type="button" class="chain-nav-link" data-chain-target="${escapeHtml(link.target)}">
+      <span data-icon="${link.icon}"></span>
+      <span>${escapeHtml(link.label)}</span>
+    </button>
+  `).join('');
+  for (const item of els.chainNavContent.querySelectorAll<HTMLButtonElement>('[data-chain-target]')) {
+    item.addEventListener('click', () => {
+      const target = document.getElementById(item.dataset.chainTarget || '');
+      if (!target) return;
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+  hydrateIcons(els.chainNavContent);
+}
+
+function renderChainNavState() {
+  els.chainBody.classList.toggle('nav-collapsed', state.chainNavCollapsed);
+  els.chainNav.hidden = state.chainNavCollapsed;
+  els.chainNavToggle.title = state.chainNavCollapsed ? '展开目录' : '折叠目录';
+  els.chainNavToggle.setAttribute('aria-label', els.chainNavToggle.title);
 }
 
 function renderChainMetricChart(series: JsonMap[]) {
@@ -1595,7 +1804,7 @@ function renderChainMetricChart(series: JsonMap[]) {
     return;
   }
   els.chainMetricChart.innerHTML = `
-    <div class="panel-heading"><span data-icon="Activity"></span><span>指标 x Iterations</span></div>
+    <div id="chain-metrics-section" class="panel-heading chain-anchor"><span data-icon="Activity"></span><span>指标随迭代变化</span></div>
     <div class="metric-chart-grid">
       ${cleaned.map(metricChartHtml).join('')}
     </div>
@@ -1608,15 +1817,19 @@ function metricChartHtml(series: JsonMap) {
   const min = Math.min(...numeric);
   const max = Math.max(...numeric);
   const spread = max - min || 1;
-  const width = Math.max(520, (values.length - 1) * 82 + 96);
-  const height = 180;
-  const padX = 48;
-  const padY = 38;
+  const width = Math.max(640, (values.length - 1) * 118 + 132);
+  const height = 240;
+  const padLeft = 58;
+  const padRight = 38;
+  const padTop = 48;
+  const axisY = height - 52;
+  const plotHeight = axisY - padTop - 22;
+  const gridTicks = [0, 0.5, 1];
   const points = values.map((item, index) => {
     const value = Number(item.value);
-    const x = values.length === 1 ? width / 2 : padX + (index * (width - padX * 2)) / (values.length - 1);
-    const rawY = height - padY - ((value - min) / spread) * (height - padY * 2);
-    const y = Math.max(32, Math.min(height - 32, rawY));
+    const x = values.length === 1 ? width / 2 : padLeft + (index * (width - padLeft - padRight)) / (values.length - 1);
+    const rawY = axisY - 22 - ((value - min) / spread) * plotHeight;
+    const y = Math.max(padTop, Math.min(axisY - 22, rawY));
     return {
       x,
       y,
@@ -1635,7 +1848,15 @@ function metricChartHtml(series: JsonMap) {
       <div class="metric-chart-scroll">
         <div class="metric-chart-stage" style="min-width:${width}px">
           <svg class="metric-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(series.name || 'metric')}">
-            <line class="metric-axis" x1="${padX}" y1="${height - padY}" x2="${width - padX}" y2="${height - padY}"></line>
+            ${gridTicks.map((tick) => {
+              const y = padTop + (1 - tick) * plotHeight;
+              return `<line class="metric-grid-line" x1="${padLeft}" y1="${y}" x2="${width - padRight}" y2="${y}"></line>`;
+            }).join('')}
+            <line class="metric-axis" x1="${padLeft}" y1="${axisY}" x2="${width - padRight}" y2="${axisY}"></line>
+            ${points.map((point) => `
+              <line class="metric-tick" x1="${point.x}" y1="${axisY}" x2="${point.x}" y2="${axisY + 7}"></line>
+              <text class="metric-x-label" x="${point.x}" y="${axisY + 30}">${escapeHtml(point.label)}</text>
+            `).join('')}
             <polyline class="metric-line" points="${polyline}"></polyline>
             ${points.map((point) => `
               <g class="metric-point" transform="translate(${point.x} ${point.y})">
@@ -1644,9 +1865,6 @@ function metricChartHtml(series: JsonMap) {
               </g>
             `).join('')}
           </svg>
-          <div class="metric-labels">
-            ${points.map((point) => `<span style="left:${(point.x / width) * 100}%" title="${escapeHtml(point.note || point.label)}">${escapeHtml(point.label)}</span>`).join('')}
-          </div>
         </div>
       </div>
     </article>
@@ -1693,23 +1911,25 @@ function renderChainContent(summary: JsonMap, build: JsonMap = {}) {
       <div class="chain-placeholder">
         <span data-icon="Activity"></span>
         <h3>等待生成思维链总结</h3>
-        <p>${escapeHtml(build.status === 'failed' ? build.message || '生成失败，请检查 chain builder 日志。' : '点击上方按钮后，chain builder 会读取当前 workspace 的 logs、reports、runs 和样本可视化，生成完整决策链。')}</p>
+        <p>${escapeHtml(build.status === 'failed' ? chainSummaryBuildMessage(build.message || '') || '生成失败，请检查流程总结构建日志。' : '点击上方按钮后，流程总结构建器会读取当前工作区的日志、报告、运行记录和样本可视化，生成完整决策链。')}</p>
       </div>
     `;
     return;
   }
   if (!iterations.length && !summary.overview) {
-    els.chainSummaryContent.innerHTML = emptyState('chain builder 已完成，但没有可展示的总结内容。', 'Info');
+    els.chainSummaryContent.innerHTML = emptyState('流程总结构建器已完成，但没有可展示的总结内容。', 'Info');
     return;
   }
   els.chainSummaryContent.innerHTML = `
-    <article class="chain-overview">
-      <div class="panel-heading"><span data-icon="Sparkles"></span><span>${escapeHtml(summary.title || '思维链总结')}</span></div>
-      ${summary.generatedAt ? `<div class="meta">Generated ${escapeHtml(formatTime(summary.generatedAt))}</div>` : ''}
-      <div class="markdown-body">${renderMarkdown(summary.overview || '')}</div>
+    <article id="chain-overview-section" class="chain-overview chain-anchor">
+      <header class="chain-overview-head">
+        <div class="panel-heading"><span data-icon="Sparkles"></span><span>${escapeHtml(summary.title || '思维链总结')}</span></div>
+        ${summary.generatedAt ? `<div class="meta">生成时间 ${escapeHtml(formatTime(summary.generatedAt))}</div>` : ''}
+      </header>
+      <div class="markdown-body chain-overview-body">${renderMarkdown(summary.overview || '')}</div>
       ${Array.isArray(summary.uncertainty) && summary.uncertainty.length ? `
         <details class="chain-uncertainty">
-          <summary><span data-icon="AlertTriangle"></span><span>Warnings / 信息缺口</span><span class="chain-warning-count">${summary.uncertainty.length}</span></summary>
+          <summary><span data-icon="AlertTriangle"></span><span>风险与信息缺口</span><span class="chain-warning-count">${summary.uncertainty.length}</span></summary>
           <div class="chain-uncertainty-list">
             ${summary.uncertainty.map((item: any) => `<span><span data-icon="AlertTriangle"></span>${escapeHtml(item)}</span>`).join('')}
           </div>
@@ -1734,9 +1954,9 @@ function chainIterationHtml(iteration: JsonMap, index: number, total: number) {
   const samples: JsonMap[] = iteration.sampleInspirations || [];
   const methodRows = pairMethodResults(methods, results);
   return `
-    <article class="chain-iteration-card">
+    <article id="chain-iteration-${index + 1}" class="chain-iteration-card chain-anchor">
       <header class="chain-iteration-head">
-        <div class="chain-iteration-id"><span>Iteration</span>${escapeHtml(iteration.iterationId || 'iteration')}</div>
+        <div class="chain-iteration-id"><span>迭代</span>${escapeHtml(iteration.iterationId || 'iteration')}</div>
       </header>
       <section class="chain-card-section">
       <div class="detail-section-title"><span class="chain-section-index">1</span><span>提出方法</span></div>
@@ -1848,12 +2068,18 @@ function chainSampleHtml(sample: JsonMap) {
     : '';
   return `
     <article class="chain-sample-card">
-      ${image || `<div class="sample-image-placeholder"><span data-icon="File"></span></div>`}
-      <div>
+      <div class="chain-sample-media">${image || `<div class="sample-image-placeholder"><span data-icon="File"></span></div>`}</div>
+      <div class="chain-sample-body">
         <div class="chain-sample-title">${escapeHtml(sample.sampleId || 'sample')}</div>
         ${path ? `<button type="button" class="artifact-item" ${previewable ? `data-chain-image="${escapeHtml(path)}"` : `data-chain-path="${escapeHtml(path)}"`}><span data-icon="File"></span><span>${escapeHtml(path)}</span></button>` : ''}
-        <p>${escapeHtml(sample.interpretation || '')}</p>
-        <p class="meta">${escapeHtml(sample.nextIterationImpact || '')}</p>
+        <section class="chain-sample-note">
+          <span>描述</span>
+          <p>${escapeHtml(sample.interpretation || '没有记录样本描述。')}</p>
+        </section>
+        <section class="chain-sample-note impact">
+          <span>启发</span>
+          <p>${escapeHtml(sample.nextIterationImpact || '没有记录对下一轮的启发。')}</p>
+        </section>
       </div>
     </article>
   `;
@@ -1890,32 +2116,44 @@ function renderKnowledgeGraphBuilder(data: Bootstrap) {
   const running = Boolean(data.runtime?.knowledgeGraphRunning || build.running);
   const knowledgeEnabled = data.variant?.capabilities?.knowledgeGraph !== false;
   const canContinue = !running && ['paused', 'failed'].includes(String(build.status || ''));
+  const hasGraph = hasKnowledgeGraph(data.knowledgeGraph);
   els.graphBuildStatus.innerHTML = `
     <span class="mini-pill ${build.status === 'failed' ? 'failed' : running ? 'active' : build.status === 'completed' ? 'ready' : 'pending'}">
       ${running ? '<span data-icon="Loader2"></span>' : ''}
-      ${escapeHtml(!knowledgeEnabled ? `disabled · ${data.variant?.id || 'variant'}` : running ? 'running' : build.status || 'idle')}
+      ${escapeHtml(!knowledgeEnabled ? `已禁用 · ${data.variant?.id || 'variant'}` : running ? '运行中' : statusLabel(build.status || 'idle'))}
     </span>
-    <span class="meta">${escapeHtml(build.message || '')}</span>
+    <span class="meta">${escapeHtml(graphBuildMessage(build.message || ''))}</span>
   `;
   if (els.graphAuthMode.value !== (config.authMode || 'manual')) els.graphAuthMode.value = config.authMode || 'manual';
   if (els.graphProtocol.value !== (config.protocol || '')) els.graphProtocol.value = config.protocol || '';
   if (els.graphModelInput.value !== (config.model || '')) els.graphModelInput.value = config.model || '';
   if (els.graphBaseUrlInput.value !== (config.baseUrl || '')) els.graphBaseUrlInput.value = config.baseUrl || '';
+  els.buildGraphBtn.querySelector('span:last-child')!.textContent = hasGraph ? '更新' : '构建';
+  els.graphLeftActions.classList.toggle('has-graph', hasGraph);
   els.buildGraphBtn.disabled = running || !knowledgeEnabled;
+  els.rebuildGraphBtn.hidden = !hasGraph;
+  els.rebuildGraphBtn.disabled = running || !knowledgeEnabled;
   els.continueGraphBtn.disabled = !canContinue || !knowledgeEnabled;
   els.pauseGraphBtn.disabled = !running || !knowledgeEnabled;
   els.graphExtractionDepthInput.disabled = running || !knowledgeEnabled;
   els.saveGraphLlmBtn.disabled = !knowledgeEnabled;
 }
 
+function hasKnowledgeGraph(graph: JsonMap | null | undefined) {
+  if (!graph) return false;
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes.length : 0;
+  const edges = Array.isArray(graph.edges) ? graph.edges.length : 0;
+  return nodes > 0 || edges > 0;
+}
+
 function renderKnowledgeWorkbench(data: Bootstrap) {
   const summary = data.knowledgeBaseSummary || data.knowledgeGraph?.summary || {};
   els.knowledgeSummary.innerHTML = `
-    <div class="knowledge-depth">Depth ${escapeHtml(summary.extractionDepth ?? data.runtimeSettings?.knowledgeGraphExtractionDepth ?? 2)}</div>
-    ${knowledgeStatHtml('knowledge', summary.knowledgeCount ?? 0, 'Knowledge')}
-    ${knowledgeStatHtml('evidence', summary.evidenceCount ?? 0, 'Evidence')}
-    ${knowledgeStatHtml('classes', summary.classCount ?? 0, 'Classes')}
-    ${knowledgeStatHtml('relations', summary.relationCount ?? 0, 'Relations')}
+    <div class="knowledge-depth">深度 ${escapeHtml(summary.extractionDepth ?? data.runtimeSettings?.knowledgeGraphExtractionDepth ?? 2)}</div>
+    ${knowledgeStatHtml('knowledge', summary.knowledgeCount ?? 0, '知识')}
+    ${knowledgeStatHtml('evidence', summary.evidenceCount ?? 0, '证据')}
+    ${knowledgeStatHtml('classes', summary.classCount ?? 0, '概念')}
+    ${knowledgeStatHtml('relations', summary.relationCount ?? 0, '关系')}
   `;
   for (const item of els.knowledgeSummary.querySelectorAll<HTMLButtonElement>('[data-kb-kind]')) {
     item.addEventListener('click', async () => {
@@ -1971,9 +2209,9 @@ function renderKnowledgeBaseCards() {
     els.knowledgeCards.innerHTML = `
       <div class="kb-list-head">
         <div class="node-detail-title">${escapeHtml(state.selectedKnowledgeBaseKind)}</div>
-        <button class="icon-btn ghost" type="button" data-kb-close title="Close"><span data-icon="X"></span></button>
+        <button class="icon-btn ghost" type="button" data-kb-close title="关闭"><span data-icon="X"></span></button>
       </div>
-      ${emptyState('Loading cards...', 'Loader2')}
+      ${emptyState('正在加载卡片...', 'Loader2')}
     `;
     bindKnowledgeCardControls();
     return;
@@ -1984,12 +2222,12 @@ function renderKnowledgeBaseCards() {
     <div class="kb-list-head">
       <div>
         <div class="node-detail-title">${escapeHtml(payload.label || state.selectedKnowledgeBaseKind)}</div>
-        <div class="meta">${escapeHtml(cards.length)} shown${payload.count ? ` · ${escapeHtml(payload.count)} total` : ''}</div>
+        <div class="meta">已显示 ${escapeHtml(cards.length)} 条${payload.count ? ` · 共 ${escapeHtml(payload.count)} 条` : ''}</div>
       </div>
-      <button class="icon-btn ghost" type="button" data-kb-close title="Close"><span data-icon="X"></span></button>
+      <button class="icon-btn ghost" type="button" data-kb-close title="关闭"><span data-icon="X"></span></button>
     </div>
     ${payload.error ? `<div class="empty"><span data-icon="AlertTriangle"></span><span>${escapeHtml(payload.error)}</span></div>` : ''}
-    ${cards.length ? `<div class="kb-cards">${cards.map(knowledgeBaseCardHtml).join('')}</div>` : emptyState('No cards yet.', 'Info')}
+    ${cards.length ? `<div class="kb-cards">${cards.map(knowledgeBaseCardHtml).join('')}</div>` : emptyState('暂无卡片。', 'Info')}
   `;
   bindKnowledgeCardControls();
 }
@@ -2014,7 +2252,7 @@ function knowledgeBaseCardHtml(card: JsonMap) {
   return `
     <article class="kb-card ${previewUrl ? 'clickable' : ''}" ${previewUrl ? `data-preview-url="${escapeHtml(previewUrl)}"` : ''}>
       <div class="kb-card-title">
-        <span>${escapeHtml(card.title || card.id || 'card')}</span>
+        <span>${escapeHtml(card.title || card.id || '卡片')}</span>
         <span class="meta">${escapeHtml(card.id || '')}</span>
       </div>
       ${card.subtitle ? `<div class="meta">${escapeHtml(card.subtitle)}</div>` : ''}
@@ -2029,7 +2267,7 @@ function renderBuilderTrace(parts: JsonMap[], target: HTMLElement = els.builderT
   const savedScroll = target.scrollTop;
   const visible = normalizeChatParts((parts || []).map((part) => ({ ...part, sourceLabel: 'builder' }))).slice(-80);
   if (!visible.length) {
-    target.innerHTML = emptyState('No builder agent trace yet. Click Build to start.', 'TerminalSquare');
+    target.innerHTML = emptyState('暂无构建记录。点击“构建”开始。', 'TerminalSquare');
     return;
   }
   target.innerHTML = visible.map((part) => messageHtml(part)).join('');
@@ -2044,29 +2282,22 @@ function renderBuilderTrace(parts: JsonMap[], target: HTMLElement = els.builderT
 function renderKnowledgeGraph(graph: JsonMap | null | undefined) {
   const nodes: JsonMap[] = graph?.nodes || [];
   const edges: JsonMap[] = graph?.edges || [];
-  els.graphTitle.textContent = graph?.taskGoal || 'Reference Knowledge';
+  els.graphTitle.textContent = graphTitleLabel(graph);
   if (!nodes.length) {
-    els.graphCanvas.innerHTML = emptyState(graph?.notes || '暂无知识图谱。完成 problem-contract 后会在这里显示。', 'Network');
-    els.graphInspector.innerHTML = graphMetadataHtml(graph, nodes, edges);
+    els.graphLayout.classList.add('graph-empty');
+    els.graphInfoPanel.hidden = true;
+    els.graphInfoToggle.hidden = true;
+    els.graphCanvas.innerHTML = graphEmptyStateHtml(graph);
+    els.graphInspector.innerHTML = '';
     return;
   }
+  els.graphLayout.classList.remove('graph-empty');
+  renderGraphInfoState();
 
   const selected = nodes.find((node) => node.id === state.selectedGraphNodeId) || nodes[0];
   state.selectedGraphNodeId = selected?.id || null;
-  const width = 920;
-  const height = 620;
-  const centerX = width / 2;
-  const centerY = height / 2;
-  const radius = Math.min(width, height) * 0.36;
-  const positions = new Map<string, { x: number; y: number }>();
-  nodes.forEach((node, index) => {
-    const angle = (Math.PI * 2 * index) / Math.max(nodes.length, 1) - Math.PI / 2;
-    const typeOffset = graphNodeTypes.indexOf(node.type || '') % 5;
-    positions.set(String(node.id), {
-      x: centerX + Math.cos(angle) * (radius - typeOffset * 18),
-      y: centerY + Math.sin(angle) * (radius - typeOffset * 18),
-    });
-  });
+  const layout = graphNetworkLayout(nodes, edges, String(selected?.id || ''));
+  const { width, height, positions, degrees, labelIds } = layout;
 
   els.graphCanvas.innerHTML = `
     <svg class="graph-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Knowledge graph">
@@ -2075,7 +2306,7 @@ function renderKnowledgeGraph(graph: JsonMap | null | undefined) {
           const source = positions.get(String(edge.source));
           const target = positions.get(String(edge.target));
           if (!source || !target) return '';
-          return `<line x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}" />`;
+          return `<line x1="${source.x.toFixed(1)}" y1="${source.y.toFixed(1)}" x2="${target.x.toFixed(1)}" y2="${target.y.toFixed(1)}" />`;
         }).join('')}
       </g>
       <g class="graph-nodes">
@@ -2083,10 +2314,15 @@ function renderKnowledgeGraph(graph: JsonMap | null | undefined) {
           const position = positions.get(String(node.id));
           if (!position) return '';
           const selectedClass = node.id === state.selectedGraphNodeId ? ' selected' : '';
+          const degree = degrees.get(String(node.id)) || 0;
+          const radius = graphNodeRadius(degree, node.id === state.selectedGraphNodeId);
+          const showLabel = labelIds.has(String(node.id));
+          const label = shortGraphLabel(node.label || node.id, showLabel ? 22 : 14);
           return `
-            <g class="graph-node${selectedClass}" data-node-id="${escapeHtml(node.id)}" transform="translate(${position.x} ${position.y})">
-              <circle r="22"></circle>
-              <text y="42">${escapeHtml(shortGraphLabel(node.label || node.id))}</text>
+            <g class="graph-node${selectedClass}${showLabel ? ' labeled' : ''}" data-node-id="${escapeHtml(node.id)}" transform="translate(${position.x.toFixed(1)} ${position.y.toFixed(1)})">
+              <title>${escapeHtml(node.label || node.id)}</title>
+              <circle r="${radius.toFixed(1)}"></circle>
+              ${showLabel ? `<text y="${(radius + 15).toFixed(1)}">${escapeHtml(label)}</text>` : ''}
             </g>
           `;
         }).join('')}
@@ -2113,15 +2349,178 @@ function renderKnowledgeGraph(graph: JsonMap | null | undefined) {
   }
 }
 
+function graphTitleLabel(graph: JsonMap | null | undefined) {
+  const raw = String(graph?.taskGoal || '').trim();
+  if (!raw) return '参考知识';
+  if (raw === 'Knowledge Base') return '参考知识库';
+  if (raw === 'Time-Series Domain Knowledge') return '时间序列领域知识';
+  if (raw === 'Domain Brief: Time-Series Domain Knowledge') return '时间序列领域知识';
+  if (/^Domain Brief:/i.test(raw)) return raw.replace(/^Domain Brief:\s*/i, '').trim() || '参考知识';
+  return raw;
+}
+
+function graphEmptyStateHtml(graph: JsonMap | null | undefined) {
+  return `
+    <div class="graph-empty-state" role="status" aria-live="polite">
+      <div class="graph-empty-orbit" aria-hidden="true">
+        <span></span>
+        <span></span>
+        <span></span>
+        <i></i>
+      </div>
+      <div class="graph-empty-copy">
+        <div class="graph-empty-title">知识图谱尚未构建</div>
+        <p>${escapeHtml(graphEmptyNotes(graph))}</p>
+      </div>
+    </div>
+  `;
+}
+
+function graphEmptyNotes(graph: JsonMap | null | undefined) {
+  const raw = String(graph?.notes || '').trim();
+  if (!raw) return '点击左侧“构建”后，系统会从参考资料中抽取概念、证据和关系，并在这里生成可浏览的知识网络。';
+  if (raw === 'CSV knowledge base: evidence, knowledge, class nodes, and relation edges.') {
+    return '当前还没有可展示的概念和关系。点击左侧“构建”开始生成知识网络。';
+  }
+  return raw;
+}
+
 const graphNodeTypes = ['task', 'concept', 'observable', 'method', 'metric', 'risk', 'assumption', 'data_field', 'case_pattern', 'reference'];
+
+function graphNetworkLayout(nodes: JsonMap[], edges: JsonMap[], selectedId: string) {
+  const width = 1280;
+  const height = 820;
+  const pad = 72;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const ids = nodes.map((node) => String(node.id));
+  const degrees = new Map<string, number>(ids.map((id) => [id, 0]));
+  const adjacency = new Map<string, Set<string>>(ids.map((id) => [id, new Set<string>()]));
+  for (const edge of edges) {
+    const source = String(edge.source || '');
+    const target = String(edge.target || '');
+    if (!degrees.has(source) || !degrees.has(target)) continue;
+    degrees.set(source, (degrees.get(source) || 0) + 1);
+    degrees.set(target, (degrees.get(target) || 0) + 1);
+    adjacency.get(source)?.add(target);
+    adjacency.get(target)?.add(source);
+  }
+
+  const sorted = ids.slice().sort((a, b) => (degrees.get(b) || 0) - (degrees.get(a) || 0));
+  const anchor = selectedId || sorted[0] || '';
+  const simNodes = nodes.map((node, index) => {
+    const id = String(node.id);
+    const angle = index * 2.399963229728653;
+    const radius = Math.sqrt(index + 1) * 30;
+    return {
+      id,
+      degree: degrees.get(id) || 0,
+      r: graphNodeRadius(degrees.get(id) || 0, id === anchor),
+      x: centerX + Math.cos(angle) * radius,
+      y: centerY + Math.sin(angle) * radius,
+    };
+  });
+  const simLinks = edges
+    .map((edge) => ({ source: String(edge.source || ''), target: String(edge.target || '') }))
+    .filter((edge) => degrees.has(edge.source) && degrees.has(edge.target));
+
+  forceSimulation(simNodes as any)
+    .force('link', forceLink(simLinks as any)
+      .id((node: any) => node.id)
+      .distance((link: any) => {
+        const sourceDegree = degrees.get(String(link.source?.id || link.source)) || 0;
+        const targetDegree = degrees.get(String(link.target?.id || link.target)) || 0;
+        return Math.max(70, 145 - Math.min(60, (sourceDegree + targetDegree) * 3));
+      })
+      .strength(0.36))
+    .force('charge', forceManyBody().strength((node: any) => -210 - Math.min(220, node.degree * 20)))
+    .force('collide', forceCollide((node: any) => node.r + 28).strength(0.9).iterations(3))
+    .force('center', forceCenter(centerX, centerY).strength(0.18))
+    .force('x', forceX(centerX).strength((node: any) => node.id === anchor ? 0.08 : 0.025 + Math.min(0.045, node.degree * 0.004)))
+    .force('y', forceY(centerY).strength((node: any) => node.id === anchor ? 0.08 : 0.025 + Math.min(0.045, node.degree * 0.004)))
+    .stop()
+    .tick(420);
+
+  const xValues = simNodes.map((node: any) => Number(node.x));
+  const yValues = simNodes.map((node: any) => Number(node.y));
+  const minX = Math.min(...xValues);
+  const maxX = Math.max(...xValues);
+  const minY = Math.min(...yValues);
+  const maxY = Math.max(...yValues);
+  const scale = Math.min(
+    1,
+    (width - pad * 2) / Math.max(1, maxX - minX),
+    (height - pad * 2) / Math.max(1, maxY - minY),
+  );
+  const offsetX = centerX - ((minX + maxX) / 2) * scale;
+  const offsetY = centerY - ((minY + maxY) / 2) * scale;
+
+  const finalPositions = new Map(simNodes.map((node: any) => {
+    const x = Math.max(pad, Math.min(width - pad, node.x * scale + offsetX));
+    const y = Math.max(pad, Math.min(height - pad, node.y * scale + offsetY));
+    return [node.id, { x, y }];
+  }));
+  const labelIds = graphLabelSelection(nodes, finalPositions, degrees, anchor);
+
+  return {
+    width,
+    height,
+    degrees,
+    labelIds,
+    positions: finalPositions,
+  };
+}
+
+function graphNodeRadius(degree: number, selected = false) {
+  return Math.min(selected ? 34 : 30, 12 + Math.sqrt(degree + 1) * 4.4);
+}
+
+function graphLabelSelection(
+  nodes: JsonMap[],
+  positions: Map<string, { x: number; y: number }>,
+  degrees: Map<string, number>,
+  selectedId: string,
+) {
+  const selected = new Set<string>();
+  const boxes: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+  const candidates = nodes
+    .map((node) => {
+      const id = String(node.id);
+      return { id, label: String(node.label || node.id || ''), degree: degrees.get(id) || 0 };
+    })
+    .filter((node) => positions.has(node.id) && (node.degree > 0 || node.id === selectedId))
+    .sort((a, b) => (b.id === selectedId ? 1 : 0) - (a.id === selectedId ? 1 : 0) || b.degree - a.degree);
+
+  for (const node of candidates) {
+    const position = positions.get(node.id)!;
+    const radius = graphNodeRadius(node.degree, node.id === selectedId);
+    const label = shortGraphLabel(node.label, 22);
+    const width = Math.min(164, Math.max(32, label.length * 7.2));
+    const height = 17;
+    const box = {
+      x1: position.x - width / 2 - 5,
+      y1: position.y + radius + 5,
+      x2: position.x + width / 2 + 5,
+      y2: position.y + radius + 5 + height,
+    };
+    const overlaps = boxes.some((other) =>
+      box.x1 < other.x2 && box.x2 > other.x1 && box.y1 < other.y2 && box.y2 > other.y1
+    );
+    if (!overlaps || node.id === selectedId) {
+      selected.add(node.id);
+      boxes.push(box);
+    }
+  }
+  return selected;
+}
 
 function graphMetadataHtml(graph: JsonMap | null | undefined, nodes: JsonMap[], edges: JsonMap[]) {
   return `
-    <div class="node-detail-title">Graph Metadata</div>
+    <div class="node-detail-title">图谱信息</div>
     <dl class="kv graph-kv">
-      <dt>Classes</dt><dd>${nodes.length}</dd>
-      <dt>Relations</dt><dd>${edges.length}</dd>
-      <dt>Updated</dt><dd>${escapeHtml(graph?.updatedAt || '-')}</dd>
+      <dt>概念</dt><dd>${nodes.length}</dd>
+      <dt>关系</dt><dd>${edges.length}</dd>
+      <dt>更新时间</dt><dd>${escapeHtml(graph?.updatedAt || '-')}</dd>
     </dl>
   `;
 }
@@ -2131,30 +2530,30 @@ function graphInspectorHtml(graph: JsonMap | null | undefined, selected: JsonMap
   const related = edges.filter((edge) => edge.source === selected.id || edge.target === selected.id);
   return `
     ${graphMetadataHtml(graph, nodes, edges)}
-    <div class="detail-section-title">Selected</div>
+    <div class="detail-section-title">选中概念</div>
     <div class="graph-selected">
       <div class="node-detail-title">${escapeHtml(selected.label || selected.id)}</div>
-      <div class="meta">${escapeHtml(selected.type || 'class')} · ${escapeHtml(selected.id || '')}</div>
+      <div class="meta">${escapeHtml(selected.type || '概念')} · ${escapeHtml(selected.id || '')}</div>
       ${classDescriptionHtml(selected.summary || '')}
     </div>
-    <div class="detail-section-title">Source Knowledge</div>
-    ${idListHtml(selected.knowledgeIds || [], 'Knowledge')}
-    <div class="detail-section-title">Evidence</div>
+    <div class="detail-section-title">来源知识</div>
+    ${idListHtml(selected.knowledgeIds || [], '知识')}
+    <div class="detail-section-title">证据</div>
     ${graphEvidenceHtml(selected.evidence || [])}
-    <div class="detail-section-title">Relations</div>
+    <div class="detail-section-title">关系</div>
     ${related.length ? `<div class="graph-relations">${related.map((edge) => `
       <div class="graph-relation">
         <div class="timeline-type">${escapeHtml(edge.relation || 'related')}</div>
         <div class="meta">${escapeHtml(edge.sourceLabel || edge.source)} -> ${escapeHtml(edge.targetLabel || edge.target)}</div>
         <div>${escapeHtml(edge.summary || '')}</div>
-        ${edge.knowledgeIds?.length ? idListHtml(edge.knowledgeIds, 'Knowledge') : ''}
+        ${edge.knowledgeIds?.length ? idListHtml(edge.knowledgeIds, '知识') : ''}
       </div>
     `).join('')}</div>` : emptyState('暂无关联边。', 'GitBranch')}
   `;
 }
 
 function idListHtml(items: string[], label: string) {
-  if (!items.length) return emptyState(`No supporting ${label.toLowerCase()} yet.`, 'Info');
+  if (!items.length) return emptyState(`暂无相关${label}。`, 'Info');
   return `<div class="graph-mini-list">${items.map((item) => `<span>${escapeHtml(item)}</span>`).join('')}</div>`;
 }
 
@@ -2162,7 +2561,7 @@ function classDescriptionHtml(summary: string) {
   if (!summary) return emptyState('暂无描述。', 'Info');
   return `
     <details class="class-description">
-      <summary>Description</summary>
+      <summary>描述</summary>
       <p>${escapeHtml(summary)}</p>
     </details>
   `;
@@ -2173,24 +2572,24 @@ function graphEvidenceHtml(items: JsonMap[]) {
   return `<div class="graph-evidence">${items.slice(0, 6).map((item) => `
     <button class="artifact-item evidence-item" type="button" data-path="${escapeHtml(item.sourcePath || '')}" data-preview-url="${escapeHtml(item.previewUrl || '')}">
       <span data-icon="File"></span>
-      <span>${escapeHtml(item.sourcePath || 'source')}: ${escapeHtml(item.quote || item.summary || '')}</span>
+      <span>${escapeHtml(item.sourcePath || '来源')}: ${escapeHtml(item.quote || item.summary || '')}</span>
     </button>
   `).join('')}</div>`;
 }
 
-function shortGraphLabel(value: string) {
-  return value.length > 18 ? `${value.slice(0, 17)}...` : value;
+function shortGraphLabel(value: string, maxLength = 18) {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}...` : value;
 }
 
 function messageHtml(part: JsonMap) {
   const role = part.role || 'system';
   const roleClass = ['user', 'assistant', 'system', 'tool'].includes(role) ? role : 'system';
   const text = part.displayText || part.text || summarizeRaw(part.raw) || '';
-  const source = part.sourceLabel ? `${part.sourceLabel} · ` : '';
+  const source = part.sourceLabel ? `${sourceLabel(part.sourceLabel)} · ` : '';
   if (part.type === 'loading') {
     return `
       <article class="message assistant loading">
-        <div class="message-role"><span data-icon="Loader2"></span>${escapeHtml(source)}assistant · running · ${formatTime(part.timestamp)}</div>
+        <div class="message-role"><span data-icon="Loader2"></span>${escapeHtml(source)}助手 · 运行中 · ${formatTime(part.timestamp)}</div>
         <div class="message-text loading-line"><span>${escapeHtml(part.text)}</span></div>
       </article>
     `;
@@ -2208,7 +2607,7 @@ function messageHtml(part: JsonMap) {
           <span class="tool-status ${done ? 'done' : 'running'}"><span data-icon="${done ? 'Check' : 'TerminalSquare'}"></span></span>
           <span class="tool-copy">
             <span class="tool-title">${escapeHtml(summary)}</span>
-            <span class="tool-meta">${escapeHtml(source)}${escapeHtml(toolName)} · ${escapeHtml(part.type || 'tool')} · ${formatTime(part.timestamp)}</span>
+            <span class="tool-meta">${escapeHtml(source)}${escapeHtml(toolName)} · ${escapeHtml(partTypeLabel(part.type || 'tool'))} · ${formatTime(part.timestamp)}</span>
           </span>
           <span class="tool-chevron" data-icon="ChevronRight"></span>
         </button>
@@ -2218,7 +2617,7 @@ function messageHtml(part: JsonMap) {
   }
   return `
     <article class="message ${escapeHtml(roleClass)}">
-      <div class="message-role"><span data-icon="${role === 'user' ? 'Send' : role === 'assistant' ? 'Bot' : 'Info'}"></span>${escapeHtml(source)}${escapeHtml(role)} · ${escapeHtml(part.type || 'text')} · ${formatTime(part.timestamp)}</div>
+      <div class="message-role"><span data-icon="${role === 'user' ? 'Send' : role === 'assistant' ? 'Bot' : 'Info'}"></span>${escapeHtml(source)}${escapeHtml(roleLabel(role))} · ${escapeHtml(partTypeLabel(part.type || 'text'))} · ${formatTime(part.timestamp)}</div>
       <div class="message-text markdown-body">${renderMarkdown(text)}</div>
     </article>
   `;
@@ -2245,8 +2644,8 @@ function toolSummary(part: JsonMap) {
 function toolDetail(part: JsonMap) {
   if (part.type === 'tool_call') {
     const chunks = [
-      `Tool: ${toolNameForPart(part)}`,
-      `Status: ${part.status || 'pending'}`,
+      `工具：${toolNameForPart(part)}`,
+      `状态：${statusLabel(part.status || 'pending')}`,
       '',
       '调用意图:',
       part.intend || '',
@@ -2389,7 +2788,7 @@ function displayTextForPart(part: JsonMap) {
     if (result?.filenames) {
       const files = result.filenames.slice(0, 20).join('\n');
       const more = result.truncated ? `\n... (${result.numFiles} files total)` : '';
-      return result.filenames.length ? `工具结果：\n${files}${more}` : '工具结果：No files found';
+      return result.filenames.length ? `工具结果：\n${files}${more}` : '工具结果：未找到文件';
     }
     const rawText = toolResultTextFromRaw(part.raw);
     if (rawText) return rawText;
@@ -2401,7 +2800,7 @@ function displayTextForPart(part: JsonMap) {
     return subtype;
   }
   if (part.role === 'system' && part.type === 'result') {
-    if (part.raw?.is_error) return part.raw?.result || part.text || 'Error';
+    if (part.raw?.is_error) return part.raw?.result || part.text || '错误';
     return '';
   }
   return part.text || '';
@@ -2429,7 +2828,7 @@ function renderTimeline(events: JsonMap[]) {
 function renderFileTree(fileTree: Bootstrap['fileTree']) {
   if (!fileTree?.tree) {
     els.workspacePath.textContent = '';
-    els.fileTree.innerHTML = emptyState('暂无 workspace 文件。', 'FolderTree');
+    els.fileTree.innerHTML = emptyState('暂无工作区文件。', 'FolderTree');
     return;
   }
   els.workspacePath.textContent = fileTree.root || '';
@@ -2454,7 +2853,7 @@ function renderTreeNode(node: FileTreeNode | undefined, root = false): string {
       : '';
     return `
       <details class="file-dir" ${open ? 'open' : ''}>
-        <summary><span data-icon="ChevronRight"></span><span>${escapeHtml(node.name || 'workspace')}</span></summary>
+        <summary><span data-icon="ChevronRight"></span><span>${escapeHtml(node.name || '工作区')}</span></summary>
         <div class="file-children">
           ${(node.children || []).map((child) => renderTreeNode(child)).join('')}
           ${truncation}
@@ -2482,14 +2881,14 @@ async function showWorkspaceFile(path: string) {
   try {
     const file = await fetchJson<JsonMap>(`/api/files/content?path=${encodeURIComponent(path)}`);
     if (file.binary) {
-      showDetail(path, { message: 'Binary file preview is not supported.', size: file.size });
+      showDetail(path, { message: 'Binary file preview is not supported.', size: file.size }, path);
       return;
     }
     if (file.truncated) {
-      showDetail(path, { message: 'File is too large to preview.', size: file.size });
+      showDetail(path, { message: 'File is too large to preview.', size: file.size }, path);
       return;
     }
-    showTextDetail(path, file.text || '');
+    showTextDetail(path, file.text || '', path);
   } catch (error) {
     showDetail(path, { message: error instanceof Error ? error.message : String(error) });
   }
@@ -2505,8 +2904,9 @@ function updateControls(data: Bootstrap) {
   els.messageInput.disabled = state.busy || (Boolean(ws.activeNode) && !activePaused);
   els.messageInput.placeholder = activePaused
     ? '补充说明后点击 Resume，当前 node 会继续执行'
-    : '向 orchestrator 发送消息';
+    : '向任务编排器发送消息';
   els.interruptBtn.disabled = !state.busy && !activeRunning;
+  els.interruptBtn.hidden = !state.busy && !activeRunning;
   els.uploadBtn.disabled = state.busy;
   els.rawZipUploadBtn.disabled = state.busy;
   els.approveControlBtn.disabled = state.busy || !pendingControl;
@@ -2526,7 +2926,7 @@ async function runAction(fn: () => Promise<void>) {
   try {
     await fn();
   } catch (error) {
-    showDetail('Error', { message: error instanceof Error ? error.message : String(error) });
+    showDetail('错误', { message: error instanceof Error ? error.message : String(error) });
   } finally {
     state.busy = false;
     render();
@@ -2543,7 +2943,7 @@ async function runStreamingAction(fn: () => Promise<void>) {
     state.busy = false;
     state.loadingMessage = null;
     render();
-    showDetail('Error', { message: error instanceof Error ? error.message : String(error) });
+    showDetail('错误', { message: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -2563,25 +2963,31 @@ function emptyBootstrap(): Bootstrap {
 function variantPill(variant: JsonMap | null | undefined) {
   if (!variant?.id) return '<span class="mini-pill pending">-</span>';
   const id = String(variant.id).toUpperCase();
-  const label = `${id} · ${variant.name || 'Unknown variant'}`;
+  const label = `${id} · ${variantNameLabel(variant)}`;
   const isDefault = id === 'NOD-KGR-KTL-CRV-SUB-ADA';
-  const features = Array.isArray(variant.features) ? `Features: ${variant.features.join(', ')}` : '';
+  const features = Array.isArray(variant.features) ? `功能：${variant.features.join(', ')}` : '';
   const title = [variant.description || label, features].filter(Boolean).join('\n');
   return `<span class="mini-pill variant-pill ${isDefault ? 'variant-default' : 'variant-ablation'}" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
+}
+
+function variantNameLabel(variant: JsonMap) {
+  const id = String(variant.id || '').toUpperCase();
+  if (id === 'NOD-KGR-KTL-CRV-SUB-ADA') return '完整流程';
+  return String(variant.name || '未命名流程');
 }
 
 function formatRuntimeUv(runtimeUv: JsonMap | null | undefined) {
   if (!runtimeUv) return '-';
   const runtimeState = runtimeUv.state || 'unknown';
-  if (runtimeState === 'ready') return `ready · ${runtimeUv.pythonVersion || 'python'}`;
-  if (runtimeState === 'skipped') return 'skipped';
-  if (runtimeState === 'failed') return 'failed';
+  if (runtimeState === 'ready') return `就绪 · Python ${runtimeUv.pythonVersion || ''}`.trim();
+  if (runtimeState === 'skipped') return '已跳过';
+  if (runtimeState === 'failed') return '失败';
   return runtimeState;
 }
 
 function runtimePill(runtimeUv: JsonMap | null | undefined) {
   const text = formatRuntimeUv(runtimeUv);
-  const tone = text.startsWith('ready') ? 'ready' : text === 'failed' ? 'failed' : 'pending';
+  const tone = text.startsWith('就绪') ? 'ready' : text === '失败' ? 'failed' : 'pending';
   return `<span class="mini-pill ${tone}">${escapeHtml(text)}</span>`;
 }
 
@@ -2592,6 +2998,94 @@ function statusPill(text: string, tone: string) {
 function statusIcon(status: string) {
   const icon = status === 'done' ? 'Check' : status === 'active' ? 'Loader2' : status === 'failed' ? 'XCircle' : 'Circle';
   return `<span data-icon="${icon}"></span>`;
+}
+
+function statusLabel(status: any) {
+  const value = String(status || 'idle');
+  if (value === 'done' || value === 'completed' || value === 'ready') return '已完成';
+  if (value === 'active' || value === 'running' || value === 'building') return '运行中';
+  if (value === 'failed') return '失败';
+  if (value === 'paused') return '已暂停';
+  if (value === 'waiting_approval') return '等待确认';
+  if (value === 'pending') return '待执行';
+  if (value === 'idle') return '空闲';
+  return value;
+}
+
+function modeLabel(mode: any) {
+  const value = String(mode || '-');
+  if (value === 'auto') return '自动';
+  if (value === 'manual') return '手动';
+  return value;
+}
+
+function graphBuildMessage(message: string) {
+  if (!message) return '';
+  if (message === 'Knowledge graph updated.') return '知识图谱已更新。';
+  return message;
+}
+
+function chainSummaryBuildMessage(message: string) {
+  if (!message) return '';
+  if (message === 'Chain summary updated.') return '思维链总结已更新。';
+  return message;
+}
+
+function nodeDisplayName(type: any) {
+  const value = String(type || '');
+  if (value === 'problem-contract') return '问题定义';
+  if (value === 'knowledge-to-tools') return '知识转工具';
+  if (value === 'iterative-solving') return '迭代求解';
+  if (value === 'final-summary') return '最终总结';
+  return value;
+}
+
+function nodePurposeText(spec: JsonMap) {
+  const type = String(spec?.type || '');
+  if (type === 'problem-contract') return '根据用户输入和参考资料获取并处理数据，通过数据探索明确当前要解决的问题，并给出整个流程的问题契约。';
+  if (type === 'knowledge-to-tools') return '在主会话中，根据问题契约、数据规范、参考资料目录以及知识图谱（若已构建），生成并校验确定性的参考特征提取器，作为后续案例复盘的数值证据来源。';
+  if (type === 'iterative-solving') return '根据任务契约每轮提出多个候选方案，分别做可行性测试与案例复盘，再综合证据选择本轮执行对象或下一轮优化方向。';
+  if (type === 'final-summary') return '当迭代优化结束后，总结整个优化历程、最终工具使用方案、最终结果和系统边界。';
+  return String(spec?.purpose || '');
+}
+
+function nodePhaseLabel(phase: any) {
+  const value = String(phase || '');
+  if (value === 'setup') return '准备';
+  if (value === 'solve') return '求解';
+  if (value === 'iteration') return '迭代';
+  if (value === 'summary') return '总结';
+  return value;
+}
+
+function roleLabel(role: any) {
+  const value = String(role || '');
+  if (value === 'user') return '用户';
+  if (value === 'assistant') return '助手';
+  if (value === 'system') return '系统';
+  return value;
+}
+
+function partTypeLabel(type: any) {
+  const value = String(type || '');
+  if (value === 'text') return '文本';
+  if (value === 'tool_call') return '工具调用';
+  if (value === 'tool_use') return '工具使用';
+  if (value === 'tool_result') return '工具结果';
+  if (value === 'tool') return '工具';
+  if (value === 'loading') return '运行中';
+  if (value === 'raw') return '原始事件';
+  if (value === 'result') return '结果';
+  return value;
+}
+
+function sourceLabel(source: any) {
+  const value = String(source || '');
+  if (value === 'main') return '主会话';
+  if (value === 'builder') return '构建器';
+  if (value === 'harness') return '系统';
+  if (value.startsWith('node:')) return `节点：${nodeDisplayName(value.slice(5))}`;
+  return value;
 }
 
 function emptyState(text: string, icon = 'Info') {
@@ -2652,13 +3146,14 @@ function updateSendButton(activePaused = false) {
   const hasText = Boolean(els.messageInput.value.trim());
   const canSend = hasText && !els.messageInput.disabled && !state.busy;
   els.sendBtn.disabled = !canSend;
+  els.sendBtn.hidden = !els.interruptBtn.hidden;
   const icon = state.busy ? 'Square' : activePaused ? 'Play' : 'ArrowUp';
   if (els.sendBtn.dataset.currentIcon !== icon) {
     els.sendBtn.dataset.currentIcon = icon;
     els.sendBtn.innerHTML = `<span data-icon="${icon}"></span>`;
     hydrateIcons(els.sendBtn);
   }
-  els.sendBtn.title = activePaused ? '继续当前 node' : '发送';
+  els.sendBtn.title = activePaused ? '继续当前节点' : '发送';
   els.sendBtn.classList.toggle('ready', canSend);
 }
 
@@ -2699,7 +3194,7 @@ async function interruptCurrent(reason: string) {
   } catch (error) {
     state.loadingMessage = null;
     render();
-    showDetail('Interrupt Error', { message: error instanceof Error ? error.message : String(error) });
+    showDetail('暂停失败', { message: error instanceof Error ? error.message : String(error) });
   } finally {
     els.interruptBtn.disabled = false;
     updateControls(state.bootstrap || emptyBootstrap());
@@ -2770,16 +3265,29 @@ function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function showDetail(title: string, value: any) {
+function showDetail(title: string, value: any, path = '') {
   els.dialogTitle.textContent = title;
   els.dialogBody.textContent = JSON.stringify(value ?? null, null, 2);
+  updateReferenceDeleteButton(path);
   els.dialog.showModal();
 }
 
-function showTextDetail(title: string, text: string) {
+function showTextDetail(title: string, text: string, path = '') {
   els.dialogTitle.textContent = title;
   els.dialogBody.textContent = text;
+  updateReferenceDeleteButton(path);
   els.dialog.showModal();
+}
+
+function updateReferenceDeleteButton(path: string) {
+  const normalized = String(path || '').trim().replace(/^\/+/, '');
+  const deletable = isReferenceFilePath(normalized);
+  els.deleteReferenceBtn.hidden = !deletable;
+  els.deleteReferenceBtn.dataset.path = deletable ? normalized : '';
+}
+
+function isReferenceFilePath(path: string) {
+  return path.startsWith('references/') && !path.endsWith('/');
 }
 
 function summarizeRaw(raw: any) {

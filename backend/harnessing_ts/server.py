@@ -47,6 +47,10 @@ class KnowledgeGraphBuildRequest(BaseModel):
     trigger: str | None = "manual"
 
 
+class DeleteReferenceRequest(BaseModel):
+    path: str
+
+
 class KnowledgeGraphLlmConfigRequest(BaseModel):
     authMode: str | None = None
     protocol: str | None = None
@@ -380,6 +384,16 @@ def create_app() -> FastAPI:
             path = orchestrator.upload_reference_file(file.filename or "reference", content)
             uploaded.append({"path": path, "size": len(content)})
         return {"uploaded": uploaded, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
+
+    @app.delete("/api/references")
+    async def delete_reference(request: DeleteReferenceRequest) -> dict[str, Any]:
+        try:
+            path = orchestrator.delete_reference_file(request.path)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="reference file not found") from None
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from None
+        return {"deleted": {"path": path}, "bootstrap": _bootstrap(orchestrator, workspace_path, dry_run, debug_enabled)}
 
     @app.post("/api/data/raw/upload-zip")
     async def upload_raw_data_zip(file: UploadFile = File(...)) -> dict[str, Any]:

@@ -248,6 +248,40 @@ def test_chinese_knowledge_labels_types_relations_and_search_are_preserved(tmp_p
     assert {node["label"] for node in graph["nodes"]} == {"宽大 QRS 波群", "室性早搏"}
 
 
+def test_validation_rejects_class_without_relation_edge_and_points_to_evidence(tmp_path):
+    (tmp_path / "knowledge_base").mkdir()
+    (tmp_path / "knowledge_base" / "domain-brief.md").write_text("# Domain Brief\n", encoding="utf-8")
+    (tmp_path / "references").mkdir()
+    (tmp_path / "references" / "paper.pdf").write_bytes(b"%PDF-1.4\n")
+
+    scan_references(tmp_path)
+    evidence = add_evidence(tmp_path, {
+        "reference_file": "paper.pdf",
+        "page": "2",
+        "section": "ECG criteria",
+        "quoted_fragments": ["PR interval longer than 200 ms indicates first-degree AV block."],
+    })
+    knowledge = add_knowledge(tmp_path, {
+        "topic": "PR interval prolongation",
+        "description": "PR interval longer than 200 ms indicates first-degree AV block.",
+        "evidence_ids": [evidence["evidence_id"]],
+    })
+    upsert_class(tmp_path, {
+        "label": "PR interval",
+        "concept_type": "interval",
+        "description_addition": "Interval measured from P wave onset to QRS onset.",
+        "source_knowledge_ids": [knowledge["knowledge_id"]],
+    })
+
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_knowledge_base(tmp_path)
+
+    message = str(exc_info.value)
+    assert "C-00001 has no relation edge" in message
+    assert evidence["evidence_id"] in message
+    assert knowledge["knowledge_id"] in message
+
+
 def test_knowledge_base_mutations_notify_realtime_snapshot_callback(tmp_path):
     (tmp_path / "knowledge_base").mkdir()
     (tmp_path / "references").mkdir()

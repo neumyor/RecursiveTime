@@ -614,6 +614,7 @@ def validate_knowledge_base_report(root: Path) -> dict[str, Any]:
         "relations.csv": relations,
     }, errors)
     _collect_csv_reference_errors(evidence, knowledge, classes, relations, errors)
+    _collect_isolated_class_errors(knowledge, classes, relations, errors)
     for row in evidence:
         source = _normalize_reference_path(root, row.get("reference_file", ""))
         if source.startswith("references/") and not (root / source).exists():
@@ -1566,6 +1567,35 @@ def _collect_csv_reference_errors(
             errors.append(f"{rel_id}.target_class_id missing: {row.get('target_class_id')}")
         errors += _missing_refs(rel_id, "source_knowledge_ids", row.get("source_knowledge_ids", ""), knowledge_ids)
         errors += _missing_refs(rel_id, "evidence_ids", row.get("evidence_ids", ""), evidence_ids)
+
+
+def _collect_isolated_class_errors(
+    knowledge: list[dict[str, str]],
+    classes: list[dict[str, str]],
+    relations: list[dict[str, str]],
+    errors: list[str],
+) -> None:
+    relation_endpoints = {
+        endpoint
+        for row in relations
+        for endpoint in (row.get("source_class_id", ""), row.get("target_class_id", ""))
+        if endpoint
+    }
+    knowledge_by_id = {row.get("knowledge_id", ""): row for row in knowledge}
+    for row in classes:
+        class_id = row.get("class_id", "class")
+        if class_id in relation_endpoints:
+            continue
+        evidence_ids = _split_ids(row.get("evidence_ids", ""))
+        source_knowledge_ids = _split_ids(row.get("source_knowledge_ids", ""))
+        for knowledge_id in source_knowledge_ids:
+            evidence_ids = _merged_ids(evidence_ids, _split_ids(knowledge_by_id.get(knowledge_id, {}).get("evidence_ids", "")))
+        evidence_hint = f" evidence={','.join(evidence_ids[:6])}" if evidence_ids else " evidence=none"
+        knowledge_hint = f" source_knowledge={','.join(source_knowledge_ids[:6])}" if source_knowledge_ids else " source_knowledge=none"
+        errors.append(
+            f"{class_id} has no relation edge. Re-read the class evidence and source knowledge, "
+            f"then extract or merge at least one supported relation for this class;{evidence_hint};{knowledge_hint}."
+        )
 
 
 def _inherit_class_and_relation_evidence(root: Path) -> None:

@@ -18,6 +18,17 @@ export async function postJson<T = any>(url: string, body: JsonMap): Promise<T> 
   return payload;
 }
 
+export async function deleteJson<T = any>(url: string, body: JsonMap): Promise<T> {
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const payload = await readJsonResponse(response);
+  if (!response.ok) throw new Error(errorMessage(payload, response));
+  return payload;
+}
+
 export async function postForm<T = any>(url: string, body: FormData): Promise<T> {
   const response = await fetch(url, { method: 'POST', body });
   const payload = await readJsonResponse(response);
